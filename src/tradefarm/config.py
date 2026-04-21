@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     academy_min_win_rate_senior: float = Field(default=0.52, ge=0.0, le=1.0)
     academy_min_sharpe_principal: float = Field(default=0.5)
 
+    # -------------------------------------------------------------------------
+    # Academy (Phase 3) — retrieval-augmented prompt.
+    #
+    # `academy_retrieval_k` caps how many past stamped setups are pulled per
+    # decision; hard-limited to 0..10 (the canonical plan fixes v1 at 3).
+    # `academy_retrieval_enabled` is the kill switch — when False the
+    # LSTM+LLM agent's prompt is byte-identical to pre-Phase-3 output.
+    # -------------------------------------------------------------------------
+    academy_retrieval_k: int = Field(default=3, ge=0, le=10)
+    academy_retrieval_enabled: bool = True
+
     @property
     def disabled_strategies_set(self) -> set[str]:
         return {s.strip() for s in self.disabled_strategies.split(",") if s.strip()}

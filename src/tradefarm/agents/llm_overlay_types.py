@@ -5,8 +5,8 @@ a cycle (overlay imports providers; providers need LlmContext/LlmDecision).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 Bias = Literal["long", "short", "flat"]
 Stance = Literal["trade", "wait"]
@@ -55,16 +55,52 @@ class LlmContext:
     has_long: bool
     held_qty: float
     day_pnl_pct: float
+    # Phase 3 — past stamped setups retrieved from this agent's own journal.
+    # Defaults to [] so every pre-Phase-3 construction site still works and
+    # the prompt is byte-identical to today when retrieval is empty/disabled.
+    # Stored as a list of dicts (serialized :class:`RetrievedExample`) so
+    # callers that don't import the retrieval module stay decoupled.
+    retrieved_examples: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _render_retrieval_block(examples: list[dict[str, Any]]) -> str:
+    """Render the "Past similar setups" block. Empty list → empty string so
+    the prompt stays byte-identical to pre-Phase-3 output.
+
+    The leading blank line is intentional: it separates the block from the
+    prior "Day P&L" line. Content is truncated to 80 chars per Risk #4
+    (prompt bloat) in the canonical plan.
+    """
+    if not examples:
+        return ""
+    lines = ["", "Past similar setups (your own history):"]
+    for ex in examples:
+        symbol = str(ex.get("symbol") or "")
+        direction_hint = str(ex.get("direction_hint") or "")
+        content = str(ex.get("content") or "")
+        pnl = float(ex.get("realized_pnl") or 0.0)
+        closed_iso = str(ex.get("closed_at_iso") or "")
+        pnl_str = f"{'+' if pnl >= 0 else '-'}${abs(pnl):.2f}"
+        date_part = closed_iso[:10] if closed_iso else "unknown date"
+        dir_part = f" {direction_hint}" if direction_hint else ""
+        lines.append(
+            f"- {symbol}{dir_part} \u00b7 {content[:80]} \u2192 realized {pnl_str} on {date_part}"
+        )
+    return "\n".join(lines)
 
 
 def user_message(ctx: LlmContext) -> str:
-    return (
+    base = (
         f"Ticker: {ctx.symbol}\n"
         f"Feature digest: {ctx.feature_digest}\n"
         f"LSTM: bias={ctx.lstm_direction} probs(down/flat/up)="
         f"({ctx.lstm_probs[0]:.2f}/{ctx.lstm_probs[1]:.2f}/{ctx.lstm_probs[2]:.2f}) "
         f"confidence={ctx.lstm_confidence:.2f}\n"
         f"Position: {'long ' + str(ctx.held_qty) if ctx.has_long else 'flat'}\n"
-        f"Day P&L vs starting capital: {ctx.day_pnl_pct:+.2f}%\n"
-        f"\nReturn the decision JSON now."
+        f"Day P&L vs starting capital: {ctx.day_pnl_pct:+.2f}%"
     )
+    retrieval_block = _render_retrieval_block(ctx.retrieved_examples)
+    # When retrieval is empty the trailer is "\n\nReturn the decision JSON now."
+    # which preserves the pre-Phase-3 byte layout exactly. When non-empty the
+    # block is inserted between the P&L line and the trailer.
+    return f"{base}{retrieval_block}\n\nReturn the decision JSON now."

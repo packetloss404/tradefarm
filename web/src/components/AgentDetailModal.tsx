@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
-import { api, type AgentRow, type AgentTrade } from "../api";
+import { api, type AgentRow, type AgentTrade, type RetrievedExample } from "../api";
 import { AgentJournalSection } from "./AgentJournalSection";
 import { AgentRankSection } from "./AgentRankSection";
 
@@ -154,6 +154,8 @@ export function AgentDetailModal({ agent, onClose }: { agent: AgentRow; onClose:
                 <div className="rounded border border-zinc-800 bg-zinc-950 px-3 py-2 text-zinc-300">
                   “{dec.reason}”
                 </div>
+                {/* Phase 3 — retrieval preview. Lazy-loads on first expand. */}
+                <DrawingOn agentId={agent.id} symbol={agent.symbol ?? null} />
               </div>
             </Section>
           )}
@@ -207,4 +209,81 @@ function Section({ label, children }: { label: string; children: React.ReactNode
       {children}
     </section>
   );
+}
+
+/** Phase 3 — "Drawing on" collapsible. Lazy-loads retrieval on first expand
+ *  via a guarded useSWR key so the network call never fires on modal paint.
+ *  Empty state reads "no comparable past setups" per plan_product copy. */
+function DrawingOn({ agentId, symbol }: { agentId: number; symbol: string | null }) {
+  const [opened, setOpened] = useState(false);
+  const swrKey = opened && symbol ? `agent-retrieval-${agentId}-${symbol}` : null;
+  const { data: examples, error, isLoading } = useSWR<RetrievedExample[]>(
+    swrKey,
+    () => api.agentRetrieval(agentId, symbol as string, 3),
+  );
+
+  return (
+    <details
+      className="mt-2 rounded border border-zinc-800 bg-zinc-950/70 open:bg-zinc-950"
+      onToggle={(e) => setOpened((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer select-none px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400 hover:text-zinc-200">
+        Drawing on
+      </summary>
+      <div className="px-3 pb-2 pt-1">
+        {!symbol ? (
+          <div className="text-xs italic text-zinc-500">no symbol pinned to this agent</div>
+        ) : !opened ? null : isLoading || examples === undefined ? (
+          <div className="text-xs text-zinc-500">loading…</div>
+        ) : error ? (
+          <div className="text-xs italic text-zinc-500">retrieval unavailable</div>
+        ) : examples.length === 0 ? (
+          <div className="text-xs italic text-zinc-500">no comparable past setups</div>
+        ) : (
+          <ul className="space-y-1.5 text-xs font-mono">
+            {examples.map((ex) => {
+              const pnlTone =
+                ex.realized_pnl >= 0 ? "text-(--color-profit)" : "text-(--color-loss)";
+              const sign = ex.realized_pnl >= 0 ? "+" : "";
+              return (
+                <li
+                  key={ex.note_id}
+                  className="flex items-baseline gap-2 rounded border border-zinc-800 bg-zinc-900/50 px-2 py-1.5"
+                >
+                  <span className="w-12 shrink-0 text-zinc-300">{ex.symbol}</span>
+                  <span className="w-14 shrink-0 text-zinc-500">
+                    {ex.direction_hint ? ex.direction_hint.toUpperCase() : "—"}
+                  </span>
+                  <span className="w-20 shrink-0 text-zinc-500">{relDate(ex.closed_at_iso)}</span>
+                  <span
+                    className="flex-1 truncate text-zinc-300"
+                    title={ex.content}
+                  >
+                    {ex.content || <span className="italic text-zinc-500">(no body)</span>}
+                  </span>
+                  <span
+                    className={`shrink-0 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 tabular-nums ${pnlTone}`}
+                    title="realized P&L"
+                  >
+                    {sign}${ex.realized_pnl.toFixed(2)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function relDate(iso: string): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "—";
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+  return `${Math.round(sec / 86400)}d ago`;
 }

@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import pandas as pd
+import structlog
 
+from tradefarm.agents import retrieval
 from tradefarm.agents.base import Agent, Signal
 from tradefarm.agents.features import featurize, latest_window
 from tradefarm.agents.llm_overlay import LlmContext, LlmDecision, LlmOverlay
 from tradefarm.agents.lstm_model import FittedModel, load
 from tradefarm.config import settings
+
+log = structlog.get_logger()
 
 # Count of LSTM->LLM calls short-circuited on low confidence, for dashboard display.
 LLM_SKIPS = {"count": 0, "called": 0}
@@ -95,6 +99,22 @@ class LstmLlmAgent(Agent):
         equity = self.state.book.equity(marks)
         day_pnl_pct = (equity - settings.agent_starting_capital) / settings.agent_starting_capital * 100
 
+        # Phase 3: pull the agent's own most-similar past stamped setups
+        # after the cost gate (so a skipped LLM call also skips the DB hit)
+        # and before building LlmContext. Errors degrade gracefully to [];
+        # retrieval must never block a decision.
+        try:
+            examples = await retrieval.fetch(self.state.id, self.symbol)
+            retrieved_examples = [ex.to_dict() for ex in examples]
+        except Exception as e:  # pragma: no cover — fetch already swallows
+            log.warning(
+                "retrieval_unexpected_error",
+                agent_id=self.state.id,
+                symbol=self.symbol,
+                error=str(e),
+            )
+            retrieved_examples = []
+
         ctx = LlmContext(
             symbol=self.symbol,
             feature_digest=_feature_digest(df),
@@ -104,6 +124,7 @@ class LstmLlmAgent(Agent):
             has_long=has_long,
             held_qty=held_qty,
             day_pnl_pct=day_pnl_pct,
+            retrieved_examples=retrieved_examples,
         )
 
         try:

@@ -22,6 +22,9 @@ export type AgentRow = {
   // Phase 2 (Agent Academy). Older backends won't emit this; callers must
   // fall back to "intern" when undefined.
   rank?: Rank;
+  // Phase 3: the agent's pinned symbol (LSTM / LSTM+LLM agents). Older
+  // backends omit this; null is fine for non-pinned agents (momentum).
+  symbol?: string | null;
   cash: number;
   equity: number;
   realized_pnl: number;
@@ -144,6 +147,16 @@ export type AgentNote = {
   outcome_closed_at: string | null;
 };
 
+// Phase 3 — one past stamped setup the LSTM+LLM agent pulled as retrieval context.
+export type RetrievedExample = {
+  symbol: string;
+  direction_hint: string;
+  content: string;
+  realized_pnl: number;
+  closed_at_iso: string;
+  note_id: number;
+};
+
 export type AdminSecretField = { set: boolean; masked: string };
 
 export type AdminConfig = {
@@ -226,6 +239,10 @@ export const api = {
     fetcher<AgentTrade[]>(`/api/agents/${agentId}/trades?limit=${limit}`),
   agentNotes: (agentId: number, limit = 20) =>
     fetcher<AgentNote[]>(`/api/agents/${agentId}/notes?limit=${limit}`),
+  agentRetrieval: (agentId: number, symbol: string, k = 3) =>
+    fetcher<RetrievedExample[]>(
+      `/api/agents/${agentId}/retrieval-preview?symbol=${encodeURIComponent(symbol)}&k=${k}`,
+    ),
   academyOverview: () => fetcher<AcademyOverview>("/api/academy/ranks"),
   agentAcademy: (agentId: number) =>
     fetcher<AgentAcademy>(`/api/agents/${agentId}/academy`),

@@ -93,12 +93,16 @@ async def list_agents() -> list[dict]:
         # Phase 2: rank is read off the in-process RiskManager. Phase 4 will
         # update it via set_rank() + a rebuild hook; for now it matches DB.
         rank = getattr(a.risk, "rank", "intern")
+        # Phase 3: surface the agent's pinned symbol (LSTM / LSTM+LLM agents)
+        # so the frontend can ask /retrieval-preview about the right ticker.
+        agent_symbol = getattr(a, "symbol", None)
         out.append({
             "id": a.state.id,
             "name": a.state.name,
             "strategy": a.state.strategy,
             "status": a.state.status,
             "rank": rank,
+            "symbol": agent_symbol,
             "cash": book.cash,
             "equity": equity,
             "realized_pnl": book.realized_pnl,
@@ -305,6 +309,21 @@ async def agent_notes(agent_id: int, limit: int = 20) -> list[dict]:
     outcome_realized_pnl / outcome_closed_at; open notes leave them null.
     """
     return await journal.recent_outcomes(agent_id, n=limit)
+
+
+@app.get("/agents/{agent_id}/retrieval-preview")
+async def agent_retrieval_preview(
+    agent_id: int, symbol: str, k: int = 3,
+) -> list[dict]:
+    """Phase 3 — preview what the LSTM+LLM agent would see as "past similar
+    setups" for ``(agent_id, symbol)``. Powers the frontend's "Drawing on"
+    block; also handy for manual inspection.
+
+    Honors ``academy_retrieval_enabled`` (returns [] when off).
+    """
+    from tradefarm.agents import retrieval
+    examples = await retrieval.fetch(agent_id, symbol, k=k)
+    return [ex.to_dict() for ex in examples]
 
 
 @app.get("/orders")

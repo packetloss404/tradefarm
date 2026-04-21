@@ -44,6 +44,9 @@ EDITABLE: dict[str, type] = {
     "academy_min_trades_principal": int,
     "academy_min_win_rate_senior": float,
     "academy_min_sharpe_principal": float,
+    # Phase 3 — retrieval-augmented prompt.
+    "academy_retrieval_k": int,
+    "academy_retrieval_enabled": bool,
 }
 SECRET_KEYS = {"anthropic_api_key", "minimax_api_key"}
 VALID_PROVIDERS = {"anthropic", "minimax"}
@@ -115,6 +118,9 @@ class ConfigPatch(BaseModel):
     academy_min_trades_principal: int | None = None
     academy_min_win_rate_senior: float | None = None
     academy_min_sharpe_principal: float | None = None
+    # Phase 3 — retrieval-augmented prompt.
+    academy_retrieval_k: int | None = None
+    academy_retrieval_enabled: bool | None = None
 
     # If True, also write each changed key into .env so it survives restart.
     persist: bool = True
@@ -139,6 +145,10 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
                 raise HTTPException(400, "llm_min_confidence out of range")
         if key == "auto_tick_interval_sec" and int(val) < 0:
             raise HTTPException(400, "auto_tick_interval_sec must be >= 0")
+        if key == "academy_retrieval_k":
+            val = int(val)
+            if not 0 <= val <= 10:
+                raise HTTPException(400, "academy_retrieval_k out of range (0..10)")
         if key == "disabled_strategies":
             unknown = [s for s in val if s not in KNOWN_STRATEGIES]
             if unknown:
