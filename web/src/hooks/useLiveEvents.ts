@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AccountSummary, TickResult } from "../api";
+import type { AccountSummary, PromotionEventPayload, TickResult } from "../api";
 
 /** Connection lifecycle for the /ws socket. */
 export type LiveStatus = "connecting" | "open" | "closed";
@@ -23,7 +23,10 @@ export type LiveEvent =
   | { type: "account"; ts: string; payload: AccountSummary }
   | { type: "pnl_snapshot"; ts: string; payload: PnlSnapshotPayload }
   | { type: "heartbeat"; ts: string; payload: HeartbeatPayload }
-  | { type: "hello"; ts: string; payload: HelloPayload };
+  | { type: "hello"; ts: string; payload: HelloPayload }
+  // Phase 4 — curriculum events.
+  | { type: "promotion"; ts: string; payload: PromotionEventPayload }
+  | { type: "demotion"; ts: string; payload: PromotionEventPayload };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 

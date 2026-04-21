@@ -11,6 +11,7 @@ from tradefarm.academy import (
     eligible_rank,
     rank_tone,
 )
+from tradefarm.academy import promotions_repo
 from tradefarm.academy import repo as academy_repo
 from tradefarm.api.admin import router as admin_router
 from tradefarm.api.backtest import router as backtest_router
@@ -202,6 +203,27 @@ async def agent_academy(agent_id: int) -> dict:
 async def tick() -> dict:
     orch: Orchestrator = app.state.orchestrator
     return await orch.tick_once()
+
+
+@app.post("/academy/evaluate")
+async def academy_evaluate() -> dict:
+    """Phase 4 — kick a curriculum pass on demand (admin "Run curriculum pass")."""
+    from tradefarm.academy import curriculum
+    orch: Orchestrator = app.state.orchestrator
+    result = await curriculum.evaluate_all(orch)
+    return result.to_dict()
+
+
+@app.get("/academy/promotions")
+async def academy_promotions(hours: int = 24, limit: int = 100) -> list[dict]:
+    """Phase 4 — recent rank changes across all agents, newest first."""
+    return await promotions_repo.recent(hours=hours, limit=limit)
+
+
+@app.get("/agents/{agent_id}/promotions")
+async def agent_promotions(agent_id: int, hours: int = 24 * 30) -> list[dict]:
+    """Phase 4 — per-agent rank change log (default: last 30 days)."""
+    return await promotions_repo.for_agent(agent_id, hours=hours)
 
 
 @app.get("/account")

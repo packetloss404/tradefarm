@@ -9,6 +9,7 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState<AdminPatch>({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
+  const [curriculumBusy, setCurriculumBusy] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -60,6 +61,22 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
       await mutate();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const runCurriculum = async () => {
+    setCurriculumBusy(true);
+    setMsg("");
+    try {
+      const res = await api.runCurriculum();
+      const total = res.promoted.length + res.demoted.length + res.unchanged;
+      setMsg(
+        `evaluated ${total} agents · ${res.promoted.length} promoted · ${res.demoted.length} demoted`,
+      );
+    } catch (e) {
+      setMsg(`error: ${(e as Error).message}`);
+    } finally {
+      setCurriculumBusy(false);
     }
   };
 
@@ -253,6 +270,25 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
               className="rounded border border-emerald-600 bg-emerald-600/20 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-600/30"
             >
               Launch →
+            </button>
+          </div>
+        </Section>
+
+        {/* Curriculum — Phase 4 */}
+        <Section label="Curriculum">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm">Run curriculum pass</div>
+              <div className="text-[11px] text-zinc-500">
+                Re-scores every agent and applies promotions/demotions per the current thresholds.
+              </div>
+            </div>
+            <button
+              onClick={runCurriculum}
+              disabled={curriculumBusy}
+              className="rounded border border-emerald-600 bg-emerald-600/20 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-40"
+            >
+              {curriculumBusy ? "running…" : "Run curriculum pass"}
             </button>
           </div>
         </Section>

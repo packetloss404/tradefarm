@@ -75,6 +75,24 @@ class Settings(BaseSettings):
     academy_retrieval_k: int = Field(default=3, ge=0, le=10)
     academy_retrieval_enabled: bool = True
 
+    # -------------------------------------------------------------------------
+    # Academy (Phase 4) — curriculum / auto-promote-demote.
+    #
+    # `academy_eval_interval_sec`: 0 disables the background curriculum loop
+    # (Phase 4 is opt-in until the operator flips this). Positive values run
+    # `curriculum.evaluate_all()` every N seconds between ticks.
+    # `academy_demote_drawdown_pct`: realized-PnL drawdown threshold (fraction
+    # of starting capital) that triggers a demotion. Absolute value.
+    # `academy_demote_consecutive_losses`: a run of this many losing stamped
+    # outcomes in a row also triggers demotion.
+    # `academy_demote_cap_pct`: max fraction of the total agent population that
+    # can be demoted in a single pass (demote-cascade guard).
+    # -------------------------------------------------------------------------
+    academy_eval_interval_sec: int = Field(default=0, ge=0)
+    academy_demote_drawdown_pct: float = Field(default=0.08, ge=0.0, le=1.0)
+    academy_demote_consecutive_losses: int = Field(default=5, ge=1)
+    academy_demote_cap_pct: float = Field(default=0.10, ge=0.0, le=1.0)
+
     @property
     def disabled_strategies_set(self) -> set[str]:
         return {s.strip() for s in self.disabled_strategies.split(",") if s.strip()}

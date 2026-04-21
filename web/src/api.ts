@@ -171,6 +171,11 @@ export type AdminConfig = {
   tick_outside_rth: boolean;
   execution_mode: "simulated" | "alpaca_paper";
   disabled_strategies: string[];
+  // Phase 4 — curriculum settings (optional so older backends don't break).
+  academy_eval_interval_sec?: number;
+  academy_demote_drawdown_pct?: number;
+  academy_demote_consecutive_losses?: number;
+  academy_demote_cap_pct?: number;
   _meta: {
     secret_keys: string[];
     valid_providers: string[];
@@ -179,6 +184,33 @@ export type AdminConfig = {
     known_strategies: string[];
     strategy_agent_counts: Record<string, number>;
   };
+};
+
+export type Promotion = {
+  id: number;
+  agent_id: number;
+  agent_name: string | null;
+  from_rank: Rank;
+  to_rank: Rank;
+  reason: string;
+  stats_snapshot: string;
+  at: string | null;
+};
+
+export type PromotionEventPayload = {
+  agent_id: number;
+  agent_name: string;
+  from_rank: Rank;
+  to_rank: Rank;
+  reason: string;
+  at: string;
+};
+
+export type CurriculumResult = {
+  promoted: PromotionEventPayload[];
+  demoted: PromotionEventPayload[];
+  unchanged: number;
+  evaluated_at: string;
 };
 
 export type AdminPatch = Partial<{
@@ -273,6 +305,13 @@ export const api = {
   backtestStatus: (jobId: string) => fetcher<BacktestJob>(`/api/backtest/${jobId}`),
   backtestCancel: async (jobId: string): Promise<void> => {
     await fetch(`/api/backtest/${jobId}`, { method: "DELETE" });
+  },
+  promotions: (hours = 24, limit = 100) =>
+    fetcher<Promotion[]>(`/api/academy/promotions?hours=${hours}&limit=${limit}`),
+  runCurriculum: async (): Promise<CurriculumResult> => {
+    const r = await fetch("/api/academy/evaluate", { method: "POST" });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
   },
   tick: async (): Promise<TickResult> => {
     const r = await fetch("/api/tick", { method: "POST" });

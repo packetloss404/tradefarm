@@ -96,6 +96,9 @@ class Orchestrator:
         self._reconciler: OrderReconciler | None = None
         self._recon_task: asyncio.Task | None = None
         self._agents_by_id = {a.state.id: a for a in agents}
+        # Phase 4 — curriculum loop gates on this to avoid mid-tick rank flips.
+        self._tick_in_progress: bool = False
+        self._curriculum_task: asyncio.Task | None = None
 
     @classmethod
     def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
@@ -157,6 +160,13 @@ class Orchestrator:
         return out
 
     async def tick_once(self) -> dict:
+        self._tick_in_progress = True
+        try:
+            return await self._tick_once_inner()
+        finally:
+            self._tick_in_progress = False
+
+    async def _tick_once_inner(self) -> dict:
         symbols = sorted({getattr(a, "symbol", None) for a in self.agents if hasattr(a, "symbol")})
         symbols = [s for s in symbols if s]
         bars = await self._load_bars(symbols)
@@ -340,6 +350,50 @@ class Orchestrator:
                     self._reconcile_loop(), name="orch_reconciler",
                 )
 
+        # Phase 4 — opt-in curriculum loop (0 disables).
+        self.start_curriculum()
+
+    def start_curriculum(self) -> None:
+        """Start the between-ticks curriculum loop if the interval is > 0."""
+        if settings.academy_eval_interval_sec > 0 and self._curriculum_task is None:
+            self._curriculum_task = asyncio.create_task(
+                self.run_curriculum_loop(), name="orch_curriculum",
+            )
+
+    async def stop_curriculum(self) -> None:
+        t = self._curriculum_task
+        if t is None:
+            return
+        t.cancel()
+        try:
+            await t
+        except (asyncio.CancelledError, Exception):
+            pass
+        self._curriculum_task = None
+
+    async def run_curriculum_loop(self) -> None:
+        """Background loop: run the curriculum every N seconds, but never during
+        a tick. We poll the ``_tick_in_progress`` flag before calling
+        ``evaluate_all`` so rank changes never race with a running tick.
+        """
+        interval = settings.academy_eval_interval_sec
+        if interval <= 0:
+            return
+        # Lazy-import so test fixtures can patch `curriculum` before loop runs.
+        from tradefarm.academy import curriculum
+        log.info("curriculum_loop_started", interval_sec=interval)
+        while True:
+            try:
+                # Wait for any in-progress tick to finish — brief polling.
+                while self._tick_in_progress:
+                    await asyncio.sleep(0.05)
+                await curriculum.evaluate_all(self)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.exception("curriculum_loop_failed", error=str(e))
+            await asyncio.sleep(interval)
+
     async def _reconcile_loop(self) -> None:
         """Poll Alpaca for filled orders and apply actual-vs-mark deltas to agent books."""
         assert self._reconciler is not None
@@ -387,3 +441,4 @@ class Orchestrator:
                 pass
         self._task = None
         self._recon_task = None
+        await self.stop_curriculum()

@@ -6,6 +6,7 @@ import { AgentGrid } from "./components/AgentGrid";
 import { PositionsPanel } from "./components/PositionsPanel";
 import { MonthlyPnlChart } from "./components/MonthlyPnlChart";
 import { BrainPanel } from "./components/BrainPanel";
+import { PromotionsBoard } from "./components/PromotionsBoard";
 import { StrategyPanel } from "./components/StrategyPanel";
 import { OrderStatusPanel } from "./components/OrderStatusPanel";
 import { AgentDetailModal } from "./components/AgentDetailModal";
@@ -163,6 +164,10 @@ export default function App() {
         />
       </Panel>
 
+      <Panel title="Promotions Board" badge={<LiveBadge />}>
+        <PromotionsBoard />
+      </Panel>
+
       <Panel title="Strategies" badge={<LiveBadge />}>
         <StrategyPanel />
       </Panel>
@@ -175,7 +180,11 @@ export default function App() {
         title="Agent Grid"
         right={<span className="text-[10px] text-zinc-500 font-mono">{agents.length} agents · click for detail</span>}
       >
-        <AgentGrid agents={agents} onSelect={(a) => setSelectedAgentId(a.id)} />
+        <AgentGrid
+          agents={agents}
+          onSelect={(a) => setSelectedAgentId(a.id)}
+          promotionEvents={feed.promotionEvents}
+        />
       </Panel>
 
       {selectedAgentId !== null && (() => {

@@ -4,9 +4,11 @@ import { useLiveEvents, type LiveEvent, type LiveStatus } from "./useLiveEvents"
 
 const BUFFER_CAP = 50;
 const FILL_CAP = 20;
+const PROMOTION_CAP = 30;
 
 type TickEvent = Extract<LiveEvent, { type: "tick" }>;
 type FillEvent = Extract<LiveEvent, { type: "fill" }>;
+type PromotionEvent = Extract<LiveEvent, { type: "promotion" | "demotion" }>;
 
 export type EventFeed = {
   status: LiveStatus;
@@ -18,6 +20,13 @@ export type EventFeed = {
   fills: FillEvent[];
   /** Rolling buffer of the last {@link BUFFER_CAP} events of any type, newest first. */
   buffer: LiveEvent[];
+  /**
+   * Phase 4 — last {@link PROMOTION_CAP} `promotion` + `demotion` events
+   * newest-first. The Agent Grid reads this to fire a brief halo on rank
+   * change; the Promotions Board primarily polls via REST but can use this
+   * slice to light up a "new" indicator between polls.
+   */
+  promotionEvents: PromotionEvent[];
 };
 
 /** SWR `mutate` callbacks that should be refreshed when a `tick` event arrives. */
@@ -38,6 +47,7 @@ export function useEventFeed(mutators: FeedMutators = {}): EventFeed {
   const [lastTick, setLastTick] = useState<TickEvent | null>(null);
   const [fills, setFills] = useState<FillEvent[]>([]);
   const [buffer, setBuffer] = useState<LiveEvent[]>([]);
+  const [promotionEvents, setPromotionEvents] = useState<PromotionEvent[]>([]);
   const mutRef = useRef(mutators);
   mutRef.current = mutators;
 
@@ -63,6 +73,15 @@ export function useEventFeed(mutators: FeedMutators = {}): EventFeed {
           return [ev, ...next];
         });
         break;
+      case "promotion":
+      case "demotion":
+        setPromotionEvents((prev) => {
+          const next = prev.length >= PROMOTION_CAP ? prev.slice(0, PROMOTION_CAP - 1) : prev;
+          return [ev, ...next];
+        });
+        // New rank changes require an agents re-fetch so the rank pip updates.
+        void mutRef.current.mutateAgents?.();
+        break;
       case "heartbeat":
       case "hello":
       case "pnl_snapshot":
@@ -72,5 +91,5 @@ export function useEventFeed(mutators: FeedMutators = {}): EventFeed {
   }, []);
 
   const status = useLiveEvents(handler);
-  return { status, account, lastTick, fills, buffer };
+  return { status, account, lastTick, fills, buffer, promotionEvents };
 }

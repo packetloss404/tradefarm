@@ -92,3 +92,24 @@ class AgentNote(Base):
     outcome_trade_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outcome_realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     outcome_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AcademyPromotion(Base):
+    """Phase 4 — per-agent rank-change log.
+
+    Written by ``academy.curriculum.evaluate_all``; read by the Promotions
+    Board panel and the per-agent promotions endpoint. ``stats_snapshot`` is
+    JSON-serialized ``RankStats`` at the time of the change, so we can reason
+    about *why* a rank flipped even if thresholds change later.
+    """
+
+    __tablename__ = "academy_promotions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
+    from_rank: Mapped[str] = mapped_column(String(16))
+    to_rank: Mapped[str] = mapped_column(String(16))
+    reason: Mapped[str] = mapped_column(String(256), default="")
+    # JSON-serialized RankStats; TEXT for SQLite + Postgres portability.
+    stats_snapshot: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)

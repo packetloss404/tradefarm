@@ -47,6 +47,11 @@ EDITABLE: dict[str, type] = {
     # Phase 3 — retrieval-augmented prompt.
     "academy_retrieval_k": int,
     "academy_retrieval_enabled": bool,
+    # Phase 4 — curriculum / auto-promote-demote.
+    "academy_eval_interval_sec": int,
+    "academy_demote_drawdown_pct": float,
+    "academy_demote_consecutive_losses": int,
+    "academy_demote_cap_pct": float,
 }
 SECRET_KEYS = {"anthropic_api_key", "minimax_api_key"}
 VALID_PROVIDERS = {"anthropic", "minimax"}
@@ -121,6 +126,11 @@ class ConfigPatch(BaseModel):
     # Phase 3 — retrieval-augmented prompt.
     academy_retrieval_k: int | None = None
     academy_retrieval_enabled: bool | None = None
+    # Phase 4 — curriculum / auto-promote-demote.
+    academy_eval_interval_sec: int | None = None
+    academy_demote_drawdown_pct: float | None = None
+    academy_demote_consecutive_losses: int | None = None
+    academy_demote_cap_pct: float | None = None
 
     # If True, also write each changed key into .env so it survives restart.
     persist: bool = True
