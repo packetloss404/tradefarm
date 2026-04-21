@@ -7,7 +7,7 @@ from datetime import date, timedelta
 import pandas as pd
 import structlog
 
-from tradefarm.agents.base import Agent, AgentState
+from tradefarm.agents.base import Agent, AgentState, Signal
 from tradefarm.agents.llm_overlay import LlmOverlay
 from tradefarm.agents.lstm_agent import LstmAgent
 from tradefarm.agents.lstm_llm_agent import LstmLlmAgent
@@ -196,6 +196,38 @@ class Orchestrator:
         # Reset per-tick journal counters.
         JOURNAL_COUNTERS["notes_this_tick"] = 0
         JOURNAL_COUNTERS["outcomes_this_tick"] = 0
+
+        # --- Risk-driven exits (Phase 2.5) -----------------------------------
+        # For each open long position, check the RiskManager's SL/TP/time/trail
+        # rules. If any fires, synthesize a Sell signal that bypasses the
+        # agent's brain entirely. If the brain also emitted a sell for the
+        # same symbol, the risk reason replaces it (so the journal records the
+        # true exit trigger).
+        from datetime import datetime, timezone as _tz
+        now_utc = datetime.now(_tz.utc)
+        risk_exits_added = 0
+        results_by_id = {a.state.id: (a, sigs) for a, sigs in results}
+        for agent in self.agents:
+            for sym, pos in list(agent.state.book.positions.items()):
+                if pos.qty <= 0:
+                    continue
+                mark = marks.get(sym, pos.avg_price)
+                trig = agent.risk.should_exit(sym, pos, mark, now_utc)
+                if trig is None:
+                    continue
+                entry = results_by_id.get(agent.state.id)
+                if entry is None:
+                    continue
+                a_ref, sigs = entry
+                # Drop any brain-emitted sell for the same symbol (risk wins).
+                sigs = [s for s in sigs if not (s.symbol == sym and s.side == "sell")]
+                sigs.append(Signal(sym, "sell", round(pos.qty, 4), reason=f"risk-exit: {trig.reason}"))
+                results_by_id[agent.state.id] = (a_ref, sigs)
+                risk_exits_added += 1
+        if risk_exits_added:
+            log.info("risk_exits_queued", count=risk_exits_added)
+            results = list(results_by_id.values())
+        # ---------------------------------------------------------------------
 
         fills = 0
         blocked = 0

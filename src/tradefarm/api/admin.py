@@ -52,6 +52,11 @@ EDITABLE: dict[str, type] = {
     "academy_demote_drawdown_pct": float,
     "academy_demote_consecutive_losses": int,
     "academy_demote_cap_pct": float,
+    # Phase 2.5 — risk-based exits.
+    "risk_stop_loss_pct": float,
+    "risk_take_profit_pct": float,
+    "risk_trailing_stop_pct": float,
+    "risk_max_hold_days": int,
 }
 SECRET_KEYS = {"anthropic_api_key", "minimax_api_key"}
 VALID_PROVIDERS = {"anthropic", "minimax"}
@@ -131,6 +136,11 @@ class ConfigPatch(BaseModel):
     academy_demote_drawdown_pct: float | None = None
     academy_demote_consecutive_losses: int | None = None
     academy_demote_cap_pct: float | None = None
+    # Phase 2.5 — risk-based exits.
+    risk_stop_loss_pct: float | None = None
+    risk_take_profit_pct: float | None = None
+    risk_trailing_stop_pct: float | None = None
+    risk_max_hold_days: int | None = None
 
     # If True, also write each changed key into .env so it survives restart.
     persist: bool = True

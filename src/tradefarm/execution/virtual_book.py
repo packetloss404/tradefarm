@@ -7,6 +7,11 @@ the agent that placed the parent order.
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -14,13 +19,18 @@ class VirtualPosition:
     symbol: str
     qty: float = 0.0
     avg_price: float = 0.0
+    # Set when qty goes from 0 to non-zero; cleared when qty returns to 0.
+    # Drives the RiskManager time-stop.
+    opened_at: datetime | None = None
 
-    def apply_fill(self, side: str, qty: float, price: float) -> float:
+    def apply_fill(self, side: str, qty: float, price: float, at: datetime | None = None) -> float:
         """Returns realized PnL from this fill."""
+        at = at or _utcnow()
+        was_zero = self.qty == 0
         signed = qty if side == "buy" else -qty
         new_qty = self.qty + signed
         realized = 0.0
-        if self.qty == 0 or (self.qty > 0) == (signed > 0):
+        if was_zero or (self.qty > 0) == (signed > 0):
             if new_qty != 0:
                 self.avg_price = (self.avg_price * self.qty + price * signed) / new_qty
         else:
@@ -31,6 +41,9 @@ class VirtualPosition:
         self.qty = new_qty
         if self.qty == 0:
             self.avg_price = 0.0
+            self.opened_at = None
+        elif was_zero:
+            self.opened_at = at
         return realized
 
 
@@ -44,7 +57,7 @@ class VirtualBook:
     # reconciler restart or retry.
     _reconciled_ids: set[str] = field(default_factory=set)
 
-    def record_fill(self, symbol: str, side: str, qty: float, price: float) -> float:
+    def record_fill(self, symbol: str, side: str, qty: float, price: float, at: datetime | None = None) -> float:
         """Apply a fill to this book. Returns the realized PnL produced by
         this fill alone (zero for opening fills / same-side adds, non-zero
         for fills that close or flip part/all of a position). The
@@ -54,7 +67,7 @@ class VirtualBook:
         self.positions[symbol] = pos
         notional = qty * price
         self.cash += notional if side == "sell" else -notional
-        realized = pos.apply_fill(side, qty, price)
+        realized = pos.apply_fill(side, qty, price, at=at)
         self.realized_pnl += realized
         return realized
 

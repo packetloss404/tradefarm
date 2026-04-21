@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     academy_demote_consecutive_losses: int = Field(default=5, ge=1)
     academy_demote_cap_pct: float = Field(default=0.10, ge=0.0, le=1.0)
 
+    # -------------------------------------------------------------------------
+    # Risk-based exits — apply to every open long regardless of brain.
+    # First match fires a synthetic sell each tick: stop-loss, take-profit,
+    # time-stop, trailing-stop (in that order).
+    # -------------------------------------------------------------------------
+    risk_stop_loss_pct: float = Field(default=0.03, ge=0.0, le=1.0)
+    risk_take_profit_pct: float = Field(default=0.05, ge=0.0, le=1.0)
+    risk_trailing_stop_pct: float = Field(default=0.02, ge=0.0, le=1.0)
+    risk_max_hold_days: int = Field(default=10, ge=1)
+
     @property
     def disabled_strategies_set(self) -> set[str]:
         return {s.strip() for s in self.disabled_strategies.split(",") if s.strip()}

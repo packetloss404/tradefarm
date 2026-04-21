@@ -1,6 +1,7 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
-from tradefarm.execution.virtual_book import VirtualBook
+from tradefarm.execution.virtual_book import VirtualBook, VirtualPosition
 
 # Base (pre-multiplier) position-size cap. Phase 2 scales this by the rank
 # multiplier. Kept as a module-level constant so Phase 2 tests (and Phase 4's
@@ -15,12 +16,28 @@ class RiskLimits:
     stop_loss_pct: float = 0.03
     trailing_stop_pct: float = 0.02
     daily_loss_limit_pct: float = 0.05
+    # Phase 2.5 (risk-based exits): these apply regardless of which brain the
+    # agent uses, so positions actually close on some schedule rather than
+    # relying on the LSTM to flip "down" (which it rarely does).
+    take_profit_pct: float = 0.05
+    max_hold_days: int = 10
 
 
 @dataclass
 class RiskDecision:
     allow: bool
     reason: str = ""
+
+
+@dataclass
+class ExitTrigger:
+    """Why the RiskManager says an open position should close now."""
+    kind: str    # "stop-loss" | "take-profit" | "time-stop" | "trailing-stop"
+    reason: str  # human-readable detail with the actual numbers
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class RiskManager:
@@ -31,13 +48,27 @@ class RiskManager:
         rank: str = "intern",
     ) -> None:
         self.starting_capital = starting_capital
-        self.limits = limits or RiskLimits()
+        self.limits = limits or self._limits_from_settings()
         self.rank = rank
         # Apply the rank multiplier to the base cap. When `academy_rank_multipliers`
         # is unset, `rank_multiplier()` returns 1.0 for every rank so existing
         # behavior is preserved (see backwards-compat contract in PROJECT_PLAN.md).
         self._apply_rank_multiplier()
         self._peak: dict[str, float] = {}
+
+    @staticmethod
+    def _limits_from_settings() -> RiskLimits:
+        """Build RiskLimits from the live settings. Lazy-imported so the
+        module stays import-safe during config bootstrap."""
+        from tradefarm.config import settings
+        return RiskLimits(
+            max_position_notional_pct=BASE_MAX_POSITION_NOTIONAL_PCT,
+            stop_loss_pct=settings.risk_stop_loss_pct,
+            trailing_stop_pct=settings.risk_trailing_stop_pct,
+            daily_loss_limit_pct=0.05,
+            take_profit_pct=settings.risk_take_profit_pct,
+            max_hold_days=settings.risk_max_hold_days,
+        )
 
     def _apply_rank_multiplier(self) -> None:
         # Lazy import keeps `risk.manager` import-safe during config bootstrap.
@@ -57,22 +88,63 @@ class RiskManager:
             return RiskDecision(False, "insufficient cash")
         return RiskDecision(True)
 
-    def check_daily_loss(self, book: VirtualBook, marks: dict[str, float]) -> RiskDecision:
-        equity = book.equity(marks)
-        dd = (equity - self.starting_capital) / self.starting_capital
-        if dd <= -self.limits.daily_loss_limit_pct:
-            return RiskDecision(False, f"daily loss {dd:.2%} breached")
-        return RiskDecision(True)
+    def should_exit(
+        self,
+        symbol: str,
+        pos: VirtualPosition,
+        mark: float,
+        now: datetime | None = None,
+    ) -> ExitTrigger | None:
+        """Decide whether this open long should close based on risk alone.
 
+        Checks in order: stop-loss, take-profit, time-stop, trailing-stop.
+        Returns None if no rule fires. Shorts aren't supported in v1 — we
+        don't open them — so qty <= 0 always returns None.
+        """
+        if pos.qty <= 0 or pos.avg_price <= 0:
+            return None
+        now = now or _utcnow()
+
+        unrealized_pct = (mark - pos.avg_price) / pos.avg_price
+
+        if unrealized_pct <= -self.limits.stop_loss_pct:
+            return ExitTrigger("stop-loss", f"stop-loss {unrealized_pct:+.2%}")
+
+        if unrealized_pct >= self.limits.take_profit_pct:
+            return ExitTrigger("take-profit", f"take-profit {unrealized_pct:+.2%}")
+
+        if pos.opened_at is not None:
+            days = (now - pos.opened_at).total_seconds() / 86400.0
+            if days >= self.limits.max_hold_days:
+                return ExitTrigger("time-stop", f"held {days:.1f}d ≥ {self.limits.max_hold_days}d")
+
+        # Trailing stop — peak tracked per (agent × symbol) via _peak.
+        peak = max(self._peak.get(symbol, pos.avg_price), mark)
+        self._peak[symbol] = peak
+        if peak > 0:
+            trail_pct = (mark - peak) / peak
+            if trail_pct <= -self.limits.trailing_stop_pct:
+                return ExitTrigger("trailing-stop", f"trailing {trail_pct:+.2%} off peak {peak:.2f}")
+
+        return None
+
+    # Legacy API — kept so any external caller still works. New code should
+    # use `should_exit(...)`.
     def should_stop_out(self, symbol: str, entry: float, current: float, side: str) -> RiskDecision:
         edge = (current - entry) / entry if side == "long" else (entry - current) / entry
         if edge <= -self.limits.stop_loss_pct:
             return RiskDecision(False, f"stop-loss hit ({edge:.2%})")
-
         peak = self._peak.get(symbol, entry)
         peak = max(peak, current) if side == "long" else min(peak, current)
         self._peak[symbol] = peak
         trail = (current - peak) / peak if side == "long" else (peak - current) / peak
         if trail <= -self.limits.trailing_stop_pct:
             return RiskDecision(False, f"trailing stop hit ({trail:.2%})")
+        return RiskDecision(True)
+
+    def check_daily_loss(self, book: VirtualBook, marks: dict[str, float]) -> RiskDecision:
+        equity = book.equity(marks)
+        dd = (equity - self.starting_capital) / self.starting_capital
+        if dd <= -self.limits.daily_loss_limit_pct:
+            return RiskDecision(False, f"daily loss {dd:.2%} breached")
         return RiskDecision(True)
