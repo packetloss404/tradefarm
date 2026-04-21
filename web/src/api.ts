@@ -34,6 +34,10 @@ export type AccountSummary = {
   realized_pnl: number;
   unrealized_pnl: number;
   last_tick_at: string | null;
+  // Phase 1 (Academy): per-tick journal counters. Optional — older backends
+  // won't emit these.
+  notes_this_tick?: number;
+  outcomes_this_tick?: number;
 };
 
 export type TickResult = { fills: number; blocked: number; symbols: number };
@@ -76,6 +80,19 @@ export type AgentTrade = {
   price: number;
   executed_at: string | null;
   reason: string;
+};
+
+export type AgentNote = {
+  id: number;
+  agent_id: number;
+  kind: "entry" | "exit" | "observation";
+  symbol: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+  outcome_trade_id: number | null;
+  outcome_realized_pnl: number | null;
+  outcome_closed_at: string | null;
 };
 
 export type AdminSecretField = { set: boolean; masked: string };
@@ -158,6 +175,8 @@ export const api = {
     fetcher<StrategyTimeseriesPoint[]>(`/api/pnl/by-strategy/timeseries?days=${days}`),
   agentTrades: (agentId: number, limit = 20) =>
     fetcher<AgentTrade[]>(`/api/agents/${agentId}/trades?limit=${limit}`),
+  agentNotes: (agentId: number, limit = 20) =>
+    fetcher<AgentNote[]>(`/api/agents/${agentId}/notes?limit=${limit}`),
   adminConfig: () => fetcher<AdminConfig>("/api/admin/config"),
   adminPatch: async (patch: AdminPatch): Promise<{ changed: Record<string, unknown>; overlay: { provider: string | null; model: string | null } | null }> => {
     const r = await fetch("/api/admin/config", {

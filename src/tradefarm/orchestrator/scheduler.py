@@ -22,11 +22,45 @@ from tradefarm.market.hours import is_market_open
 from tradefarm.risk.manager import RiskManager
 from tradefarm.api.events import publish_event
 from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
-from tradefarm.storage import repo
+from tradefarm.storage import journal, repo
 
 log = structlog.get_logger()
 
 RECONCILE_INTERVAL_SEC = 10
+
+# In-memory counters for the dashboard. Reset at the start of each tick so
+# the UI can display "notes this tick" alongside the existing LLM_SKIPS.
+JOURNAL_COUNTERS: dict[str, int] = {"notes_this_tick": 0, "outcomes_this_tick": 0}
+
+
+def _note_for_signal(agent: Agent, sig, px: float) -> tuple[str, dict]:
+    """Build a short (1-2 line) thesis string + metadata dict for a journal
+    note, tailored to the agent's strategy.
+    """
+    meta: dict = {
+        "strategy": agent.state.strategy,
+        "side": sig.side,
+        "qty": sig.qty,
+        "mark": px,
+        "signal_reason": sig.reason,
+    }
+    # LSTM snapshot (both lstm_v1 and lstm_llm_v1 expose this shape).
+    last_lstm = getattr(agent, "last_lstm", None) or getattr(agent, "last_prediction", None)
+    if last_lstm:
+        meta["lstm_probs"] = list(last_lstm.get("probs", []))
+        meta["lstm_confidence"] = last_lstm.get("confidence")
+        meta["lstm_direction"] = last_lstm.get("direction")
+    # LLM overlay decision (lstm_llm_v1 only).
+    last_decision = getattr(agent, "last_decision", None)
+    if last_decision is not None:
+        meta["llm_reason"] = getattr(last_decision, "reason", None)
+        meta["llm_bias"] = getattr(last_decision, "bias", None)
+        meta["llm_stance"] = getattr(last_decision, "stance", None)
+        meta["llm_size_pct"] = getattr(last_decision, "size_pct", None)
+
+    verb = "bought" if sig.side == "buy" else "sold"
+    content = f"{verb} {sig.qty:g} {sig.symbol} @ ${px:.2f} — {sig.reason}"
+    return content, meta
 
 
 def _safe_build_overlay() -> LlmOverlay | None:
@@ -135,6 +169,10 @@ class Orchestrator:
 
         results = await asyncio.gather(*(gather(a) for a in self.agents))
 
+        # Reset per-tick journal counters.
+        JOURNAL_COUNTERS["notes_this_tick"] = 0
+        JOURNAL_COUNTERS["outcomes_this_tick"] = 0
+
         fills = 0
         blocked = 0
         for agent, signals in results:
@@ -148,6 +186,17 @@ class Orchestrator:
                         blocked += 1
                         log.info("risk_blocked", agent=agent.state.name, sym=sig.symbol, reason=decision.reason)
                         continue
+                # Write the journal note *before* submitting, so it's durable
+                # even if the broker round-trip fails mid-flight.
+                note_content, note_meta = _note_for_signal(agent, sig, px)
+                note_kind = "entry" if sig.side == "buy" else "exit"
+                note_id = await journal.write_note(
+                    agent.state.id, note_kind, sig.symbol, note_content, note_meta,
+                )
+                if note_id is not None:
+                    agent.journal_note_id = note_id
+                    JOURNAL_COUNTERS["notes_this_tick"] += 1
+
                 client_tag = uuid.uuid4().hex[:8]
                 if settings.execution_mode == "alpaca_paper":
                     # Key: the exact client_order_id the broker will send to Alpaca.
@@ -165,11 +214,19 @@ class Orchestrator:
                     # (e.g. off-hours gate rejected it).
                     self._optimistic_marks.pop(f"agent{agent.state.id}-{client_tag}", None)
                     continue
-                agent.on_fill(fill.symbol, fill.side, fill.qty, fill.price)
+                realized = agent.on_fill(fill.symbol, fill.side, fill.qty, fill.price)
                 await repo.record_trade(
                     agent.state.id, fill.symbol, fill.side, fill.qty, fill.price, sig.reason,
                 )
                 await repo.sync_positions(agent.state.id, agent.state.book)
+                # If the fill produced non-zero realized PnL, stamp the
+                # matching entry note. Idempotent: one stamp per flat-out.
+                if realized != 0.0:
+                    stamped = await journal.close_outcome(
+                        agent.state.id, fill.symbol, float(realized), trade_id=None,
+                    )
+                    if stamped is not None:
+                        JOURNAL_COUNTERS["outcomes_this_tick"] += 1
                 fills += 1
                 log.info(
                     "fill", agent=agent.state.name, sym=sig.symbol, side=sig.side,
@@ -207,6 +264,8 @@ class Orchestrator:
             "total_equity": total_equity,
             "realized_pnl": realized, "unrealized_pnl": unrealized,
             "last_tick_at": last_tick_iso,
+            "notes_this_tick": JOURNAL_COUNTERS["notes_this_tick"],
+            "outcomes_this_tick": JOURNAL_COUNTERS["outcomes_this_tick"],
         })
         await publish_event("tick", {
             "fills": fills, "blocked": blocked, "symbols": len(marks),

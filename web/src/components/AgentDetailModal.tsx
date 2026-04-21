@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import useSWR from "swr";
 import { api, type AgentRow, type AgentTrade } from "../api";
+import { AgentJournalSection } from "./AgentJournalSection";
 
 const DIR_TONE: Record<string, string> = {
   up: "text-(--color-profit)",
@@ -176,6 +177,9 @@ export function AgentDetailModal({ agent, onClose }: { agent: AgentRow; onClose:
               </ul>
             )}
           </Section>
+
+          {/* Journal (Phase 1 — Agent Academy) */}
+          <AgentJournalSection agentId={agent.id} />
         </div>
       </div>
     </div>

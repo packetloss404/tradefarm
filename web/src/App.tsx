@@ -154,7 +154,11 @@ export default function App() {
       </div>
 
       <Panel title="Brain Activity" badge={<LiveBadge />}>
-        <BrainPanel agents={agents} />
+        <BrainPanel
+          agents={agents}
+          notesThisTick={acct.notes_this_tick}
+          outcomesThisTick={acct.outcomes_this_tick}
+        />
       </Panel>
 
       <Panel title="Strategies" badge={<LiveBadge />}>

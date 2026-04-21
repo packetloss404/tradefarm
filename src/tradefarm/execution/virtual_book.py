@@ -44,12 +44,19 @@ class VirtualBook:
     # reconciler restart or retry.
     _reconciled_ids: set[str] = field(default_factory=set)
 
-    def record_fill(self, symbol: str, side: str, qty: float, price: float) -> None:
+    def record_fill(self, symbol: str, side: str, qty: float, price: float) -> float:
+        """Apply a fill to this book. Returns the realized PnL produced by
+        this fill alone (zero for opening fills / same-side adds, non-zero
+        for fills that close or flip part/all of a position). The
+        book's ``realized_pnl`` running total is updated by the same amount.
+        """
         pos = self.positions.get(symbol) or VirtualPosition(symbol)
         self.positions[symbol] = pos
         notional = qty * price
         self.cash += notional if side == "sell" else -notional
-        self.realized_pnl += pos.apply_fill(side, qty, price)
+        realized = pos.apply_fill(side, qty, price)
+        self.realized_pnl += realized
+        return realized
 
     def apply_fill_delta(
         self,

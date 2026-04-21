@@ -5,8 +5,19 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 
 from tradefarm.execution.virtual_book import VirtualBook
+from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import Agent, PnlSnapshot, Position, Trade
+
+__all__ = [
+    "upsert_agent",
+    "record_trade",
+    "snapshot_pnl",
+    "sync_positions",
+    "strategy_summary",
+    "strategy_equity_timeseries",
+    "journal",
+]
 
 
 async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital: float) -> None:

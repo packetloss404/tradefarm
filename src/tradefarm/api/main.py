@@ -10,7 +10,7 @@ from tradefarm.api.backtest import router as backtest_router
 from tradefarm.api.ws import router as ws_router
 from tradefarm.config import settings
 from tradefarm.orchestrator.scheduler import Orchestrator
-from tradefarm.storage import repo
+from tradefarm.storage import journal, repo
 from tradefarm.storage.db import SessionLocal, init_db
 from tradefarm.storage.models import PnlSnapshot
 
@@ -118,6 +118,7 @@ async def account() -> dict:
     total_equity = sum(a.state.book.equity(marks) for a in orch.agents)
     realized = sum(a.state.book.realized_pnl for a in orch.agents)
     unrealized = sum(a.state.book.unrealized_pnl(marks) for a in orch.agents)
+    from tradefarm.orchestrator.scheduler import JOURNAL_COUNTERS
     return {
         "profit_ai": profit,
         "loss_ai": loss,
@@ -126,6 +127,8 @@ async def account() -> dict:
         "realized_pnl": realized,
         "unrealized_pnl": unrealized,
         "last_tick_at": orch.last_tick_at.isoformat() if orch.last_tick_at is not None else None,
+        "notes_this_tick": JOURNAL_COUNTERS.get("notes_this_tick", 0),
+        "outcomes_this_tick": JOURNAL_COUNTERS.get("outcomes_this_tick", 0),
     }
 
 
@@ -202,6 +205,14 @@ async def agent_trades(agent_id: int, limit: int = 20) -> list[dict]:
         }
         for t in rows
     ]
+
+
+@app.get("/agents/{agent_id}/notes")
+async def agent_notes(agent_id: int, limit: int = 20) -> list[dict]:
+    """Newest-first journal notes for this agent. Resolved notes include
+    outcome_realized_pnl / outcome_closed_at; open notes leave them null.
+    """
+    return await journal.recent_outcomes(agent_id, n=limit)
 
 
 @app.get("/orders")

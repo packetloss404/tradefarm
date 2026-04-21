@@ -13,7 +13,15 @@ function pctLabel(n: number, denom: number): string {
   return `${Math.round((n / denom) * 100)}%`;
 }
 
-export function BrainPanel({ agents }: { agents: AgentRow[] }) {
+export function BrainPanel({
+  agents,
+  notesThisTick,
+  outcomesThisTick,
+}: {
+  agents: AgentRow[];
+  notesThisTick?: number;
+  outcomesThisTick?: number;
+}) {
   const lstmAgents = agents.filter((a) => a.last_lstm);
   const llmAgents = agents.filter((a) => a.last_decision);
 
@@ -42,6 +50,22 @@ export function BrainPanel({ agents }: { agents: AgentRow[] }) {
 
   return (
     <div className="grid grid-cols-12 gap-4">
+      {/* Phase 1 (Agent Academy): Notes/tick counter */}
+      <div className="col-span-12 -mb-2 flex items-baseline gap-4 text-[10px] uppercase tracking-wider text-zinc-500">
+        <span>
+          notes/tick{" "}
+          <span className="font-mono text-zinc-300 tabular-nums">
+            {notesThisTick ?? 0}
+          </span>
+        </span>
+        <span>
+          outcomes/tick{" "}
+          <span className="font-mono text-zinc-300 tabular-nums">
+            {outcomesThisTick ?? 0}
+          </span>
+        </span>
+      </div>
+
       <div className="col-span-3 space-y-3">
         <div className="text-xs uppercase tracking-wider text-zinc-400">LSTM Bias</div>
         <div className="font-mono text-sm space-y-1">
