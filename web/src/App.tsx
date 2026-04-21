@@ -10,6 +10,7 @@ import { PromotionsBoard } from "./components/PromotionsBoard";
 import { StrategyPanel } from "./components/StrategyPanel";
 import { OrderStatusPanel } from "./components/OrderStatusPanel";
 import { AgentDetailModal } from "./components/AgentDetailModal";
+import { AgentWorld } from "./components/AgentWorld";
 import { AdminModal } from "./components/AdminModal";
 import { RankDistBadge } from "./components/RankDistBadge";
 import { useEventFeed } from "./hooks/useEventFeed";
@@ -155,6 +156,18 @@ export default function App() {
           <MonthlyPnlChart data={pnlDaily ?? []} totalUnrealized={acct.unrealized_pnl} monthName={monthName} />
         </Panel>
       </div>
+
+      <Panel
+        title="Agent World"
+        badge={<LiveBadge />}
+        right={<span className="text-[10px] text-zinc-500 font-mono">live — dots migrate between zones as state changes</span>}
+      >
+        <AgentWorld
+          agents={agents}
+          onSelect={(a) => setSelectedAgentId(a.id)}
+          promotionEvents={feed.promotionEvents}
+        />
+      </Panel>
 
       <Panel title="Brain Activity" badge={<LiveBadge />}>
         <BrainPanel
