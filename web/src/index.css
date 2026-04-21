@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme {
+  --color-profit: #34d399;
+  --color-loss: #f87171;
+  --color-wait: #a1a1aa;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+html, body, #root {
+  height: 100%;
+}

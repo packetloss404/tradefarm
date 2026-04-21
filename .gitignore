@@ -1,0 +1,44 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Secrets + local config
+.env
+.env.local
+.env.*.local
+
+# Data + trained artifacts — regenerate with the trainer / let the runtime backfill
+data_cache/
+models/*.pt
+models/*.pth
+
+# Runtime state
+*.db
+*.db-journal
+*.sqlite*
+logs/
+*.log
+
+# Scratch files
+_*.json
+_*.csv
+
+# Frontend
+web/node_modules/
+web/.next/
+web/out/
+web/dist/
+web/*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
