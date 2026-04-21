@@ -10,6 +10,7 @@ import { StrategyPanel } from "./components/StrategyPanel";
 import { OrderStatusPanel } from "./components/OrderStatusPanel";
 import { AgentDetailModal } from "./components/AgentDetailModal";
 import { AdminModal } from "./components/AdminModal";
+import { RankDistBadge } from "./components/RankDistBadge";
 import { useEventFeed } from "./hooks/useEventFeed";
 import { useState } from "react";
 
@@ -96,6 +97,7 @@ export default function App() {
           >
             ws:{feed.status}
           </span>
+          <RankDistBadge />
           {lastTick && <span className="font-mono">· {lastTick}</span>}
           <button
             onClick={handleTick}

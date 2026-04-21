@@ -5,11 +5,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
+from tradefarm.academy import (
+    RANK_ORDER,
+    compute_stats,
+    eligible_rank,
+    rank_tone,
+)
+from tradefarm.academy import repo as academy_repo
 from tradefarm.api.admin import router as admin_router
 from tradefarm.api.backtest import router as backtest_router
 from tradefarm.api.ws import router as ws_router
 from tradefarm.config import settings
 from tradefarm.orchestrator.scheduler import Orchestrator
+from tradefarm.risk.manager import BASE_MAX_POSITION_NOTIONAL_PCT
 from tradefarm.storage import journal, repo
 from tradefarm.storage.db import SessionLocal, init_db
 from tradefarm.storage.models import PnlSnapshot
@@ -18,7 +26,10 @@ from tradefarm.storage.models import PnlSnapshot
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    orch = Orchestrator.build_default()
+    # Phase 2: seed each agent's RiskManager with its persisted rank so the
+    # first tick respects rank-gated caps. Missing entries default to intern.
+    rank_map = await academy_repo.ranks_by_agent()
+    orch = Orchestrator.build_default(rank_map=rank_map)
     await orch.persist_initial_state()
     orch.start_background()
     app.state.orchestrator = orch
@@ -79,11 +90,15 @@ async def list_agents() -> list[dict]:
                 "size_pct": d.size_pct,
                 "reason": d.reason,
             }
+        # Phase 2: rank is read off the in-process RiskManager. Phase 4 will
+        # update it via set_rank() + a rebuild hook; for now it matches DB.
+        rank = getattr(a.risk, "rank", "intern")
         out.append({
             "id": a.state.id,
             "name": a.state.name,
             "strategy": a.state.strategy,
             "status": a.state.status,
+            "rank": rank,
             "cash": book.cash,
             "equity": equity,
             "realized_pnl": book.realized_pnl,
@@ -100,6 +115,83 @@ async def list_agents() -> list[dict]:
             "last_decision": last_decision,
         })
     return out
+
+
+@app.get("/academy/ranks")
+async def academy_ranks() -> dict:
+    """Static-ish description of the rank system + live distribution. UI uses
+    this for the header strip and the rank-section legend.
+    """
+    multipliers = {r: settings.rank_multiplier(r) for r in RANK_ORDER}
+    distribution = await academy_repo.rank_distribution()
+    ranks = [
+        {
+            "rank": r,
+            "tone": rank_tone(r),
+            "pip": r[0].upper(),
+            "multiplier": multipliers[r],
+            "base_cap_pct": BASE_MAX_POSITION_NOTIONAL_PCT,
+            "effective_cap_pct": BASE_MAX_POSITION_NOTIONAL_PCT * multipliers[r],
+        }
+        for r in RANK_ORDER
+    ]
+    return {
+        "ranks": ranks,
+        "distribution": distribution,
+        "thresholds": {
+            "min_trades_junior": settings.academy_min_trades_junior,
+            "min_trades_senior": settings.academy_min_trades_senior,
+            "min_trades_principal": settings.academy_min_trades_principal,
+            "min_win_rate_senior": settings.academy_min_win_rate_senior,
+            "min_sharpe_principal": settings.academy_min_sharpe_principal,
+            "min_weeks_active_principal": 2.0,
+        },
+    }
+
+
+@app.get("/agents/{agent_id}/academy")
+async def agent_academy(agent_id: int) -> dict:
+    """Current rank + stats + thresholds-to-next for one agent."""
+    current = await academy_repo.get_rank(agent_id)
+    stats = await compute_stats(agent_id, starting_capital=settings.agent_starting_capital)
+    next_eligible = eligible_rank(stats)
+    idx = RANK_ORDER.index(current)
+    next_rank = RANK_ORDER[idx + 1] if idx + 1 < len(RANK_ORDER) else None
+
+    # Gap description — drives the plain-English tooltip in the UI.
+    gaps: dict[str, float | int] = {}
+    if next_rank == "junior":
+        gaps["trades_needed"] = max(
+            0, settings.academy_min_trades_junior - stats.n_closed_trades,
+        )
+    elif next_rank == "senior":
+        gaps["trades_needed"] = max(
+            0, settings.academy_min_trades_senior - stats.n_closed_trades,
+        )
+        gaps["win_rate_target"] = settings.academy_min_win_rate_senior
+    elif next_rank == "principal":
+        gaps["trades_needed"] = max(
+            0, settings.academy_min_trades_principal - stats.n_closed_trades,
+        )
+        gaps["sharpe_target"] = settings.academy_min_sharpe_principal
+        gaps["weeks_needed"] = max(0.0, 2.0 - stats.weeks_active)
+
+    return {
+        "agent_id": agent_id,
+        "rank": current,
+        "tone": rank_tone(current),
+        "multiplier": settings.rank_multiplier(current),
+        "effective_cap_pct": BASE_MAX_POSITION_NOTIONAL_PCT * settings.rank_multiplier(current),
+        "stats": {
+            "n_closed_trades": stats.n_closed_trades,
+            "win_rate": stats.win_rate,
+            "sharpe": stats.sharpe,
+            "weeks_active": stats.weeks_active,
+        },
+        "eligible_rank": next_eligible,
+        "next_rank": next_rank,
+        "gaps": gaps,
+    }
 
 
 @app.post("/tick")

@@ -36,6 +36,14 @@ EDITABLE: dict[str, type] = {
     "tick_outside_rth": bool,
     "execution_mode": str,
     "disabled_strategies": list,  # accepted as list on POST, stored as CSV
+    # Phase 2 (Agent Academy) — thresholds are accepted here so the admin
+    # panel can tune them in Phase 4. No UI field yet; the shape is enough.
+    "academy_rank_multipliers": str,
+    "academy_min_trades_junior": int,
+    "academy_min_trades_senior": int,
+    "academy_min_trades_principal": int,
+    "academy_min_win_rate_senior": float,
+    "academy_min_sharpe_principal": float,
 }
 SECRET_KEYS = {"anthropic_api_key", "minimax_api_key"}
 VALID_PROVIDERS = {"anthropic", "minimax"}
@@ -100,6 +108,13 @@ class ConfigPatch(BaseModel):
     tick_outside_rth: bool | None = None
     execution_mode: Literal["simulated", "alpaca_paper"] | None = None
     disabled_strategies: list[str] | None = None
+    # Phase 2 (Agent Academy) — see EDITABLE notes above.
+    academy_rank_multipliers: str | None = None
+    academy_min_trades_junior: int | None = None
+    academy_min_trades_senior: int | None = None
+    academy_min_trades_principal: int | None = None
+    academy_min_win_rate_senior: float | None = None
+    academy_min_sharpe_principal: float | None = None
 
     # If True, also write each changed key into .env so it survives restart.
     persist: bool = True

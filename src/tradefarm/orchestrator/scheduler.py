@@ -98,16 +98,30 @@ class Orchestrator:
         self._agents_by_id = {a.state.id: a for a in agents}
 
     @classmethod
-    def build_default(cls) -> "Orchestrator":
+    def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
+        """Build the default orchestrator.
+
+        ``rank_map`` (optional): agent_id → rank from a previous boot. When
+        provided, each ``RiskManager`` picks up that rank at construction so
+        the first tick respects the persisted multiplier. Missing entries
+        default to ``"intern"`` (the DB default for freshly-inserted rows).
+        Phase 4's curriculum is responsible for in-flight updates between
+        ticks; mid-tick rank changes are explicitly out of scope for Phase 2.
+        """
         universe = default_universe()
         # Lazy-construct one shared LLM overlay if the active provider has credentials.
         overlay = _safe_build_overlay()
+        rank_map = rank_map or {}
 
         agents: list[Agent] = []
         for i in range(settings.agent_count):
             symbol = universe[i % len(universe)]
             book = VirtualBook(agent_id=i, cash=settings.agent_starting_capital)
-            risk = RiskManager(starting_capital=settings.agent_starting_capital)
+            agent_rank = rank_map.get(i, "intern")
+            risk = RiskManager(
+                starting_capital=settings.agent_starting_capital,
+                rank=agent_rank,
+            )
             has_model = model_path(symbol).exists()
 
             slot = i % 3  # 0=momentum, 1=lstm, 2=lstm+llm

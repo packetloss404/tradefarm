@@ -18,6 +18,14 @@ class Agent(Base):
     cash: Mapped[float] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(16), default="waiting")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # Phase 2 (Agent Academy): rank-gated capital. `server_default` ensures
+    # rows inserted by older code paths (or `SELECT *` over pre-Phase-2 data)
+    # resolve to "intern" without a migration. `rank_updated_at` stays NULL
+    # until Phase 4's curriculum flips a rank.
+    rank: Mapped[str] = mapped_column(
+        String(16), default="intern", server_default="intern",
+    )
+    rank_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     positions: Mapped[list["Position"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
     trades: Mapped[list["Trade"]] = relationship(back_populates="agent", cascade="all, delete-orphan")

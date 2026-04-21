@@ -49,9 +49,54 @@ class Settings(BaseSettings):
     # in a frozen strategy keep existing positions but skip all decisions.
     disabled_strategies: str = ""
 
+    # -------------------------------------------------------------------------
+    # Academy (Phase 2) — rank-gated capital.
+    #
+    # `academy_rank_multipliers` is a CSV of `rank=multiplier` pairs that scale
+    # `RiskManager.limits.max_position_notional_pct` per rank. If empty, every
+    # rank resolves to 1.0× so legacy behavior is preserved until the operator
+    # opts in. Malformed entries fall back to 1.0.
+    # -------------------------------------------------------------------------
+    academy_rank_multipliers: str = ""
+    academy_min_trades_junior: int = Field(default=5, ge=0)
+    academy_min_trades_senior: int = Field(default=15, ge=0)
+    academy_min_trades_principal: int = Field(default=40, ge=0)
+    academy_min_win_rate_senior: float = Field(default=0.52, ge=0.0, le=1.0)
+    academy_min_sharpe_principal: float = Field(default=0.5)
+
     @property
     def disabled_strategies_set(self) -> set[str]:
         return {s.strip() for s in self.disabled_strategies.split(",") if s.strip()}
+
+    @property
+    def rank_multiplier_map(self) -> dict[str, float]:
+        """Parse `academy_rank_multipliers` into a dict. Empty or malformed
+        entries silently fall back to 1.0 for that rank (or all ranks if the
+        CSV is empty entirely).
+        """
+        out: dict[str, float] = {}
+        raw = (self.academy_rank_multipliers or "").strip()
+        if not raw:
+            return out
+        for token in raw.split(","):
+            token = token.strip()
+            if not token or "=" not in token:
+                continue
+            key, _, val = token.partition("=")
+            key = key.strip().lower()
+            try:
+                out[key] = float(val.strip())
+            except ValueError:
+                # Malformed → leave unset; rank_multiplier() falls back to 1.0.
+                continue
+        return out
+
+    def rank_multiplier(self, rank: str) -> float:
+        """Multiplier for ``rank``. Empty/unconfigured settings → 1.0 for every
+        rank (backwards-compat: the feature is only 'live' once operators set
+        the CSV). Unknown ranks also → 1.0.
+        """
+        return self.rank_multiplier_map.get(rank.lower(), 1.0)
 
 
 settings = Settings()

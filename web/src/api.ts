@@ -12,11 +12,16 @@ export type LlmDecisionRow = {
   reason: string;
 };
 
+export type Rank = "intern" | "junior" | "senior" | "principal";
+
 export type AgentRow = {
   id: number;
   name: string;
   strategy: string;
   status: "profit" | "loss" | "waiting" | "trading";
+  // Phase 2 (Agent Academy). Older backends won't emit this; callers must
+  // fall back to "intern" when undefined.
+  rank?: Rank;
   cash: number;
   equity: number;
   realized_pnl: number;
@@ -24,6 +29,50 @@ export type AgentRow = {
   positions: Record<string, { qty: number; avg_price: number; mark: number }>;
   last_lstm: LstmSnapshot | null;
   last_decision: LlmDecisionRow | null;
+};
+
+export type RankDefinition = {
+  rank: Rank;
+  tone: string;
+  pip: string;
+  multiplier: number;
+  base_cap_pct: number;
+  effective_cap_pct: number;
+};
+
+export type AcademyOverview = {
+  ranks: RankDefinition[];
+  distribution: Record<Rank, number>;
+  thresholds: {
+    min_trades_junior: number;
+    min_trades_senior: number;
+    min_trades_principal: number;
+    min_win_rate_senior: number;
+    min_sharpe_principal: number;
+    min_weeks_active_principal: number;
+  };
+};
+
+export type AgentAcademy = {
+  agent_id: number;
+  rank: Rank;
+  tone: string;
+  multiplier: number;
+  effective_cap_pct: number;
+  stats: {
+    n_closed_trades: number;
+    win_rate: number;
+    sharpe: number;
+    weeks_active: number;
+  };
+  eligible_rank: Rank;
+  next_rank: Rank | null;
+  gaps: {
+    trades_needed?: number;
+    win_rate_target?: number;
+    sharpe_target?: number;
+    weeks_needed?: number;
+  };
 };
 
 export type AccountSummary = {
@@ -177,6 +226,9 @@ export const api = {
     fetcher<AgentTrade[]>(`/api/agents/${agentId}/trades?limit=${limit}`),
   agentNotes: (agentId: number, limit = 20) =>
     fetcher<AgentNote[]>(`/api/agents/${agentId}/notes?limit=${limit}`),
+  academyOverview: () => fetcher<AcademyOverview>("/api/academy/ranks"),
+  agentAcademy: (agentId: number) =>
+    fetcher<AgentAcademy>(`/api/agents/${agentId}/academy`),
   adminConfig: () => fetcher<AdminConfig>("/api/admin/config"),
   adminPatch: async (patch: AdminPatch): Promise<{ changed: Record<string, unknown>; overlay: { provider: string | null; model: string | null } | null }> => {
     const r = await fetch("/api/admin/config", {

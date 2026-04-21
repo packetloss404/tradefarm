@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import useSWR from "swr";
 import { api, type AgentRow, type AgentTrade } from "../api";
 import { AgentJournalSection } from "./AgentJournalSection";
+import { AgentRankSection } from "./AgentRankSection";
 
 const DIR_TONE: Record<string, string> = {
   up: "text-(--color-profit)",
@@ -118,6 +119,9 @@ export function AgentDetailModal({ agent, onClose }: { agent: AgentRow; onClose:
               <div className="text-xs italic text-zinc-500">no open position</div>
             )}
           </Section>
+
+          {/* Rank (Phase 2 — Agent Academy) */}
+          <AgentRankSection agentId={agent.id} />
 
           {/* LSTM */}
           {lstm && (

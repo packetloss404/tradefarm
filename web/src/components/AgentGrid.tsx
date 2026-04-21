@@ -1,10 +1,26 @@
-import type { AgentRow } from "../api";
+import type { AgentRow, Rank } from "../api";
 
 const dotClass: Record<AgentRow["status"], string> = {
   profit: "bg-(--color-profit)",
   loss: "bg-(--color-loss)",
   waiting: "bg-(--color-wait)",
   trading: "bg-amber-400",
+};
+
+// Phase 2: rank pip tone. Tailwind class patterns match PROJECT_PLAN.md's
+// Rank table — they must stay in sync with AgentRankSection / RankDistBadge.
+const pipTone: Record<Rank, string> = {
+  intern: "text-zinc-400",
+  junior: "text-sky-400",
+  senior: "text-(--color-profit)",
+  principal: "text-amber-400",
+};
+
+const RANK_LABEL: Record<Rank, string> = {
+  intern: "Intern",
+  junior: "Junior",
+  senior: "Senior",
+  principal: "Principal",
 };
 
 export function AgentGrid({ agents, onSelect }: { agents: AgentRow[]; onSelect?: (a: AgentRow) => void }) {
@@ -14,9 +30,11 @@ export function AgentGrid({ agents, onSelect }: { agents: AgentRow[]; onSelect?:
         const symbols = Object.keys(a.positions);
         const sym = symbols[0];
         const pos = sym ? a.positions[sym]! : null;
+        const rank: Rank = a.rank ?? "intern";
         const tooltip = [
           a.name,
           a.strategy,
+          `rank=${RANK_LABEL[rank]}`,
           `cash=$${a.cash.toFixed(2)} equity=$${a.equity.toFixed(2)}`,
           pos ? `holds ${pos.qty} ${sym} avg=${pos.avg_price.toFixed(2)} mark=${pos.mark.toFixed(2)}` : "",
           a.realized_pnl ? `realized $${a.realized_pnl.toFixed(2)}` : "",
@@ -28,8 +46,17 @@ export function AgentGrid({ agents, onSelect }: { agents: AgentRow[]; onSelect?:
             type="button"
             title={tooltip}
             onClick={() => onSelect?.(a)}
-            className="flex h-10 flex-col items-center justify-center gap-0.5 rounded border border-zinc-800 bg-zinc-900/40 hover:border-zinc-500 hover:bg-zinc-800/60 cursor-pointer focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            className="relative flex h-10 flex-col items-center justify-center gap-0.5 rounded border border-zinc-800 bg-zinc-900/40 hover:border-zinc-500 hover:bg-zinc-800/60 cursor-pointer focus:outline-none focus:ring-1 focus:ring-emerald-500"
           >
+            {/* Rank pip — absolute top-right so it coexists with the status dot
+                below. Never shares space with the status dot; never overrides
+                its color. */}
+            <span
+              className={`absolute top-0.5 right-1 text-[8px] font-mono font-bold leading-none ${pipTone[rank]}`}
+              aria-label={`rank ${rank}`}
+            >
+              {rank[0]!.toUpperCase()}
+            </span>
             <span className={`size-1.5 rounded-full ${dotClass[a.status]}`} />
             <span className="text-[9px] font-mono text-zinc-500">{a.id.toString().padStart(3, "0")}</span>
           </button>
