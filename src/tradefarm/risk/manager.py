@@ -48,11 +48,13 @@ class RiskManager:
         rank: str = "intern",
     ) -> None:
         self.starting_capital = starting_capital
+        # Track whether the caller passed explicit limits. If they did, those
+        # are authoritative (tests rely on this). If not, `should_exit` will
+        # read thresholds from live settings so admin changes take effect
+        # without a restart.
+        self._limits_explicit = limits is not None
         self.limits = limits or self._limits_from_settings()
         self.rank = rank
-        # Apply the rank multiplier to the base cap. When `academy_rank_multipliers`
-        # is unset, `rank_multiplier()` returns 1.0 for every rank so existing
-        # behavior is preserved (see backwards-compat contract in PROJECT_PLAN.md).
         self._apply_rank_multiplier()
         self._peak: dict[str, float] = {}
 
@@ -97,6 +99,11 @@ class RiskManager:
     ) -> ExitTrigger | None:
         """Decide whether this open long should close based on risk alone.
 
+        Reads thresholds from ``self.limits``; if the caller passed explicit
+        limits at construction they're authoritative. Otherwise the thresholds
+        come from the live `settings` object (so admin-panel changes take
+        effect on the next tick without restarting).
+
         Checks in order: stop-loss, take-profit, time-stop, trailing-stop.
         Returns None if no rule fires. Shorts aren't supported in v1 — we
         don't open them — so qty <= 0 always returns None.
@@ -105,28 +112,49 @@ class RiskManager:
             return None
         now = now or _utcnow()
 
+        sl_pct, tp_pct, trail_pct_threshold, max_hold_days = self._effective_thresholds()
+
         unrealized_pct = (mark - pos.avg_price) / pos.avg_price
 
-        if unrealized_pct <= -self.limits.stop_loss_pct:
+        if unrealized_pct <= -sl_pct:
             return ExitTrigger("stop-loss", f"stop-loss {unrealized_pct:+.2%}")
 
-        if unrealized_pct >= self.limits.take_profit_pct:
+        if unrealized_pct >= tp_pct:
             return ExitTrigger("take-profit", f"take-profit {unrealized_pct:+.2%}")
 
         if pos.opened_at is not None:
             days = (now - pos.opened_at).total_seconds() / 86400.0
-            if days >= self.limits.max_hold_days:
-                return ExitTrigger("time-stop", f"held {days:.1f}d ≥ {self.limits.max_hold_days}d")
+            if days >= max_hold_days:
+                return ExitTrigger("time-stop", f"held {days:.1f}d >= {max_hold_days}d")
 
         # Trailing stop — peak tracked per (agent × symbol) via _peak.
         peak = max(self._peak.get(symbol, pos.avg_price), mark)
         self._peak[symbol] = peak
         if peak > 0:
             trail_pct = (mark - peak) / peak
-            if trail_pct <= -self.limits.trailing_stop_pct:
+            if trail_pct <= -trail_pct_threshold:
                 return ExitTrigger("trailing-stop", f"trailing {trail_pct:+.2%} off peak {peak:.2f}")
 
         return None
+
+    def _effective_thresholds(self) -> tuple[float, float, float, int]:
+        """If the caller injected explicit RiskLimits (tests), use those.
+        Otherwise read live settings so admin tweaks take effect immediately
+        on the next tick without restarting the backend."""
+        if self._limits_explicit:
+            return (
+                self.limits.stop_loss_pct,
+                self.limits.take_profit_pct,
+                self.limits.trailing_stop_pct,
+                self.limits.max_hold_days,
+            )
+        from tradefarm.config import settings
+        return (
+            settings.risk_stop_loss_pct,
+            settings.risk_take_profit_pct,
+            settings.risk_trailing_stop_pct,
+            settings.risk_max_hold_days,
+        )
 
     # Legacy API — kept so any external caller still works. New code should
     # use `should_exit(...)`.
