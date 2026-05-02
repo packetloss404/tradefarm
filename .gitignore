@@ -25,6 +25,7 @@ models/*.pth
 *.sqlite*
 logs/
 *.log
+.backend.pid
 
 # Scratch files
 _*.json

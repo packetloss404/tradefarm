@@ -1,0 +1,11 @@
+node_modules
+dist
+.DS_Store
+*.log
+.env
+.env.local
+src-tauri/target/
+src-tauri/gen/schemas/
+*.tsbuildinfo
+.build.log
+.build.pid

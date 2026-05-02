@@ -43,7 +43,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="TradeFarm", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5179", "http://127.0.0.1:5179"],
+    # Web dashboard runs on 5179, stream-app dev on 5180, packaged Tauri
+    # webview origin varies by platform (`http(s)://tauri.localhost` on
+    # Windows, `tauri://localhost` on macOS/Linux). Use a regex to cover
+    # every reasonable local origin without juggling a long allow-list.
+    # This API is paper-trading-only and listens on 127.0.0.1; widening
+    # CORS does not expose anything external.
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|https?://tauri\.localhost|tauri://localhost)$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-profit: #34d399;
+  --color-loss: #f87171;
+  --color-wait: #a1a1aa;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Hide cursor after idle — toggled by .idle on body */
+body.idle, body.idle * {
+  cursor: none !important;
+}
+
+/* Marquee crawl for the bottom ticker */
+@keyframes tf-crawl {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes tf-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-1.4px); }
+}

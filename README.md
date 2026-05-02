@@ -31,6 +31,10 @@ edge for trading.
 - **Live dashboard** (Vite + React 19 + Tailwind v4) — today PnL, open positions,
   monthly PnL chart, brain activity, strategy attribution, order status,
   100-agent grid with click-through detail modal
+- **Standalone broadcast app** (Tauri 2 + React) — fullscreen 1920x1080 window
+  with the isometric Agent World hero scene, top/bottom tickers, stat pillar,
+  promotion toasts and template-driven commentary captions. Designed for OBS
+  Window Capture. Native exe + MSI/NSIS installers
 - **WebSocket feed** — tick / fill / account / heartbeat events pushed to the UI
 - **Alpaca reconciler** — polls Alpaca every 10s, computes actual-vs-optimistic
   fill delta, applies idempotent cash + avg-price corrections to the virtual book
@@ -55,6 +59,7 @@ src/tradefarm/
 ├── risk/            # per-symbol cap, stop-loss, trailing stop, daily loss
 └── storage/         # SQLAlchemy async models + repo
 web/                 # Vite + React 19 + Tailwind v4 dashboard
+stream/              # Tauri 2 broadcast app (1920x1080 hero scene for OBS)
 tests/               # pytest (virtual book roundtrips + delta math)
 scripts/             # make_favicon.py
 ```
@@ -89,6 +94,9 @@ EODHD bars → features (19) → LSTM(30, seq_len=30)
   - [Alpaca Paper](https://app.alpaca.markets/paper/dashboard/overview) — free
   - At least one LLM: [Anthropic](https://console.anthropic.com/settings/keys)
     or [MiniMax](https://platform.minimaxi.com)
+- Optional (for the broadcast app): Rust 1.77+ via
+  [rustup](https://rustup.rs/), plus the Microsoft WebView2 runtime (already
+  installed on Windows 11)
 
 ## Setup
 
@@ -108,22 +116,32 @@ uv run python -m tradefarm.agents.lstm_train --universe
 
 # Frontend deps
 cd web && npm install
+
+# Broadcast app deps (optional — only if you'll stream)
+cd ../stream && npm install
 ```
 
 ## Run
 
-Two processes. Keep them in separate terminals.
+Two processes for normal use, three if you also want the broadcast window.
 
 ```bash
 # Backend (from project root)
 uv run uvicorn tradefarm.api.main:app --host 127.0.0.1 --port 8000 \
                                       --reload --reload-dir src
 
-# Frontend (from web/)
+# Dashboard (from web/)
 cd web && npm run dev
+# → http://localhost:5179/
+
+# Broadcast app (from stream/) — native window for OBS capture
+cd stream && npm run tauri dev          # native dev window with hot reload
+cd stream && npm run dev                # browser-only iteration on :5180
+cd stream && npm run tauri build        # release exe + MSI + NSIS installers
 ```
 
-Open **http://localhost:5179/**.
+Inside the broadcast window: **Ctrl+I** opens Admin (settings + Quit), **F11**
+toggles fullscreen, **Esc** closes overlays.
 
 ## CLI utilities
 
@@ -172,6 +190,27 @@ Changes are applied live and persisted to `.env`.
 | `POST /backtest/run`                  | Kick off backtest job              |
 | `GET  /backtest/{job_id}`             | Backtest progress + results        |
 | `WS   /ws`                            | Live event stream                  |
+
+## Streaming setup
+
+The broadcast app (`stream/`) renders the same data as the dashboard but
+re-laid-out for a 1080p capture: top ticker (equity / PnL / agent counts),
+left stat pillar (top 5 / pool PnL / biggest fill / roster), Agent World XL
+hero (slow camera drift + parallax clouds + 2x sprites), promotion toasts,
+template commentary captions, and a marquee bottom ticker for fills and
+rank changes.
+
+```bash
+cd stream
+npm run tauri build         # produces:
+#   src-tauri/target/release/tradefarm-stream.exe         (~10 MB)
+#   src-tauri/target/release/bundle/msi/*.msi             (~3 MB)
+#   src-tauri/target/release/bundle/nsis/*-setup.exe      (~2 MB)
+```
+
+Point OBS at the `tradefarm-stream` window (Window Capture). The default
+backend URL is `http://127.0.0.1:8000`; override via the in-app Admin
+overlay (Ctrl+I) to point at a separate trading host.
 
 ## Cost notes
 

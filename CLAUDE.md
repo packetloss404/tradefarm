@@ -20,6 +20,11 @@ uv run uvicorn tradefarm.api.main:app --host 127.0.0.1 --port 8000 \
 # Frontend — binds localhost:5179 (strictPort=true; don't change).
 cd web && npm run dev
 
+# Streaming app (Tauri broadcast — depends on backend at :8000).
+# Vite dev server binds 5180; Tauri shell wraps it.
+cd stream && npm run tauri dev      # native window
+cd stream && npm run dev            # browser-only iteration on http://127.0.0.1:5180
+
 # Tests
 uv run pytest -q
 
