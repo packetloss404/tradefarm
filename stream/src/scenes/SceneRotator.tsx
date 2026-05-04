@@ -4,8 +4,10 @@ import { TopTicker } from "../components/TopTicker";
 import { BottomTicker } from "../components/BottomTicker";
 import { CommentaryCaption } from "../components/CommentaryCaption";
 import { PromotionToast } from "../components/PromotionToast";
+import { LowerThird } from "../components/LowerThird";
 import { useCommentary } from "../hooks/useCommentary";
 import type { StreamSnapshot } from "../hooks/useStreamData";
+import type { BannerState } from "../hooks/useStreamCommands";
 import { HeroBody } from "./HeroBody";
 import { LeaderboardScene } from "./LeaderboardScene";
 import { BrainScene } from "./BrainScene";
@@ -28,24 +30,33 @@ export function SceneRotator({
   paused,
   commentaryEnabled,
   tickerSpeedPxPerSec,
+  forceSceneId,
+  banner,
 }: {
   snapshot: StreamSnapshot;
   rotationSec: number;
   paused: boolean;
   commentaryEnabled: boolean;
   tickerSpeedPxPerSec: number;
+  forceSceneId?: string | null;
+  banner?: BannerState | null;
 }) {
   const [idx, setIdx] = useState(0);
 
   useEffect(() => {
-    if (rotationSec <= 0 || paused) return;
+    if (rotationSec <= 0 || paused || forceSceneId) return;
     const t = setInterval(() => {
       setIdx((i) => (i + 1) % ORDER.length);
     }, rotationSec * 1000);
     return () => clearInterval(t);
-  }, [rotationSec, paused]);
+  }, [rotationSec, paused, forceSceneId]);
 
-  const id: SceneId = rotationSec <= 0 ? "hero" : (ORDER[idx] ?? "hero");
+  const id: SceneId =
+    forceSceneId && (ORDER as readonly string[]).includes(forceSceneId)
+      ? (forceSceneId as SceneId)
+      : rotationSec <= 0
+        ? "hero"
+        : (ORDER[idx] ?? "hero");
 
   const commentary = useCommentary({
     agents: snapshot.agents,
@@ -81,6 +92,7 @@ export function SceneRotator({
 
         <PromotionToast promotions={snapshot.promotions} />
         <CommentaryCaption highlight={commentary.current} />
+        <LowerThird banner={banner ?? null} />
 
         {snapshot.error && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-rose-500/20 border border-rose-500/50 px-6 py-4 text-(--color-loss) font-mono">

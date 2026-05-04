@@ -17,6 +17,21 @@ type PnlSnapshotPayload = { date: string; equity: number; pnl_pct: number };
 type HeartbeatPayload = { seq: number };
 type HelloPayload = { session: string; server_time: string };
 
+export type StreamStatePayload = {
+  scene?: string | null;
+  audio_enabled?: boolean | null;
+  volume?: number | null;
+  fullscreen?: boolean | null;
+  ts?: number | string | null;
+};
+export type StreamScenePayload = { scene_id: string };
+export type StreamBannerPayload = {
+  title: string;
+  subtitle?: string;
+  ttl_sec?: number;
+};
+export type StreamAudioPayload = { enabled: boolean; volume: number };
+
 export type LiveEvent =
   | { type: "tick"; ts: string; payload: TickPayload }
   | { type: "fill"; ts: string; payload: FillPayload }
@@ -25,7 +40,12 @@ export type LiveEvent =
   | { type: "heartbeat"; ts: string; payload: HeartbeatPayload }
   | { type: "hello"; ts: string; payload: HelloPayload }
   | { type: "promotion"; ts: string; payload: PromotionEventPayload }
-  | { type: "demotion"; ts: string; payload: PromotionEventPayload };
+  | { type: "demotion"; ts: string; payload: PromotionEventPayload }
+  | { type: "stream_state"; ts: string; payload: StreamStatePayload }
+  | { type: "stream_scene"; ts: string; payload: StreamScenePayload }
+  | { type: "stream_banner"; ts: string; payload: StreamBannerPayload }
+  | { type: "stream_audio"; ts: string; payload: StreamAudioPayload }
+  | { type: "stream_preroll"; ts: string; payload: Record<string, never> };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 

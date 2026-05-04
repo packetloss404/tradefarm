@@ -124,6 +124,11 @@ function rewrite(path: string): string {
   return path;
 }
 
+/** Public version of the rewrite logic for non-GET callers (e.g. heartbeat POSTs). */
+export function apiUrl(path: string): string {
+  return rewrite(path);
+}
+
 const fetcher = async <T,>(url: string): Promise<T> => {
   const target = rewrite(url);
   const r = await fetch(target);

@@ -15,6 +15,8 @@ from tradefarm.academy import promotions_repo
 from tradefarm.academy import repo as academy_repo
 from tradefarm.api.admin import router as admin_router
 from tradefarm.api.backtest import router as backtest_router
+from tradefarm.api.market_clock import router as market_clock_router
+from tradefarm.api.stream_control import router as stream_control_router
 from tradefarm.api.ws import router as ws_router
 from tradefarm.config import settings
 from tradefarm.orchestrator.scheduler import Orchestrator
@@ -57,6 +59,8 @@ app.add_middleware(
 app.include_router(ws_router)
 app.include_router(admin_router)
 app.include_router(backtest_router)
+app.include_router(market_clock_router)
+app.include_router(stream_control_router)
 
 
 @app.get("/health")

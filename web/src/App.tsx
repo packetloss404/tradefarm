@@ -12,20 +12,16 @@ import { OrderStatusPanel } from "./components/OrderStatusPanel";
 import { AgentDetailModal } from "./components/AgentDetailModal";
 import { AgentWorld } from "./components/AgentWorld";
 import { AdminModal } from "./components/AdminModal";
-import { RankDistBadge } from "./components/RankDistBadge";
+import { BroadcastPanel } from "./components/BroadcastPanel";
+import { StickyHeader } from "./components/StickyHeader";
+import { TabbedPanel } from "./components/TabbedPanel";
+import { CommandPalette } from "./components/CommandPalette";
+import { useCommandPalette } from "./hooks/useCommandPalette";
+import { buildCommands } from "./lib/buildCommands";
 import { useEventFeed } from "./hooks/useEventFeed";
 import { useState } from "react";
 
 const REFRESH_MS = 5_000;
-
-function formatTickAt(iso: string | null) {
-  if (!iso) return "never";
-  const t = new Date(iso);
-  const sec = Math.max(0, Math.round((Date.now() - t.getTime()) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
-  return `${Math.round(sec / 3600)}h ago`;
-}
 
 export default function App() {
   const { data: account, error: accErr } = useSWR<AccountSummary>("account", api.account, {
@@ -46,6 +42,7 @@ export default function App() {
   const [lastTick, setLastTick] = useState<string>("");
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
+  const cmdK = useCommandPalette();
 
   const handleTick = async () => {
     setTicking(true);
@@ -85,37 +82,16 @@ export default function App() {
 
   return (
     <div className="mx-auto max-w-[1400px] p-4 space-y-4">
-      <header className="flex items-center justify-between">
-        <h1 className="flex items-center gap-2 text-lg font-semibold">
-          <img src="/favicon.svg" alt="" className="h-6 w-6" />
-          Trade<span className="text-(--color-profit)">Farm</span>
-          <span className="text-zinc-500 text-sm font-normal">— US equities, paper</span>
-        </h1>
-        <div className="flex items-center gap-3 text-xs text-zinc-500">
-          <span className="font-mono">last tick: {formatTickAt(lastTickIso)}</span>
-          <span
-            className={`font-mono ${feed.status === "open" ? "text-emerald-500" : "text-zinc-600"}`}
-            title="WebSocket status"
-          >
-            ws:{feed.status}
-          </span>
-          <RankDistBadge />
-          {lastTick && <span className="font-mono">· {lastTick}</span>}
-          <button
-            onClick={handleTick}
-            disabled={ticking}
-            className="rounded-sm border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
-          >
-            {ticking ? "ticking…" : "Manual Tick"}
-          </button>
-          <button
-            onClick={() => setAdminOpen(true)}
-            className="rounded-sm border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-700"
-          >
-            Admin
-          </button>
-        </div>
-      </header>
+      <StickyHeader
+        account={acct}
+        agentCount={agents.length}
+        wsStatus={feed.status}
+        lastTickIso={lastTickIso}
+        onManualTick={handleTick}
+        onOpenAdmin={() => setAdminOpen(true)}
+        ticking={ticking}
+        lastTick={lastTick}
+      />
 
       <div className="grid grid-cols-12 gap-4">
         <Panel className="col-span-4" title="TradeFarm AI" badge={<LiveBadge />}>
@@ -169,25 +145,27 @@ export default function App() {
         />
       </Panel>
 
-      <Panel title="Brain Activity" badge={<LiveBadge />}>
-        <BrainPanel
-          agents={agents}
-          notesThisTick={acct.notes_this_tick}
-          outcomesThisTick={acct.outcomes_this_tick}
-        />
-      </Panel>
+      <TabbedPanel
+        persistKey="lower"
+        tabs={[
+          {
+            id: "brain",
+            label: "Brain Activity",
+            content: (
+              <BrainPanel
+                agents={agents}
+                notesThisTick={acct.notes_this_tick}
+                outcomesThisTick={acct.outcomes_this_tick}
+              />
+            ),
+          },
+          { id: "promotions", label: "Promotions", content: <PromotionsBoard /> },
+          { id: "strategies", label: "Strategies", content: <StrategyPanel /> },
+          { id: "orders", label: "Orders", content: <OrderStatusPanel /> },
+        ]}
+      />
 
-      <Panel title="Promotions Board" badge={<LiveBadge />}>
-        <PromotionsBoard />
-      </Panel>
-
-      <Panel title="Strategies" badge={<LiveBadge />}>
-        <StrategyPanel />
-      </Panel>
-
-      <Panel title="Order Status" badge={<LiveBadge />}>
-        <OrderStatusPanel />
-      </Panel>
+      <BroadcastPanel />
 
       <Panel
         title="Agent Grid"
@@ -206,6 +184,17 @@ export default function App() {
       })()}
 
       {adminOpen && <AdminModal onClose={() => setAdminOpen(false)} />}
+
+      <CommandPalette
+        open={cmdK.open}
+        onClose={() => cmdK.setOpen(false)}
+        commands={buildCommands({
+          agents,
+          onSelectAgent: setSelectedAgentId,
+          onManualTick: handleTick,
+          onOpenAdmin: () => setAdminOpen(true),
+        })}
+      />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { PreRollScene } from "./scenes/PreRollScene";
 import { AdminOverlay } from "./components/AdminOverlay";
 import { useStreamData } from "./hooks/useStreamData";
 import { useStreamAudio } from "./hooks/useStreamAudio";
+import { useStreamCommands } from "./hooks/useStreamCommands";
 import { streamAudio } from "./audio/StreamAudio";
 import {
   DEFAULT_SETTINGS,
@@ -109,6 +110,16 @@ export default function App() {
     volume: settings?.audioVolume ?? DEFAULT_SETTINGS.audioVolume,
   });
 
+  const showPrerollGate = !prerollDone && (settings?.prerollDurationSec ?? 0) > 0;
+  const cmds = useStreamCommands({
+    wsUrlOverride: wsUrl,
+    currentScene: showPrerollGate ? "preroll" : "rotator",
+    audioEnabled: settings?.audioEnabled ?? DEFAULT_SETTINGS.audioEnabled,
+    audioVolume: settings?.audioVolume ?? DEFAULT_SETTINGS.audioVolume,
+    fullscreen: settings?.fullscreen ?? DEFAULT_SETTINGS.fullscreen,
+    onPreroll: () => setPrerollDone(false),
+  });
+
   if (!settings) {
     return (
       <div className="h-full w-full flex items-center justify-center text-zinc-500 font-mono">
@@ -137,6 +148,8 @@ export default function App() {
             paused={showAdmin}
             commentaryEnabled={settings.commentaryEnabled}
             tickerSpeedPxPerSec={settings.tickerSpeedPxPerSec}
+            forceSceneId={cmds.forceSceneId}
+            banner={cmds.banner}
           />
         )}
       </AnimatePresence>

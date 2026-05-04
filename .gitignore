@@ -26,6 +26,7 @@ models/*.pth
 logs/
 *.log
 .backend.pid
+.web.pid
 
 # Scratch files
 _*.json
