@@ -46,22 +46,31 @@ edge for trading.
 
 ```
 src/tradefarm/
-├── agents/          # base, momentum, lstm_agent, lstm_llm_agent,
-│                    #   features (19 engineered), lstm_model (torch),
-│                    #   lstm_train (CLI), llm_overlay + providers, backtest
+├── academy/         # ranks (intern/junior/senior/principal), rank-gated
+│                    #   capital multipliers, curriculum auto-promote/demote,
+│                    #   promotions repository
+├── agents/          # base, momentum, lstm_agent, lstm_llm_agent, retrieval
+│                    #   (similar past setups), features (19 engineered),
+│                    #   lstm_model (torch), lstm_train (CLI),
+│                    #   llm_overlay + providers, backtest
 ├── api/             # FastAPI app, admin router, ws endpoint, events bus,
 │                    #   backtest router
 ├── data/            # EODHD client (with parquet cache), symbol universe
 ├── execution/       # Broker protocol, SimulatedBroker, AlpacaBroker,
 │                    #   VirtualBook, OrderReconciler
 ├── market/          # NYSE calendar / RTH helper
-├── orchestrator/    # tick loop, scheduler, reconciler loop
-├── risk/            # per-symbol cap, stop-loss, trailing stop, daily loss
-└── storage/         # SQLAlchemy async models + repo
+├── orchestrator/    # tick loop, scheduler, reconciler loop, curriculum loop
+├── risk/            # per-symbol cap, portfolio SL/TP/time-stop/trailing
+└── storage/         # SQLAlchemy async models + repo + journal
 web/                 # Vite + React 19 + Tailwind v4 dashboard
-stream/              # Tauri 2 broadcast app (1920x1080 hero scene for OBS)
-tests/               # pytest (virtual book roundtrips + delta math)
+stream/              # Tauri 2 broadcast app (1920x1080 multi-scene rotator
+                     #   for OBS Window Capture, with Web Audio cues)
+tests/               # pytest — virtual book, journal, ranks, retrieval,
+                     #   curriculum, risk-exits
 scripts/             # make_favicon.py
+docs/                # plan_product.md, plan_tech.md, PROJECT_PLAN.md
+                     #   (Agent Academy 4-phase synthesis)
+dev/                 # design notes — stream-app-ideas.md backlog
 ```
 
 **Decision flow per tick**:
@@ -194,11 +203,29 @@ Changes are applied live and persisted to `.env`.
 ## Streaming setup
 
 The broadcast app (`stream/`) renders the same data as the dashboard but
-re-laid-out for a 1080p capture: top ticker (equity / PnL / agent counts),
-left stat pillar (top 5 / pool PnL / biggest fill / roster), Agent World XL
-hero (slow camera drift + parallax clouds + 2x sprites), promotion toasts,
-template commentary captions, and a marquee bottom ticker for fills and
-rank changes.
+re-laid-out for a 1080p capture and rotates between four scenes:
+
+- **Hero** — left stat pillar (top 5 / pool PnL / biggest fill / roster) +
+  isometric Agent World XL diorama (slow camera drift, parallax clouds,
+  2x sprites).
+- **Leaderboard** — full ranked list of every agent in 4 columns with
+  mini PnL bars.
+- **Brain** — 3×4 cards of recent LLM decisions, each with LSTM
+  probability bars and the overlay's stance / bias / size / reason.
+- **Strategy** — per-strategy attribution: equity, realized / unrealized
+  PnL, profit/loss/wait counts.
+
+Persistent overlays across all scenes: top equity/PnL ticker, marquee
+bottom ticker (fills + rank changes), promotion toast, commentary
+caption, and (if enabled) Web Audio: tick kicks, sonified fills,
+promotion stingers.
+
+A configurable pre-roll opener ("TradeFarm — Day N") fades in on launch.
+Cycle interval, pre-roll length, and audio volume are adjustable from
+the in-app **Ctrl+I** Admin overlay. See
+[`dev/stream-app-ideas.md`](./dev/stream-app-ideas.md) for the
+unshipped backlog (day/night sky, weather, CRT shader, TTS narrator,
+recap MP4, OBS WebSocket integration, etc.).
 
 ```bash
 cd stream
@@ -211,6 +238,19 @@ npm run tauri build         # produces:
 Point OBS at the `tradefarm-stream` window (Window Capture). The default
 backend URL is `http://127.0.0.1:8000`; override via the in-app Admin
 overlay (Ctrl+I) to point at a separate trading host.
+
+## Documentation
+
+- [CHANGELOG.md](./CHANGELOG.md) — release history grouped by date.
+- [ROADMAP.md](./ROADMAP.md) — what's next, by horizon (now / next / later).
+- [docs/PROJECT_PLAN.md](./docs/PROJECT_PLAN.md) — 4-phase Agent Academy
+  delivery plan (already shipped, kept as design archive).
+- [docs/plan_tech.md](./docs/plan_tech.md) — engineering planning doc.
+- [docs/plan_product.md](./docs/plan_product.md) — UX planning doc.
+- [dev/stream-app-ideas.md](./dev/stream-app-ideas.md) — unshipped
+  broadcast-app backlog with effort estimates.
+- [CLAUDE.md](./CLAUDE.md) — coding conventions, gotchas, and run
+  commands for AI assistants working in this repo.
 
 ## Cost notes
 
