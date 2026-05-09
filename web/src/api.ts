@@ -228,6 +228,14 @@ export type AdminPatch = Partial<{
   persist: boolean;
 }>;
 
+export type LlmStats = {
+  called: number;
+  skipped_low_confidence: number;
+  total_decisions: number;
+  skip_rate: number;
+  threshold: number;
+};
+
 export type BacktestResult = {
   symbol: string;
   error?: string;
@@ -279,6 +287,7 @@ export const api = {
   agentAcademy: (agentId: number) =>
     fetcher<AgentAcademy>(`/api/agents/${agentId}/academy`),
   adminConfig: () => fetcher<AdminConfig>("/api/admin/config"),
+  llmStats: () => fetcher<LlmStats>("/api/llm/stats"),
   adminPatch: async (patch: AdminPatch): Promise<{ changed: Record<string, unknown>; overlay: { provider: string | null; model: string | null } | null }> => {
     const r = await fetch("/api/admin/config", {
       method: "POST",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { TopTicker } from "../components/TopTicker";
 import { BottomTicker } from "../components/BottomTicker";
@@ -6,14 +6,16 @@ import { CommentaryCaption } from "../components/CommentaryCaption";
 import { PromotionToast } from "../components/PromotionToast";
 import { LowerThird } from "../components/LowerThird";
 import { useCommentary } from "../hooks/useCommentary";
+import { useMarketClock } from "../hooks/useMarketClock";
 import type { StreamSnapshot } from "../hooks/useStreamData";
 import type { BannerState } from "../hooks/useStreamCommands";
 import { HeroBody } from "./HeroBody";
 import { LeaderboardScene } from "./LeaderboardScene";
 import { BrainScene } from "./BrainScene";
 import { StrategyScene } from "./StrategyScene";
+import { RecapScene } from "./RecapScene";
 
-const ORDER = ["hero", "leaderboard", "brain", "strategy"] as const;
+const ORDER = ["hero", "leaderboard", "brain", "strategy", "recap"] as const;
 type SceneId = (typeof ORDER)[number];
 
 /**
@@ -41,22 +43,50 @@ export function SceneRotator({
   forceSceneId?: string | null;
   banner?: BannerState | null;
 }) {
+  const { phase } = useMarketClock();
+
+  // Recap is only eligible after 16:00 ET on a closed/afterhours session.
+  // Double-check the wall-clock ET hour because phase === "closed" also
+  // fires before the open on weekends/holidays.
+  const recapEligible = useMemo(() => {
+    if (phase !== "afterhours" && phase !== "closed") return false;
+    // hourCycle: "h23" → 0..23 (avoids the h24 quirk where midnight returns "24"
+    // on some Chromium releases, which would incorrectly satisfy hour >= 16).
+    const etHourStr = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hour12: false,
+      hourCycle: "h23",
+    }).format(new Date());
+    const etHour = Number.parseInt(etHourStr, 10);
+    return Number.isFinite(etHour) && etHour >= 16 && etHour < 24;
+  }, [phase]);
+
+  const cycle = useMemo<readonly SceneId[]>(
+    () => (recapEligible ? ORDER : ORDER.filter((s) => s !== "recap")),
+    [recapEligible],
+  );
+
   const [idx, setIdx] = useState(0);
 
   useEffect(() => {
     if (rotationSec <= 0 || paused || forceSceneId) return;
     const t = setInterval(() => {
-      setIdx((i) => (i + 1) % ORDER.length);
+      setIdx((i) => (i + 1) % cycle.length);
     }, rotationSec * 1000);
     return () => clearInterval(t);
-  }, [rotationSec, paused, forceSceneId]);
+  }, [rotationSec, paused, forceSceneId, cycle.length]);
+
+  useEffect(() => {
+    setIdx((i) => (cycle.length > 0 ? i % cycle.length : 0));
+  }, [cycle.length]);
 
   const id: SceneId =
     forceSceneId && (ORDER as readonly string[]).includes(forceSceneId)
       ? (forceSceneId as SceneId)
       : rotationSec <= 0
         ? "hero"
-        : (ORDER[idx] ?? "hero");
+        : (cycle[idx] ?? "hero");
 
   const commentary = useCommentary({
     agents: snapshot.agents,
@@ -87,6 +117,7 @@ export function SceneRotator({
             {id === "leaderboard" && <LeaderboardScene snapshot={snapshot} />}
             {id === "brain" && <BrainScene snapshot={snapshot} />}
             {id === "strategy" && <StrategyScene snapshot={snapshot} />}
+            {id === "recap" && <RecapScene snapshot={snapshot} />}
           </motion.div>
         </AnimatePresence>
 
@@ -102,7 +133,7 @@ export function SceneRotator({
 
         {/* Scene indicator dots — bottom-right of the body area */}
         <div className="absolute bottom-3 right-4 flex items-center gap-1.5 z-10">
-          {ORDER.map((s) => (
+          {cycle.map((s) => (
             <span
               key={s}
               className={`h-1.5 rounded-full transition-all ${

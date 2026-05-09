@@ -1,4 +1,10 @@
-import type { AccountSummary } from "../shared/api";
+import { useEffect, useRef, useState } from "react";
+import useSWR from "swr";
+import { api, type AccountSummary, type AdminConfig } from "../shared/api";
+
+const SPARK_BUFFER_SIZE = 30;
+const ADMIN_CONFIG_REFRESH_MS = 60_000;
+const COUNTDOWN_SOON_THRESHOLD_SEC = 60;
 
 function fmtUsd(n: number): string {
   return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -26,6 +32,20 @@ export function TopTicker({
   agentCount: number;
   wsStatus: "connecting" | "open" | "closed";
 }) {
+  // Rolling 30-tick equity buffer. Pushed once per snapshot delivery — SWR
+  // returns a fresh `account` reference on every poll, and the WS account
+  // event also swaps the live reference in `useStreamData`, so identity
+  // comparison via the dependency array is the right trigger.
+  const bufferRef = useRef<number[]>([]);
+  const [spark, setSpark] = useState<number[]>([]);
+  useEffect(() => {
+    if (!account) return;
+    const buf = bufferRef.current;
+    buf.push(account.total_equity);
+    if (buf.length > SPARK_BUFFER_SIZE) buf.shift();
+    setSpark([...buf]);
+  }, [account]);
+
   if (!account) {
     return (
       <div className="h-[60px] flex items-center px-8 bg-zinc-950/90 border-b border-zinc-800">
@@ -52,7 +72,10 @@ export function TopTicker({
       </div>
 
       <div className="flex items-center gap-8">
-        <Stat label="Equity" value={`$${fmtUsd(account.total_equity)}`} />
+        <div className="flex items-center gap-2">
+          <Stat label="Equity" value={`$${fmtUsd(account.total_equity)}`} />
+          <EquitySparkline values={spark} />
+        </div>
         <Stat
           label="Today"
           value={`${fmtSign(todayPnl, 0)} USD`}
@@ -77,6 +100,7 @@ export function TopTicker({
       </div>
 
       <div className="flex items-center gap-3 text-xs font-mono text-zinc-500">
+        <TickCountdownRing lastTickIso={account.last_tick_at} />
         <span>last tick {tickAge(account.last_tick_at)}</span>
         <span className={wsColor}>● ws:{wsStatus}</span>
       </div>
@@ -129,5 +153,126 @@ function Pill({
       <span className="opacity-70">{label}</span>
       <span className="tabular-nums font-semibold">{value}</span>
     </span>
+  );
+}
+
+const COUNTDOWN_SIZE = 30;
+const COUNTDOWN_STROKE = 3;
+const COUNTDOWN_RADIUS = (COUNTDOWN_SIZE - COUNTDOWN_STROKE) / 2;
+const COUNTDOWN_CIRCUMFERENCE = 2 * Math.PI * COUNTDOWN_RADIUS;
+
+function fmtMmSs(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function TickCountdownRing({ lastTickIso }: { lastTickIso: string | null }) {
+  const { data: cfg } = useSWR<AdminConfig>("stream-admin-config", api.adminConfig, {
+    refreshInterval: ADMIN_CONFIG_REFRESH_MS,
+    shouldRetryOnError: false,
+    revalidateOnFocus: false,
+  });
+  const intervalSec = cfg?.auto_tick_interval_sec ?? 0;
+
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (intervalSec <= 0 || lastTickIso === null) {
+    return (
+      <span
+        className="inline-flex items-center justify-center font-mono text-[8px] text-zinc-600"
+        style={{ width: COUNTDOWN_SIZE, height: COUNTDOWN_SIZE }}
+        title="Auto-tick disabled"
+      >
+        OFF
+      </span>
+    );
+  }
+
+  const lastTickMs = new Date(lastTickIso).getTime();
+  const intervalMs = intervalSec * 1000;
+  const elapsedMs = Math.max(0, now - lastTickMs);
+  const secsToNext = Math.max(0, Math.ceil((intervalMs - elapsedMs) / 1000));
+  const progress = Math.min(1, Math.max(0, 1 - elapsedMs / intervalMs));
+
+  const stroke = secsToNext <= COUNTDOWN_SOON_THRESHOLD_SEC ? "var(--color-profit)" : "#f59e0b";
+  const dashOffset = COUNTDOWN_CIRCUMFERENCE * (1 - progress);
+
+  return (
+    <div
+      className="relative"
+      style={{ width: COUNTDOWN_SIZE, height: COUNTDOWN_SIZE }}
+      title={`Next tick in ${secsToNext}s`}
+    >
+      <svg width={COUNTDOWN_SIZE} height={COUNTDOWN_SIZE} className="-rotate-90">
+        <circle
+          cx={COUNTDOWN_SIZE / 2}
+          cy={COUNTDOWN_SIZE / 2}
+          r={COUNTDOWN_RADIUS}
+          stroke="rgba(63,63,70,0.6)"
+          strokeWidth={COUNTDOWN_STROKE}
+          fill="none"
+        />
+        <circle
+          cx={COUNTDOWN_SIZE / 2}
+          cy={COUNTDOWN_SIZE / 2}
+          r={COUNTDOWN_RADIUS}
+          stroke={stroke}
+          strokeWidth={COUNTDOWN_STROKE}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={COUNTDOWN_CIRCUMFERENCE}
+          strokeDashoffset={dashOffset}
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center font-mono text-[8px] tabular-nums text-zinc-300">
+        {fmtMmSs(secsToNext)}
+      </div>
+    </div>
+  );
+}
+
+const SPARK_W = 64;
+const SPARK_H = 22;
+
+function EquitySparkline({ values }: { values: number[] }) {
+  if (values.length < 2) {
+    return <span className="inline-block" style={{ width: SPARK_W, height: SPARK_H }} />;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const stepX = SPARK_W / (values.length - 1);
+  const points = values
+    .map((v, i) => {
+      const x = i * stepX;
+      const y = SPARK_H - ((v - min) / span) * SPARK_H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const first = values[0] as number;
+  const last = values[values.length - 1] as number;
+  const stroke = last >= first ? "var(--color-profit)" : "var(--color-loss)";
+  return (
+    <svg
+      width={SPARK_W}
+      height={SPARK_H}
+      className="overflow-visible"
+      role="img"
+      aria-label="rolling equity"
+    >
+      <polyline
+        fill="none"
+        stroke={stroke}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={points}
+      />
+    </svg>
   );
 }

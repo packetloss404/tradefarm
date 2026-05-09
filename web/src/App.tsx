@@ -15,10 +15,15 @@ import { AdminModal } from "./components/AdminModal";
 import { BroadcastPanel } from "./components/BroadcastPanel";
 import { StickyHeader } from "./components/StickyHeader";
 import { TabbedPanel } from "./components/TabbedPanel";
+import { WorkflowFlowchart } from "./components/WorkflowFlowchart";
 import { CommandPalette } from "./components/CommandPalette";
 import { useCommandPalette } from "./hooks/useCommandPalette";
 import { buildCommands } from "./lib/buildCommands";
 import { useEventFeed } from "./hooks/useEventFeed";
+import { PositionsSparklineStrip } from "./components/PositionsSparklineStrip";
+import { KeyboardMapOverlay } from "./components/KeyboardMapOverlay";
+import { useKeyboardMap } from "./hooks/useKeyboardMap";
+import { ApiSpendWidget } from "./components/ApiSpendWidget";
 import { useState } from "react";
 
 const REFRESH_MS = 5_000;
@@ -43,6 +48,7 @@ export default function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
   const cmdK = useCommandPalette();
+  const kbMap = useKeyboardMap({ disabled: cmdK.open });
 
   const handleTick = async () => {
     setTicking(true);
@@ -161,11 +167,18 @@ export default function App() {
           },
           { id: "promotions", label: "Promotions", content: <PromotionsBoard /> },
           { id: "strategies", label: "Strategies", content: <StrategyPanel /> },
+          { id: "workflow", label: "Workflow", content: <WorkflowFlowchart /> },
           { id: "orders", label: "Orders", content: <OrderStatusPanel /> },
         ]}
       />
 
       <BroadcastPanel />
+
+      <ApiSpendWidget />
+
+      <Panel title="Open Positions" right={<span className="text-[10px] text-zinc-500 font-mono">live marks · sparklines build over time</span>}>
+        <PositionsSparklineStrip agents={agents} />
+      </Panel>
 
       <Panel
         title="Agent Grid"
@@ -195,6 +208,8 @@ export default function App() {
           onOpenAdmin: () => setAdminOpen(true),
         })}
       />
+
+      <KeyboardMapOverlay open={kbMap.open} onClose={() => kbMap.setOpen(false)} />
     </div>
   );
 }

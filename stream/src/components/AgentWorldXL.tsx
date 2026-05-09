@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRow, PromotionEventPayload, Rank } from "../shared/api";
+import type { AgentRow, MarketPhase, PromotionEventPayload, Rank } from "../shared/api";
 
 /* ------------------------------------------------------------------ *
  * AgentWorldXL — streaming-tuned isometric diorama.
@@ -286,12 +286,40 @@ const WALK_MS = 2_400;
 
 type Transition = { from: ZoneId; to: ZoneId; expiresAt: number };
 
+type WeatherKind = "none" | "rain" | "sun" | "snow" | "fog";
+
+const SKY_BY_PHASE: Record<MarketPhase, { top: string; bottom: string }> = {
+  premarket:  { top: "#0c1322", bottom: "#1e293b" },
+  rth:        { top: "#0ea5e9", bottom: "#7dd3fc" },
+  afterhours: { top: "#1e1b4b", bottom: "#c2410c" },
+  closed:     { top: "#020617", bottom: "#1e293b" },
+};
+
+function pickWeather(phase: MarketPhase, pnlPct: number): WeatherKind {
+  if (phase === "closed") return "snow";
+  if (phase === "premarket") return "fog";
+  if (pnlPct <= -1) return "rain";
+  if (pnlPct >= 1) return "sun";
+  return "none";
+}
+
+// Deterministic pseudo-random so star/particle positions are stable across
+// re-renders without needing refs everywhere.
+function seeded(i: number, salt = 1): number {
+  const x = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 export function AgentWorldXL({
   agents,
   promotionEvents,
+  marketPhase = "rth",
+  todayPnlPct = 0,
 }: {
   agents: AgentRow[];
   promotionEvents?: { type: "promotion" | "demotion"; ts: string; payload: PromotionEventPayload }[];
+  marketPhase?: MarketPhase;
+  todayPnlPct?: number;
 }) {
   const islandById = useMemo(() => {
     const m = new Map<ZoneId, Island>();
@@ -431,6 +459,8 @@ export function AgentWorldXL({
     return { minX, minY, maxX, maxY };
   }, []);
 
+  const weather: WeatherKind = pickWeather(marketPhase, todayPnlPct);
+
   const padX = 80;
   const padTop = 140;
   const padBot = 60;
@@ -455,12 +485,42 @@ export function AgentWorldXL({
             <stop offset="100%" stopColor="rgba(0,0,0,0.85)" />
           </radialGradient>
           <linearGradient id="sky-xl" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#0c1322" />
-            <stop offset="100%" stopColor="#1e293b" />
+            <stop offset="0%" stopColor={SKY_BY_PHASE[marketPhase].top}>
+              <animate attributeName="stop-color"
+                values={`${SKY_BY_PHASE[marketPhase].top};${SKY_BY_PHASE[marketPhase].top}`}
+                dur="60s" />
+            </stop>
+            <stop offset="100%" stopColor={SKY_BY_PHASE[marketPhase].bottom}>
+              <animate attributeName="stop-color"
+                values={`${SKY_BY_PHASE[marketPhase].bottom};${SKY_BY_PHASE[marketPhase].bottom}`}
+                dur="60s" />
+            </stop>
           </linearGradient>
+          <radialGradient id="sun-rays-xl" cx="50%" cy="0%" r="80%">
+            <stop offset="0%" stopColor="#fde68a" stopOpacity="0.55" />
+            <stop offset="40%" stopColor="#fbbf24" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
+          </radialGradient>
         </defs>
 
         <rect x={viewX} y={viewY} width={viewW} height={viewH} fill="url(#sky-xl)" />
+
+        {/* Twinkling stars — only when market is dark (premarket/afterhours/closed) */}
+        {marketPhase !== "rth" && Array.from({ length: 36 }, (_, i) => {
+          const sx = viewX + seeded(i, 1) * viewW;
+          const sy = viewY + seeded(i, 2) * (viewH * 0.45);
+          const r = 0.6 + seeded(i, 3) * 1.4;
+          const dur = 1.8 + seeded(i, 4) * 2.6;
+          const delay = seeded(i, 5) * dur;
+          return (
+            <circle key={`star-${i}`} cx={sx} cy={sy} r={r} fill="#fef9c3">
+              <animate attributeName="opacity"
+                values="0.15;0.95;0.15"
+                dur={`${dur}s`} begin={`-${delay}s`}
+                repeatCount="indefinite" />
+            </circle>
+          );
+        })}
 
         {/* Drifting clouds (parallax) */}
         {[
@@ -480,6 +540,75 @@ export function AgentWorldXL({
         })}
 
         <rect x={viewX} y={viewY} width={viewW} height={viewH} fill="url(#scene-bg-xl)" />
+
+        {/* Weather layer — particles tied to portfolio PnL and market phase. */}
+        {weather === "rain" && Array.from({ length: 70 }, (_, i) => {
+          const rx = viewX + seeded(i, 11) * viewW;
+          const ry = viewY + seeded(i, 12) * viewH;
+          const dur = 0.7 + seeded(i, 13) * 0.5;
+          const delay = seeded(i, 14) * dur;
+          return (
+            <line key={`rain-${i}`}
+              x1={rx} y1={ry} x2={rx - 4} y2={ry + 14}
+              stroke="#7dd3fc" strokeOpacity={0.55} strokeWidth={1}>
+              <animate attributeName="y1" values={`${ry};${ry + viewH}`}
+                dur={`${dur}s`} begin={`-${delay}s`} repeatCount="indefinite" />
+              <animate attributeName="y2" values={`${ry + 14};${ry + viewH + 14}`}
+                dur={`${dur}s`} begin={`-${delay}s`} repeatCount="indefinite" />
+            </line>
+          );
+        })}
+
+        {weather === "sun" && (
+          <>
+            <rect x={viewX} y={viewY} width={viewW} height={viewH * 0.7}
+              fill="url(#sun-rays-xl)" style={{ pointerEvents: "none" }}>
+              <animate attributeName="opacity" values="0.7;1;0.7" dur="6s" repeatCount="indefinite" />
+            </rect>
+            {Array.from({ length: 14 }, (_, i) => {
+              const cx = viewX + viewW * 0.5;
+              const cy = viewY + 20;
+              const len = viewH * 0.8;
+              const baseAngle = -90 + (i / 14) * 180;
+              return (
+                <g key={`ray-${i}`} transform={`translate(${cx} ${cy})`} opacity={0.18}>
+                  <rect x={-1.2} y={0} width={2.4} height={len}
+                    fill="#fde68a"
+                    transform={`rotate(${baseAngle})`}>
+                    <animateTransform attributeName="transform" type="rotate"
+                      from={`${baseAngle} 0 0`} to={`${baseAngle + 360} 0 0`}
+                      dur="60s" repeatCount="indefinite" />
+                  </rect>
+                </g>
+              );
+            })}
+          </>
+        )}
+
+        {weather === "snow" && Array.from({ length: 60 }, (_, i) => {
+          const sx = viewX + seeded(i, 21) * viewW;
+          const sy = viewY + seeded(i, 22) * viewH;
+          const r = 1 + seeded(i, 23) * 1.6;
+          const dur = 5 + seeded(i, 24) * 4;
+          const delay = seeded(i, 25) * dur;
+          const drift = (seeded(i, 26) - 0.5) * 30;
+          return (
+            <circle key={`snow-${i}`} cx={sx} cy={sy} r={r}
+              fill="#f8fafc" opacity={0.78}>
+              <animate attributeName="cy" values={`${sy};${sy + viewH}`}
+                dur={`${dur}s`} begin={`-${delay}s`} repeatCount="indefinite" />
+              <animate attributeName="cx" values={`${sx};${sx + drift};${sx}`}
+                dur={`${dur}s`} begin={`-${delay}s`} repeatCount="indefinite" />
+            </circle>
+          );
+        })}
+
+        {weather === "fog" && (
+          <rect x={viewX} y={viewY + viewH * 0.55} width={viewW} height={viewH * 0.45}
+            fill="#cbd5e1" opacity={0.18} style={{ pointerEvents: "none" }}>
+            <animate attributeName="opacity" values="0.10;0.22;0.10" dur="9s" repeatCount="indefinite" />
+          </rect>
+        )}
 
         {BRIDGES.map((b, i) => <Bridge key={i} from={b.from} to={b.to} />)}
 

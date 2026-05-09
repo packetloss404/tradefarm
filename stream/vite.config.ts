@@ -17,7 +17,7 @@ export default defineConfig({
   server: {
     port: 5180,
     strictPort: true,
-    host: "127.0.0.1",
+    host: "0.0.0.0",
     proxy: {
       "/api": { target: BACKEND, rewrite: (p) => p.replace(/^\/api/, ""), changeOrigin: true },
       "/ws": { target: WS_BACKEND, ws: true, changeOrigin: true },

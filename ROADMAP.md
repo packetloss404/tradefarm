@@ -3,7 +3,7 @@
 Forward-looking work for TradeFarm, organized by horizon. Items shipped
 since the last release live in [CHANGELOG.md](./CHANGELOG.md). The full
 broadcast-app idea backlog (with effort estimates) lives in
-[`dev/stream-app-ideas.md`](./dev/stream-app-ideas.md); this file
+[`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
 Status legend:

@@ -70,7 +70,7 @@ tests/               # pytest — virtual book, journal, ranks, retrieval,
 scripts/             # make_favicon.py
 docs/                # plan_product.md, plan_tech.md, PROJECT_PLAN.md
                      #   (Agent Academy 4-phase synthesis)
-dev/                 # design notes — stream-app-ideas.md backlog
+dev/                 # design notes — feature-backlog.md (cross-surface)
 ```
 
 **Decision flow per tick**:
@@ -223,9 +223,10 @@ promotion stingers.
 A configurable pre-roll opener ("TradeFarm — Day N") fades in on launch.
 Cycle interval, pre-roll length, and audio volume are adjustable from
 the in-app **Ctrl+I** Admin overlay. See
-[`dev/stream-app-ideas.md`](./dev/stream-app-ideas.md) for the
-unshipped backlog (day/night sky, weather, CRT shader, TTS narrator,
-recap MP4, OBS WebSocket integration, etc.).
+[`dev/feature-backlog.md`](./dev/feature-backlog.md) for the
+unshipped backlog (CRT shader, TTS narrator, recap MP4, OBS WebSocket
+integration, dashboard upgrades, etc.). Day/night sky and weather
+shipped 2026-05-09.
 
 ```bash
 cd stream
@@ -247,8 +248,9 @@ overlay (Ctrl+I) to point at a separate trading host.
   delivery plan (already shipped, kept as design archive).
 - [docs/plan_tech.md](./docs/plan_tech.md) — engineering planning doc.
 - [docs/plan_product.md](./docs/plan_product.md) — UX planning doc.
-- [dev/stream-app-ideas.md](./dev/stream-app-ideas.md) — unshipped
-  broadcast-app backlog with effort estimates.
+- [dev/feature-backlog.md](./dev/feature-backlog.md) — single
+  cross-surface backlog (stream + dashboard) with shipped log, active
+  queue, and idea pool.
 - [CLAUDE.md](./CLAUDE.md) — coding conventions, gotchas, and run
   commands for AI assistants working in this repo.
 

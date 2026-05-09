@@ -18,6 +18,8 @@ export type StreamSettings = {
   // Web Audio: kicks on tick, piano notes on fill, promotion stinger.
   audioEnabled: boolean;
   audioVolume: number; // 0..1
+  // CSS-only CRT/VHS overlay (scanlines + chroma fringe + vignette).
+  crtEnabled: boolean;
 };
 
 export const DEFAULT_SETTINGS: StreamSettings = {
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: StreamSettings = {
   sceneRotationSec: 60,
   audioEnabled: true,
   audioVolume: 0.6,
+  crtEnabled: false,
 };
 
 const SETTINGS_FILE = "stream-settings.json";

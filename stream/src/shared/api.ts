@@ -90,6 +90,22 @@ export type PromotionEventPayload = {
   at: string;
 };
 
+export type MarketPhase = "premarket" | "rth" | "afterhours" | "closed";
+
+export type MarketClock = {
+  phase: MarketPhase;
+  server_now: string;
+  opens_at: string | null;
+  closes_at: string | null;
+};
+
+// Subset of the dashboard's AdminConfig — the stream app only consumes the
+// auto-tick interval today, but the field is shared so promote this if more
+// admin keys leak into the broadcast HUD.
+export type AdminConfig = {
+  auto_tick_interval_sec: number;
+};
+
 // Settable at boot from settings.ts: when non-empty, all relative `/api/*`
 // paths are rewritten to `${BACKEND_BASE}/...`. In Vite dev this stays empty
 // and the proxy handles routing.
@@ -153,4 +169,6 @@ export const api = {
   orders: (limit = 25) => fetcher<OrderStatus[]>(`/api/orders?limit=${limit}`),
   promotions: (hours = 24, limit = 100) =>
     fetcher<Promotion[]>(`/api/academy/promotions?hours=${hours}&limit=${limit}`),
+  marketClock: () => fetcher<MarketClock>("/api/market/clock"),
+  adminConfig: () => fetcher<AdminConfig>("/api/admin/config"),
 };

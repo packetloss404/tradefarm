@@ -174,6 +174,13 @@ export function AdminOverlay({
                   onChange={(v) => setDraft({ ...draft, audioEnabled: v })}
                 />
               </div>
+              <div className="flex items-center gap-6">
+                <Toggle
+                  label="CRT effect (scanlines + chroma)"
+                  value={draft.crtEnabled}
+                  onChange={(v) => setDraft({ ...draft, crtEnabled: v })}
+                />
+              </div>
               <Field
                 label={`Audio volume: ${Math.round(draft.audioVolume * 100)}%`}
                 hint=""

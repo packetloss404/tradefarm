@@ -53,6 +53,12 @@ export default function App() {
     })();
   }, []);
 
+  // Toggle CSS-only CRT/VHS overlay (scanlines + chroma + vignette).
+  useEffect(() => {
+    document.body.classList.toggle("crt-on", settings?.crtEnabled ?? false);
+    return () => document.body.classList.remove("crt-on");
+  }, [settings?.crtEnabled]);
+
   // Cursor-hide-on-idle for a clean stream capture.
   useEffect(() => {
     const reset = () => {
