@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRow, MarketPhase, PromotionEventPayload, Rank } from "../shared/api";
+import { MascotPet } from "./MascotPet";
 
 /* ------------------------------------------------------------------ *
  * AgentWorldXL — streaming-tuned isometric diorama.
@@ -459,6 +460,19 @@ export function AgentWorldXL({
     return { minX, minY, maxX, maxY };
   }, []);
 
+  const mascotNodes = useMemo(() => {
+    const out: { x: number; y: number }[] = [];
+    for (const b of BRIDGES) {
+      const a = iso(b.from[0], b.from[1]);
+      const c = iso(b.to[0], b.to[1]);
+      const m = iso((b.from[0] + b.to[0]) / 2, (b.from[1] + b.to[1]) / 2);
+      out.push({ x: a.x, y: a.y });
+      out.push({ x: m.x, y: m.y });
+      out.push({ x: c.x, y: c.y });
+    }
+    return out;
+  }, []);
+
   const weather: WeatherKind = pickWeather(marketPhase, todayPnlPct);
 
   const padX = 80;
@@ -737,6 +751,8 @@ export function AgentWorldXL({
             </g>
           );
         })}
+
+        <MascotPet nodes={mascotNodes} />
       </svg>
     </div>
   );

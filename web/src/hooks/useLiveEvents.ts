@@ -21,6 +21,10 @@ export type StreamStatePayload = {
   audio_enabled?: boolean | null;
   volume?: number | null;
   fullscreen?: boolean | null;
+  rotation_enabled?: boolean | null;
+  layout_mode?: "scenes" | "v1-broadcast" | null;
+  crt_enabled?: boolean | null;
+  rotation_sec?: number | null;
   ts?: number | string | null;
 };
 export type StreamScenePayload = { scene_id: string };

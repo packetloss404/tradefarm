@@ -28,6 +28,11 @@ ALLOWED_TYPES: frozenset[str] = frozenset({
     "stream_banner",
     "stream_audio",
     "stream_preroll",
+    "stream_rotation",
+    "stream_layout",
+    "stream_crt",
+    "stream_cadence",
+    "stream_fullscreen",
     "stream_state",
 })
 

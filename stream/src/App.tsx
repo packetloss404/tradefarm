@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { SceneRotator } from "./scenes/SceneRotator";
 import { PreRollScene } from "./scenes/PreRollScene";
+import { Broadcast as V1Broadcast } from "./broadcast/v1/Broadcast";
 import { AdminOverlay } from "./components/AdminOverlay";
 import { useStreamData } from "./hooks/useStreamData";
 import { useStreamAudio } from "./hooks/useStreamAudio";
@@ -11,6 +12,7 @@ import {
   DEFAULT_SETTINGS,
   loadSettings,
   restBase,
+  saveSettings,
   wsTarget,
   type StreamSettings,
 } from "./settings";
@@ -53,11 +55,8 @@ export default function App() {
     })();
   }, []);
 
-  // Toggle CSS-only CRT/VHS overlay (scanlines + chroma + vignette).
-  useEffect(() => {
-    document.body.classList.toggle("crt-on", settings?.crtEnabled ?? false);
-    return () => document.body.classList.remove("crt-on");
-  }, [settings?.crtEnabled]);
+  // CRT toggle is applied below from the resolved override-aware value so
+  // dashboard-pushed `stream_crt` events take effect without a settings save.
 
   // Cursor-hide-on-idle for a clean stream capture.
   useEffect(() => {
@@ -117,14 +116,41 @@ export default function App() {
   });
 
   const showPrerollGate = !prerollDone && (settings?.prerollDurationSec ?? 0) > 0;
+  // The hook owns the dashboard-pushed override; we feed the persisted
+  // setting in and read back the resolved effective value. Override is
+  // ephemeral (lost on stream restart), matching the stream_audio pattern.
   const cmds = useStreamCommands({
     wsUrlOverride: wsUrl,
     currentScene: showPrerollGate ? "preroll" : "rotator",
     audioEnabled: settings?.audioEnabled ?? DEFAULT_SETTINGS.audioEnabled,
     audioVolume: settings?.audioVolume ?? DEFAULT_SETTINGS.audioVolume,
     fullscreen: settings?.fullscreen ?? DEFAULT_SETTINGS.fullscreen,
+    rotationEnabledFromSettings: settings?.rotationEnabled ?? DEFAULT_SETTINGS.rotationEnabled,
+    crtEnabledFromSettings: settings?.crtEnabled ?? DEFAULT_SETTINGS.crtEnabled,
+    rotationSecFromSettings: settings?.sceneRotationSec ?? DEFAULT_SETTINGS.sceneRotationSec,
+    layoutMode: settings?.layoutMode ?? DEFAULT_SETTINGS.layoutMode,
     onPreroll: () => setPrerollDone(false),
+    onLayoutChange: (mode) => {
+      // Layout swap requires a fresh component tree (V1 ↔ Scenes have wildly
+      // different roots). Persist the new mode then full-reload.
+      const cur = settings;
+      if (!cur || cur.layoutMode === mode) return;
+      void (async () => {
+        await saveSettings({ ...cur, layoutMode: mode });
+        location.reload();
+      })();
+    },
+    onFullscreenChange: (enabled) => {
+      void setFullscreen(enabled);
+    },
   });
+
+  // Apply the resolved CRT state (override + persisted) every render. Toggling
+  // a body class is idempotent; React 19's `useEffect` cleanup isn't needed here.
+  useEffect(() => {
+    document.body.classList.toggle("crt-on", cmds.crtEnabled);
+    return () => document.body.classList.remove("crt-on");
+  }, [cmds.crtEnabled]);
 
   if (!settings) {
     return (
@@ -136,6 +162,12 @@ export default function App() {
 
   const showPreroll = !prerollDone && settings.prerollDurationSec > 0;
 
+  // Layout selector: V1 broadcast frame OR the legacy scene rotator. Pre-roll
+  // is honored in both modes so the launch splash still plays. The two layouts
+  // are mutually exclusive — a settings change triggers location.reload() in
+  // the AdminOverlay save flow, so we don't need cross-fade gymnastics here.
+  const broadcastMode = settings.layoutMode === "v1-broadcast";
+
   return (
     <>
       <AnimatePresence mode="wait">
@@ -146,11 +178,13 @@ export default function App() {
             durationSec={settings.prerollDurationSec}
             onComplete={() => setPrerollDone(true)}
           />
+        ) : broadcastMode ? (
+          <V1Broadcast key="v1-broadcast" snapshot={snapshot} />
         ) : (
           <SceneRotator
             key="rotator"
             snapshot={snapshot}
-            rotationSec={settings.sceneRotationSec}
+            rotationSec={cmds.rotationEnabled ? cmds.rotationSec : 0}
             paused={showAdmin}
             commentaryEnabled={settings.commentaryEnabled}
             tickerSpeedPxPerSec={settings.tickerSpeedPxPerSec}

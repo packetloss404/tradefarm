@@ -1,6 +1,6 @@
 [package]
 name = "tradefarm-stream"
-version = "0.1.0"
+version = "0.5.0"
 description = "TradeFarm broadcast app — isometric agent world for streaming"
 authors = ["TradeFarm"]
 edition = "2021"

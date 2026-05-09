@@ -89,6 +89,33 @@ export function AdminOverlay({
             </h3>
             <div className="grid grid-cols-1 gap-4">
               <Field
+                label={`Layout: ${draft.layoutMode === "v1-broadcast" ? "V1 Broadcast (sports overlay)" : "Scenes (rotator)"}`}
+                hint="Scenes = the rotating Hero / Leaderboard / Brain / Strategy / Recap pipeline. V1 Broadcast = the 1920×1080 sports-broadcast frame. Saved + reload."
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setDraft({ ...draft, layoutMode: "scenes" })}
+                    className={`rounded-md border px-3 py-2 text-xs font-mono uppercase tracking-wider transition-colors ${
+                      draft.layoutMode === "scenes"
+                        ? "border-emerald-500 bg-emerald-500/15 text-emerald-300"
+                        : "border-zinc-700 bg-zinc-950 text-zinc-400 hover:bg-zinc-900"
+                    }`}
+                  >
+                    Scenes
+                  </button>
+                  <button
+                    onClick={() => setDraft({ ...draft, layoutMode: "v1-broadcast" })}
+                    className={`rounded-md border px-3 py-2 text-xs font-mono uppercase tracking-wider transition-colors ${
+                      draft.layoutMode === "v1-broadcast"
+                        ? "border-amber-400 bg-amber-400/15 text-amber-300"
+                        : "border-zinc-700 bg-zinc-950 text-zinc-400 hover:bg-zinc-900"
+                    }`}
+                  >
+                    V1 Broadcast
+                  </button>
+                </div>
+              </Field>
+              <Field
                 label="Backend Base URL"
                 hint="Empty = use Vite dev proxy. Example: http://192.168.1.10:8000"
               >
@@ -151,9 +178,16 @@ export function AdminOverlay({
                   className="w-full"
                 />
               </Field>
+              <div className="flex items-center gap-6">
+                <Toggle
+                  label="Auto-rotate scenes"
+                  value={draft.rotationEnabled}
+                  onChange={(v) => setDraft({ ...draft, rotationEnabled: v })}
+                />
+              </div>
               <Field
-                label={`Scene rotation: ${draft.sceneRotationSec === 0 ? "off (Hero only)" : `${draft.sceneRotationSec}s`}`}
-                hint="Cycles Hero / Leaderboard / Brain / Strategy (0 = stay on Hero)."
+                label={`Scene cadence: ${draft.sceneRotationSec === 0 ? "off (Hero only)" : `${draft.sceneRotationSec}s`}`}
+                hint="Seconds between scenes — only consulted when Auto-rotate is on."
               >
                 <input
                   type="range"

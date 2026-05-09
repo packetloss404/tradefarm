@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountSummary, PromotionEventPayload, TickResult } from "./api";
 
-// Streaming-app copy of web/src/hooks/useLiveEvents.ts.
+// Streaming-app copy of web/src/hooks/useLiveEvents.ts. The two have
+// diverged: this version's LiveEvent union also includes the broadcast-control
+// events the stream consumes (`stream_layout`, `stream_crt`, `stream_cadence`,
+// `stream_fullscreen`). The dashboard side only needs to PUBLISH those events,
+// not consume them, so they're absent there.
 
 export type LiveStatus = "connecting" | "open" | "closed";
 
@@ -45,7 +49,12 @@ export type LiveEvent =
   | { type: "stream_scene"; ts: string; payload: StreamScenePayload }
   | { type: "stream_banner"; ts: string; payload: StreamBannerPayload }
   | { type: "stream_audio"; ts: string; payload: StreamAudioPayload }
-  | { type: "stream_preroll"; ts: string; payload: Record<string, never> };
+  | { type: "stream_preroll"; ts: string; payload: Record<string, never> }
+  | { type: "stream_rotation"; ts: string; payload: { enabled: boolean } }
+  | { type: "stream_layout"; ts: string; payload: { mode: "scenes" | "v1-broadcast" } }
+  | { type: "stream_crt"; ts: string; payload: { enabled: boolean } }
+  | { type: "stream_cadence"; ts: string; payload: { sec: number } }
+  | { type: "stream_fullscreen"; ts: string; payload: { enabled: boolean } };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 

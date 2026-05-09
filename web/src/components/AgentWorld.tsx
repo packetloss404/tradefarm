@@ -310,10 +310,18 @@ export function AgentWorld({
   agents,
   onSelect,
   promotionEvents,
+  fit = "natural",
 }: {
   agents: AgentRow[];
   onSelect?: (a: AgentRow) => void;
   promotionEvents?: { type: "promotion" | "demotion"; ts: string; payload: PromotionEventPayload }[];
+  // "natural" (default) renders at width-driven height (legacy behavior).
+  // "contain" makes the outer div a flex column filling its parent: SVG takes
+  // remaining space and fits its viewBox to that box (preserveAspectRatio
+  // default = xMidYMid meet), legend pinned at natural height below. Used by
+  // the dashboard's snap-fit live viewport so the diorama scales down rather
+  // than clipping when the section is shorter than its width-driven height.
+  fit?: "natural" | "contain";
 }) {
   const islandById = useMemo(() => {
     const m = new Map<ZoneId, Island>();
@@ -448,9 +456,16 @@ export function AgentWorld({
   const viewW = (bounds.maxX - bounds.minX) + padX * 2;
   const viewH = (bounds.maxY - bounds.minY) + padTop + padBot;
 
+  const outerCls = fit === "contain"
+    ? "relative w-full h-full flex flex-col min-h-0"
+    : "relative w-full";
+  const svgCls = fit === "contain"
+    ? "flex-1 min-h-0 w-full h-full block"
+    : "w-full h-auto block";
+
   return (
-    <div className="relative w-full">
-      <svg viewBox={`${viewX} ${viewY} ${viewW} ${viewH}`} className="w-full h-auto block">
+    <div className={outerCls}>
+      <svg viewBox={`${viewX} ${viewY} ${viewW} ${viewH}`} className={svgCls}>
         <SpriteDefs />
 
         {/* subtle vignette backdrop */}

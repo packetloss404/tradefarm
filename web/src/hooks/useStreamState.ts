@@ -10,6 +10,10 @@ export type StreamState = {
   audioEnabled: boolean | null;
   volume: number | null;
   fullscreen: boolean | null;
+  rotationEnabled: boolean | null;
+  layoutMode: "scenes" | "v1-broadcast" | null;
+  crtEnabled: boolean | null;
+  rotationSec: number | null;
   lastSeenAt: number | null;
 };
 
@@ -27,6 +31,10 @@ export function useStreamState(): StreamState {
     audioEnabled: null,
     volume: null,
     fullscreen: null,
+    rotationEnabled: null,
+    layoutMode: null,
+    crtEnabled: null,
+    rotationSec: null,
     lastSeenAt: null,
   });
   const lastSeenRef = useRef<number | null>(null);
@@ -42,6 +50,10 @@ export function useStreamState(): StreamState {
       audioEnabled: p.audio_enabled ?? null,
       volume: typeof p.volume === "number" ? p.volume : null,
       fullscreen: p.fullscreen ?? null,
+      rotationEnabled: typeof p.rotation_enabled === "boolean" ? p.rotation_enabled : null,
+      layoutMode: p.layout_mode === "scenes" || p.layout_mode === "v1-broadcast" ? p.layout_mode : null,
+      crtEnabled: typeof p.crt_enabled === "boolean" ? p.crt_enabled : null,
+      rotationSec: typeof p.rotation_sec === "number" ? p.rotation_sec : null,
       lastSeenAt: now,
     });
   }, []);

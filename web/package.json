@@ -1,7 +1,7 @@
 {
   "name": "tradefarm-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-resizable-panels": "^4.11.0",
     "swr": "^2.2.5"
   },
   "devDependencies": {

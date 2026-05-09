@@ -18,6 +18,9 @@ file is the raw queue + idea pool we actually pick from.
 
 Reverse-chronological. Surface tag in brackets.
 
+- 2026-05-09 — `[stream]` Mascot pet (1.9): wandering chicken/cat/farmer
+  sprite that random-walks across bridge waypoints in `AgentWorldXL`.
+  Pure flavor; idle/walk state machine inside `MascotPet`.
 - 2026-05-09 — `[stream]` Day/night sky cycle (1.1): `useMarketClock()`
   polling `/market/clock`, phase-driven gradient stops, twinkling stars
   when `phase !== "rth"`.
@@ -163,15 +166,6 @@ for labels. Add a `theme` setting: `"modern" | "retro" | "wireframe"`.
   sprite.
 
 Effort: ~1 day code + asset budget separately.
-
-#### 1.9 Mascot pet
-Small chicken/cat/farmer sprite that wanders the bridges on a random walk,
-never trades. Pure flavor.
-
-- New `MascotPet` component inside AgentWorldXL.
-- Random-walk state machine: idle (3s) → walk to neighbor tile (2s) → idle.
-
-Effort: ~½ day.
 
 ---
 

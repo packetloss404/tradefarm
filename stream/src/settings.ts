@@ -15,11 +15,21 @@ export type StreamSettings = {
   // Scene rotator: how many seconds each scene gets before advancing.
   // Set to 0 to disable rotation and stay on Hero.
   sceneRotationSec: number;
+  // Auto-rotate scenes. When false the rotator stays on Hero (or whatever
+  // scene the dashboard has forced). The cadence above is only consulted
+  // when this is true. Off by default — operator drives scene selection
+  // via the dashboard's BroadcastPanel scene buttons.
+  rotationEnabled: boolean;
   // Web Audio: kicks on tick, piano notes on fill, promotion stinger.
   audioEnabled: boolean;
   audioVolume: number; // 0..1
   // CSS-only CRT/VHS overlay (scanlines + chroma fringe + vignette).
   crtEnabled: boolean;
+  // Top-level layout selection. "scenes" keeps the existing PreRoll +
+  // SceneRotator pipeline; "v1-broadcast" swaps it for the sports-broadcast
+  // 1920×1080 frame (Scoreboard / Leaderboard / Race Lanes / Farm grid /
+  // Plays / Lower third / Ticker). The two are mutually exclusive at runtime.
+  layoutMode: "scenes" | "v1-broadcast";
 };
 
 export const DEFAULT_SETTINGS: StreamSettings = {
@@ -34,9 +44,11 @@ export const DEFAULT_SETTINGS: StreamSettings = {
   tickerSpeedPxPerSec: 60,
   prerollDurationSec: 5,
   sceneRotationSec: 60,
+  rotationEnabled: false,
   audioEnabled: true,
   audioVolume: 0.6,
   crtEnabled: false,
+  layoutMode: "scenes",
 };
 
 const SETTINGS_FILE = "stream-settings.json";

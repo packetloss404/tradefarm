@@ -29,6 +29,43 @@ body.idle, body.idle * {
   50%      { transform: translateY(-1.4px); }
 }
 
+/* ----------------------------------------------------------------------- *
+ * V1 broadcast — keyframes used by the sports-broadcast layout.
+ * ----------------------------------------------------------------------- */
+
+/* Live indicators + active right-panel tab dot. 1.2s ease-in-out scale +
+   opacity pulse, runs forever. */
+@keyframes v1-pulse-dot {
+  0%, 100% { transform: scale(1);   opacity: 1; }
+  50%      { transform: scale(0.5); opacity: 0.4; }
+}
+.v1-pulse-dot {
+  animation: v1-pulse-dot 1.2s ease-in-out infinite;
+}
+
+/* FARMLINE marquee. Items are rendered twice and translated -50% over 60s
+   linear, producing a seamless infinite scroll. */
+@keyframes v1-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.v1-marquee {
+  animation: v1-marquee 60s linear infinite;
+}
+
+/* Composer cursor blink (used in the chat composer). */
+@keyframes v1-cursor-blink {
+  0%, 50%   { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+.v1-cursor-blink {
+  animation: v1-cursor-blink 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v1-pulse-dot, .v1-marquee, .v1-cursor-blink { animation: none; }
+}
+
 /* CRT / VHS overlay — toggled by adding `.crt-on` to <body>.
    Pure CSS (no JS animation loops). The two pseudos are pointer-events:none
    so they never intercept clicks. The chroma fringe is a tiny text-shadow

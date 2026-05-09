@@ -9,8 +9,20 @@ commit on GitHub.
 
 ## [Unreleased]
 
-### Added
-- **Streaming broadcast app** at `stream/` — standalone Tauri 2 + React 19
+(Nothing pending — see [0.5.0] below.)
+
+---
+
+## [0.5.0] — 2026-05-09
+
+A broadcast-flavor release: a dedicated streaming app, a sports-style
+broadcast layout, dashboard reorganization for live-show focus, full
+remote control of the stream from the dashboard, and a stack of vibe
+polish (day/night, weather, CRT, mascot pet, recap scene).
+
+### Added — Stream broadcast app
+
+- **Standalone broadcast app** at `stream/` — Tauri 2 + React 19
   fullscreen 1080p window for OBS Window Capture (`a34676c`, 2026-05-02).
   - Multi-scene rotator that cycles Hero → Leaderboard → Brain → Strategy
     on a configurable interval, with crossfade transitions and pause
@@ -40,6 +52,76 @@ commit on GitHub.
   projection (`c095be6`, `cbbdba4`, `322520c`, `d2251a5`, 2026-04-21).
 - `dev/stream-app-ideas.md` — backlog of unshipped broadcast-app vibe
   ideas with effort estimates (2026-05-02).
+
+### Added — Stream vibe v2 (`8abe884`, 2026-05-09)
+
+- **Day/night sky cycle** in `AgentWorldXL` driven by a `useMarketClock`
+  hook polling `/market/clock` — phase-based gradient stops, twinkling
+  stars when not in RTH.
+- **Weather effects** — rain when day P&L ≤ −1%, sun rays when ≥ +1%,
+  snow when market closed, fog in pre-market.
+- **Tick countdown ring + equity sparkline** in `TopTicker` — a 30-tick
+  rolling buffer feeding a tiny equity sparkline next to the equity stat,
+  and a radial countdown ring driven by `auto_tick_interval_sec`.
+- **CSS-only CRT toggle** — scanlines + chroma-fringe text-shadow +
+  vignette via two `body.crt-on` pseudo-elements; toggleable from the
+  Admin overlay and now from the dashboard.
+- **Recap scene** — fifth scene auto-shown after 16:00 ET (gated on the
+  market-clock phase + ET hour). Big day-P&L hero, top/bottom mover +
+  biggest fill cards, strategy ranking bars.
+- **Mascot Pet** — wandering chicken/cat/farmer sprite that random-walks
+  the bridges in `AgentWorldXL`. Pure flavor; idle/walk state machine
+  with smooth CSS transitions and self-contained bob animation.
+
+### Added — V1 sports-broadcast layout
+
+- **`layoutMode: "scenes" | "v1-broadcast"`** stream setting + Admin
+  toggle. The new V1 layout is a 1920×1080 sports-broadcast frame:
+  scoreboard band, leaderboard rail, race-to-alpha lanes, "the farm"
+  8×8 mini-card grid, plays/chat right panel, lower-third banner,
+  FARMLINE marquee. Lives under `stream/src/broadcast/v1/`. Ships with
+  `PLAYS` working (live fills feed) and a `CHAT` placeholder for a
+  future streamer-chat integration.
+- **JetBrains Mono webfont** loaded via Google Fonts in
+  `stream/index.html` for tabular-numeric pricing.
+- **Per-agent rolling sparkline buffer** in `broadcast/v1/adapter.ts`
+  (32 points, GC'd on agent removal) — backend doesn't push history,
+  so we accumulate it client-side.
+
+### Added — Dashboard reorganization (`8abe884`, 2026-05-09)
+
+- **Scroll-snap two-viewport layout** — viewport 1 holds Agent World
+  (full-bleed) + a new live `RecentFillsRail`; viewport 2 holds
+  controls (stat grid → tabs → Broadcast → API spend → Open Positions
+  strip → Agent Grid). `min-h-[calc(100vh-100px)]` per section keeps
+  the live show always visible.
+- **Resizable AW ↔ Fills split** via `react-resizable-panels` v4 —
+  default 75/25, layout persisted to localStorage.
+- **`AgentWorld` `fit="contain"` prop** — when set, the diorama scales
+  to fit its container (flex-column SVG with `preserveAspectRatio`)
+  instead of overflowing on tall sections.
+- **API Spend widget** reading `/llm/stats` with a daily-cap dial.
+- **Workflow** tab in the lower TabbedPanel — side-by-side SVG
+  flowcharts of the three `decide()` bodies.
+- **Open-positions sparkline strip** — aggregated per-symbol view
+  with rolling sparklines.
+- **Keyboard map overlay** (`?`) — cheat sheet of every shortcut,
+  guarded against the command palette.
+
+### Added — Dashboard ↔ Stream remote control
+
+- Six new control sections in `web/src/components/broadcast/`:
+  - `BroadcastLayoutSection` — Scenes ↔ V1 Broadcast switcher.
+  - `BroadcastSceneSection` — scene buttons + auto-rotate, dimmed
+    when stream is in V1 mode.
+  - `BroadcastAudioSection` — enable + volume hydrated from heartbeat.
+  - `BroadcastCrtSection` — CRT effect toggle.
+  - `BroadcastCadenceSection` — rotation cadence slider (0–180s).
+  - `BroadcastFullscreenSection` — fullscreen toggle (Tauri only).
+- Backend allowlists 4 new cmd types: `stream_layout`, `stream_crt`,
+  `stream_cadence`, `stream_fullscreen`.
+- Stream heartbeat now publishes `layout_mode`, `crt_enabled`,
+  `rotation_sec` so the dashboard reflects actual stream state.
 
 ### Changed
 - Backend CORS widened to a regex covering `localhost`, `127.0.0.1` (any

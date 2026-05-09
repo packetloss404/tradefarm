@@ -17,6 +17,17 @@ export type StreamCommandsHandle = {
   setForceScene: (id: string | null) => void;
   banner: BannerState | null;
   setBanner: (b: BannerState | null) => void;
+  // Effective auto-rotate state: dashboard-pushed override if present, else
+  // the persisted setting passed in via args. The hook owns the override
+  // and resolves it here so callers don't recombine it themselves.
+  rotationEnabled: boolean;
+  // Effective CRT-overlay state. Override layered on top of the persisted
+  // settings.crtEnabled by `stream_crt` events.
+  crtEnabled: boolean;
+  // Effective scene cadence in seconds. Layered on top of settings.sceneRotationSec
+  // by `stream_cadence` events. Used as `rotationSec` for SceneRotator when
+  // rotationEnabled is true.
+  rotationSec: number;
 };
 
 export type UseStreamCommandsArgs = {
@@ -25,7 +36,25 @@ export type UseStreamCommandsArgs = {
   audioEnabled: boolean;
   audioVolume: number;
   fullscreen: boolean;
+  // Persisted auto-rotate setting (stream's own admin overlay). The hook
+  // layers a transient dashboard override on top of this.
+  rotationEnabledFromSettings: boolean;
+  // Persisted CRT-overlay setting. Override-layered same as rotation.
+  crtEnabledFromSettings: boolean;
+  // Persisted scene cadence (sceneRotationSec). Override-layered same as
+  // rotation.
+  rotationSecFromSettings: number;
+  // Persisted layout mode — only published on the heartbeat so the dashboard
+  // knows which UI surface is live. Layout switches go through onLayoutChange
+  // (parent persists + reloads) rather than an in-memory override.
+  layoutMode: "scenes" | "v1-broadcast";
   onPreroll: () => void;
+  /** Called when a `stream_layout` cmd arrives. Parent should persist the
+   *  setting and reload (the V1 ↔ Scenes swap requires a fresh tree). */
+  onLayoutChange?: (mode: "scenes" | "v1-broadcast") => void;
+  /** Called when a `stream_fullscreen` cmd arrives. Parent should call into
+   *  Tauri's window API; in a plain browser this is a no-op. */
+  onFullscreenChange?: (enabled: boolean) => void;
 };
 
 async function postCmd(type: string, payload: Record<string, unknown>): Promise<void> {
@@ -44,13 +73,36 @@ async function postCmd(type: string, payload: Record<string, unknown>): Promise<
  * its rotator/lower-third accordingly.
  */
 export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHandle {
-  const { currentScene, audioEnabled, audioVolume, fullscreen, onPreroll, wsUrlOverride } = args;
+  const {
+    currentScene,
+    audioEnabled,
+    audioVolume,
+    fullscreen,
+    rotationEnabledFromSettings,
+    crtEnabledFromSettings,
+    rotationSecFromSettings,
+    layoutMode,
+    onPreroll,
+    onLayoutChange,
+    onFullscreenChange,
+    wsUrlOverride,
+  } = args;
 
   const [forceSceneId, setForceSceneId] = useState<string | null>(null);
   const [banner, setBanner] = useState<BannerState | null>(null);
+  const [rotationEnabledOverride, setRotationEnabledOverride] = useState<boolean | null>(null);
+  const [crtEnabledOverride, setCrtEnabledOverride] = useState<boolean | null>(null);
+  const [rotationSecOverride, setRotationSecOverride] = useState<number | null>(null);
+  const rotationEnabled = rotationEnabledOverride ?? rotationEnabledFromSettings;
+  const crtEnabled = crtEnabledOverride ?? crtEnabledFromSettings;
+  const rotationSec = rotationSecOverride ?? rotationSecFromSettings;
   const bannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onPrerollRef = useRef(onPreroll);
   onPrerollRef.current = onPreroll;
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  onLayoutChangeRef.current = onLayoutChange;
+  const onFullscreenChangeRef = useRef(onFullscreenChange);
+  onFullscreenChangeRef.current = onFullscreenChange;
 
   const setBannerSafe = useCallback((next: BannerState | null) => {
     if (bannerTimer.current) {
@@ -97,6 +149,25 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
         case "stream_preroll":
           onPrerollRef.current();
           break;
+        case "stream_rotation":
+          setRotationEnabledOverride(Boolean(ev.payload.enabled));
+          break;
+        case "stream_layout":
+          if (ev.payload.mode === "scenes" || ev.payload.mode === "v1-broadcast") {
+            onLayoutChangeRef.current?.(ev.payload.mode);
+          }
+          break;
+        case "stream_crt":
+          setCrtEnabledOverride(Boolean(ev.payload.enabled));
+          break;
+        case "stream_cadence": {
+          const sec = Number(ev.payload.sec);
+          if (Number.isFinite(sec) && sec >= 0) setRotationSecOverride(sec);
+          break;
+        }
+        case "stream_fullscreen":
+          onFullscreenChangeRef.current?.(Boolean(ev.payload.enabled));
+          break;
         default:
           break;
       }
@@ -116,6 +187,14 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   volumeRef.current = audioVolume;
   const fullscreenRef = useRef(fullscreen);
   fullscreenRef.current = fullscreen;
+  const rotationEnabledRef = useRef(rotationEnabled);
+  rotationEnabledRef.current = rotationEnabled;
+  const layoutModeRef = useRef(layoutMode);
+  layoutModeRef.current = layoutMode;
+  const crtEnabledRef = useRef(crtEnabled);
+  crtEnabledRef.current = crtEnabled;
+  const rotationSecRef = useRef(rotationSec);
+  rotationSecRef.current = rotationSec;
 
   useEffect(() => {
     let cancelled = false;
@@ -126,6 +205,10 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
         audio_enabled: audioEnabledRef.current,
         volume: volumeRef.current,
         fullscreen: fullscreenRef.current,
+        rotation_enabled: rotationEnabledRef.current,
+        layout_mode: layoutModeRef.current,
+        crt_enabled: crtEnabledRef.current,
+        rotation_sec: rotationSecRef.current,
         ts: Date.now(),
       }).catch(() => {
         /* heartbeat failures are non-fatal */
@@ -146,5 +229,8 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     setForceScene,
     banner,
     setBanner: setBannerSafe,
+    rotationEnabled,
+    crtEnabled,
+    rotationSec,
   };
 }

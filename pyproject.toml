@@ -1,6 +1,6 @@
 [project]
 name = "tradefarm"
-version = "0.1.0"
+version = "0.5.0"
 description = "100-agent AI trading platform for US stocks/ETFs"
 requires-python = ">=3.12"
 dependencies = [
