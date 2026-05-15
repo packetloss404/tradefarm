@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { TopTicker } from "../components/TopTicker";
 import { BottomTicker } from "../components/BottomTicker";
@@ -6,8 +6,10 @@ import { CommentaryCaption } from "../components/CommentaryCaption";
 import { PromotionToast } from "../components/PromotionToast";
 import { LowerThird } from "../components/LowerThird";
 import { MacroFireBurst } from "../components/MacroFireBurst";
+import { ChapterBanner } from "../components/ChapterBanner";
 import { useCommentary } from "../hooks/useCommentary";
 import { useMarketClock } from "../hooks/useMarketClock";
+import { useChapter } from "../hooks/useChapter";
 import type { StreamSnapshot } from "../hooks/useStreamData";
 import type { BannerState, CommentaryState, MacroFireState } from "../hooks/useStreamCommands";
 import { HeroBody } from "./HeroBody";
@@ -19,6 +21,26 @@ import { ShowdownScene } from "./ShowdownScene";
 
 const ORDER = ["hero", "leaderboard", "showdown", "brain", "strategy", "recap"] as const;
 type SceneId = (typeof ORDER)[number];
+
+function pickWeighted(
+  pool: readonly SceneId[],
+  weights: Record<SceneId, number>,
+  exclude: SceneId | null,
+): SceneId | null {
+  const candidates = pool.filter((s) => s !== exclude && (weights[s] ?? 0) > 0);
+  // Fall back to the unfiltered pool if exclusion left nothing weight-eligible
+  // (e.g. a chapter that only weights a single scene).
+  const effective = candidates.length > 0 ? candidates : pool.filter((s) => (weights[s] ?? 0) > 0);
+  if (effective.length === 0) return null;
+  const total = effective.reduce((a, s) => a + (weights[s] ?? 0), 0);
+  if (total <= 0) return effective[0] ?? null;
+  let r = Math.random() * total;
+  for (const s of effective) {
+    r -= weights[s] ?? 0;
+    if (r <= 0) return s;
+  }
+  return effective[effective.length - 1] ?? null;
+}
 
 /**
  * Top-level scene rotator. The TopTicker / BottomTicker / promotion toast
@@ -52,6 +74,7 @@ export function SceneRotator({
   commentary?: CommentaryState | null;
 }) {
   const { phase } = useMarketClock();
+  const chapter = useChapter();
 
   // Recap is only eligible after 16:00 ET on a closed/afterhours session.
   // Double-check the wall-clock ET hour because phase === "closed" also
@@ -75,26 +98,38 @@ export function SceneRotator({
     [recapEligible],
   );
 
-  const [idx, setIdx] = useState(0);
+  // Effective cadence: operator override (rotationSec > 0) wins; otherwise
+  // the current chapter dictates pace.
+  const effectiveCadenceSec = rotationSec > 0 ? rotationSec : chapter.cadenceSec;
+
+  const [currentScene, setCurrentScene] = useState<SceneId>("hero");
+  const sceneRef = useRef<SceneId>(currentScene);
+  sceneRef.current = currentScene;
 
   useEffect(() => {
-    if (rotationSec <= 0 || paused || forceSceneId) return;
+    if (effectiveCadenceSec <= 0 || paused || forceSceneId) return;
     const t = setInterval(() => {
-      setIdx((i) => (i + 1) % cycle.length);
-    }, rotationSec * 1000);
+      const next = pickWeighted(cycle, chapter.sceneWeights, sceneRef.current);
+      if (next) setCurrentScene(next);
+    }, effectiveCadenceSec * 1000);
     return () => clearInterval(t);
-  }, [rotationSec, paused, forceSceneId, cycle.length]);
+  }, [effectiveCadenceSec, paused, forceSceneId, cycle, chapter.sceneWeights]);
 
+  // If the current scene drops out of the cycle (e.g. recap when no longer
+  // eligible), snap to a chapter-weighted alternative.
   useEffect(() => {
-    setIdx((i) => (cycle.length > 0 ? i % cycle.length : 0));
-  }, [cycle.length]);
+    if (!cycle.includes(currentScene)) {
+      const next = pickWeighted(cycle, chapter.sceneWeights, null);
+      if (next) setCurrentScene(next);
+    }
+  }, [cycle, chapter.sceneWeights, currentScene]);
 
   const id: SceneId =
     forceSceneId && (ORDER as readonly string[]).includes(forceSceneId)
       ? (forceSceneId as SceneId)
-      : rotationSec <= 0
+      : effectiveCadenceSec <= 0
         ? "hero"
-        : (cycle[idx] ?? "hero");
+        : currentScene;
 
   const commentaryFeed = useCommentary({
     agents: snapshot.agents,
@@ -135,6 +170,7 @@ export function SceneRotator({
         <CommentaryCaption highlight={commentaryFeed.current} />
         <LowerThird banner={banner ?? null} />
         <MacroFireBurst event={macroFire ?? null} />
+        <ChapterBanner key={chapter.id} label={chapter.label} />
 
         {snapshot.error && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-rose-500/20 border border-rose-500/50 px-6 py-4 text-(--color-loss) font-mono">
