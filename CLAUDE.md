@@ -18,6 +18,9 @@ frontend, PyTorch LSTMs, Claude or MiniMax for the LLM overlay.
 cd /d/projects/tradefarm
 npm install            # one-time: installs concurrently at root
 npm run dev            # api + dash + stream (Tauri shell) — local rig
+# Unattended runs: autorun.bat / autorun.ps1 wraps `npm run dev` in an
+# auto-restart loop so Tauri exits + desktop-sleep cascades don't kill
+# the rig. 5 crashes within 60s trips a circuit breaker. Ctrl+C to stop.
 npm run dev:headless   # same, but stream as browser-only Vite (use the
                        #   dashboard's "Pop out preview" instead of Tauri)
 npm run broadcast      # api (binds 0.0.0.0:8000) + stream Tauri — for the
