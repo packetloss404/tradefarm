@@ -7,6 +7,7 @@ import { PromotionToast } from "../components/PromotionToast";
 import { LowerThird } from "../components/LowerThird";
 import { MacroFireBurst } from "../components/MacroFireBurst";
 import { ChapterBanner } from "../components/ChapterBanner";
+import { SimulatedChatStrip } from "../components/SimulatedChatStrip";
 import { useCommentary } from "../hooks/useCommentary";
 import { useMarketClock } from "../hooks/useMarketClock";
 import { useChapter } from "../hooks/useChapter";
@@ -169,6 +170,7 @@ export function SceneRotator({
         <PromotionToast promotions={snapshot.promotions} />
         <CommentaryCaption highlight={commentaryFeed.current} />
         <LowerThird banner={banner ?? null} />
+        <SimulatedChatStrip snapshot={snapshot} />
         <MacroFireBurst event={macroFire ?? null} />
         <ChapterBanner key={chapter.id} label={chapter.label} />
 
