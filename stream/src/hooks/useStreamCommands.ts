@@ -41,6 +41,34 @@ export type CommentaryState = {
   receivedAt: number;
 };
 
+// Audience interactivity surfaces (chat-driven engagement). Pin requests are
+// intentionally absent from this handle — those go through the dashboard
+// approval queue, never the stream.
+export type AudienceSentimentState = {
+  score: number;
+  up: number;
+  down: number;
+  windowSec: number;
+};
+
+export type AudiencePinResolvedState = {
+  id: string;
+  status: "approved" | "rejected";
+  agentId: number | null;
+  firedAt: number;
+};
+
+export type PredictionState = {
+  id: string;
+  question: string;
+  options: string[];
+  status: "open" | "locked" | "revealed";
+  tally: Record<string, number>;
+  locksAt: string;
+  revealsAt: string;
+  winningOption: string | null;
+};
+
 export type StreamCommandsHandle = {
   forceSceneId: string | null;
   setForceScene: (id: string | null) => void;
@@ -74,6 +102,20 @@ export type StreamCommandsHandle = {
   // Empty array means "no real chat seen this session" — the strip then
   // falls back to simulated messages if `simulatedChatFallback` is on.
   realtimeChat: RealtimeChatMessage[];
+  // Audience-driven sentiment gauge state. Null until the first sample.
+  // The overlay gates itself on `up + down >= 3` so a degenerate single-vote
+  // gauge doesn't show up on-screen — we still hold the raw tally here.
+  audienceSentiment: AudienceSentimentState | null;
+  // Single-slot resolution burst — only the most-recent approval/rejection
+  // is exposed; auto-clears ~4s after the event lands so the banner can
+  // animate in/out without manual housekeeping by SceneRotator.
+  audiencePinResolved: AudiencePinResolvedState | null;
+  // Live predictions keyed by prediction id. Open / locked / revealed all
+  // remain in the map; the overlay decides which to render and when to
+  // animate the status transition. Caller-side cleanup (e.g. evicting
+  // long-revealed predictions) is not done here — the backend is expected
+  // to stop re-publishing terminal states after a grace window.
+  predictions: Record<string, PredictionState>;
 };
 
 export type UseStreamCommandsArgs = {
@@ -140,6 +182,10 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   const [pinAgentId, setPinAgentId] = useState<number | null>(null);
   const [commentary, setCommentary] = useState<CommentaryState | null>(null);
   const [realtimeChat, setRealtimeChat] = useState<RealtimeChatMessage[]>([]);
+  const [audienceSentiment, setAudienceSentiment] = useState<AudienceSentimentState | null>(null);
+  const [audiencePinResolved, setAudiencePinResolved] = useState<AudiencePinResolvedState | null>(null);
+  const [predictions, setPredictions] = useState<Record<string, PredictionState>>({});
+  const audiencePinResolvedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Dedup ring so a brief WS reconnect (which sometimes replays the last
   // few messages) doesn't double-render the same chat row.
   const seenChatIds = useRef<Set<string>>(new Set());
@@ -182,10 +228,28 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     }
   }, []);
 
+  // 4s dwell for the "Audience pinned X" banner. The slot auto-clears so
+  // SceneRotator can read the value directly and AnimatePresence handles the
+  // crossfade without callers needing to track the lifecycle.
+  const setAudiencePinResolvedSafe = useCallback((next: AudiencePinResolvedState | null) => {
+    if (audiencePinResolvedTimer.current) {
+      clearTimeout(audiencePinResolvedTimer.current);
+      audiencePinResolvedTimer.current = null;
+    }
+    setAudiencePinResolved(next);
+    if (next) {
+      audiencePinResolvedTimer.current = setTimeout(
+        () => setAudiencePinResolved(null),
+        4000,
+      );
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       if (bannerTimer.current) clearTimeout(bannerTimer.current);
       if (macroFireTimer.current) clearTimeout(macroFireTimer.current);
+      if (audiencePinResolvedTimer.current) clearTimeout(audiencePinResolvedTimer.current);
     };
   }, []);
 
@@ -274,6 +338,65 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           });
           break;
         }
+        case "audience_sentiment": {
+          const p = ev.payload;
+          if (typeof p.score !== "number" || !Number.isFinite(p.score)) break;
+          // Clamp score defensively — the wire spec is [-1, 1] but a buggy
+          // backend computing (up-down)/total with rounding errors could
+          // overshoot by a hair. The gauge math assumes the clamped range.
+          const score = Math.max(-1, Math.min(1, p.score));
+          const up = Math.max(0, Math.floor(Number(p.up) || 0));
+          const down = Math.max(0, Math.floor(Number(p.down) || 0));
+          const windowSec = Math.max(0, Number(p.window_sec) || 0);
+          setAudienceSentiment({ score, up, down, windowSec });
+          break;
+        }
+        case "audience_pin_request":
+          // Operator-only — never surfaces here. The dashboard polls REST
+          // for the queue and renders the approval UI. Swallow so the
+          // generic `default` branch doesn't fire.
+          break;
+        case "audience_pin_resolved": {
+          const p = ev.payload;
+          if (typeof p.id !== "string" || p.id.length === 0) break;
+          const status = p.status === "approved" ? "approved" : "rejected";
+          const agentId =
+            typeof p.agent_id === "number" && Number.isFinite(p.agent_id)
+              ? p.agent_id
+              : null;
+          setAudiencePinResolvedSafe({
+            id: p.id,
+            status,
+            agentId,
+            firedAt: Date.now(),
+          });
+          break;
+        }
+        case "prediction_state": {
+          const p = ev.payload;
+          if (typeof p.id !== "string" || p.id.length === 0) break;
+          const status: PredictionState["status"] =
+            p.status === "locked" || p.status === "revealed" ? p.status : "open";
+          const tally: Record<string, number> = {};
+          if (p.tally && typeof p.tally === "object") {
+            for (const [k, v] of Object.entries(p.tally)) {
+              const n = Number(v);
+              if (Number.isFinite(n)) tally[k] = n;
+            }
+          }
+          const next: PredictionState = {
+            id: p.id,
+            question: typeof p.question === "string" ? p.question : "",
+            options: Array.isArray(p.options) ? p.options.filter((o): o is string => typeof o === "string") : [],
+            status,
+            tally,
+            locksAt: typeof p.locks_at === "string" ? p.locks_at : "",
+            revealsAt: typeof p.reveals_at === "string" ? p.reveals_at : "",
+            winningOption: typeof p.winning_option === "string" ? p.winning_option : null,
+          };
+          setPredictions((prev) => ({ ...prev, [next.id]: next }));
+          break;
+        }
         case "chat_message": {
           const p = ev.payload;
           if (typeof p.id !== "string" || p.id.length === 0) break;
@@ -313,7 +436,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           break;
       }
     },
-    [setBannerSafe, setMacroFireSafe],
+    [setBannerSafe, setMacroFireSafe, setAudiencePinResolvedSafe],
   );
 
   useLiveEvents(handler, wsUrlOverride);
@@ -380,5 +503,8 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     pinAgentId,
     commentary,
     realtimeChat,
+    audienceSentiment,
+    audiencePinResolved,
+    predictions,
   };
 }

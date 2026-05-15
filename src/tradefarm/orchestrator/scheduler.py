@@ -22,8 +22,10 @@ from tradefarm.market.hours import is_market_open
 from tradefarm.risk.manager import RiskManager
 from tradefarm.api.events import publish_event
 from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
+from tradefarm.orchestrator.audience import AudienceCoordinator
 from tradefarm.orchestrator.auto_director import AutoDirector
 from tradefarm.orchestrator.commentary_loop import CommentaryLoop
+from tradefarm.orchestrator.predictions import PredictionsBoard
 from tradefarm.orchestrator.streak_watcher import StreakWatcher
 from tradefarm.orchestrator.youtube_chat import YouTubeChatPoller
 from tradefarm.storage import journal, repo
@@ -112,6 +114,10 @@ class Orchestrator:
         # YouTube Live Chat poller — surfaces real audience messages on the WS.
         # Self-disables when credentials are absent; safe to always construct.
         self._youtube_chat: YouTubeChatPoller | None = None
+        # Audience interactivity — sentiment + pin requests + predictions.
+        # Both are always-on (in-memory only, no external deps).
+        self._audience: AudienceCoordinator | None = None
+        self._predictions: PredictionsBoard | None = None
 
     @classmethod
     def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
@@ -423,9 +429,26 @@ class Orchestrator:
         # YouTube Live Chat poller — always constructed; the poller itself
         # checks ``settings.youtube_chat_enabled`` and stays dormant when off.
         if self._youtube_chat is None:
-            self._youtube_chat = YouTubeChatPoller()
+            self._youtube_chat = YouTubeChatPoller(orch=self)
             asyncio.create_task(
                 self._youtube_chat.start(), name="orch_youtube_chat_start",
+            )
+
+        # Audience predictions board — depends on agent list being final.
+        if self._predictions is None:
+            self._predictions = PredictionsBoard(orch=self)
+            asyncio.create_task(
+                self._predictions.start(), name="orch_predictions_start",
+            )
+
+        # Audience coordinator — wires chat commands into sentiment + pins
+        # + predictions. Built AFTER predictions so the link is in place.
+        if self._audience is None:
+            self._audience = AudienceCoordinator(
+                orch=self, predictions=self._predictions,
+            )
+            asyncio.create_task(
+                self._audience.start(), name="orch_audience_start",
             )
 
     def start_curriculum(self) -> None:
@@ -529,3 +552,9 @@ class Orchestrator:
         if self._youtube_chat is not None:
             await self._youtube_chat.stop()
             self._youtube_chat = None
+        if self._audience is not None:
+            await self._audience.stop()
+            self._audience = None
+        if self._predictions is not None:
+            await self._predictions.stop()
+            self._predictions = None

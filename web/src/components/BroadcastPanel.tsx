@@ -12,6 +12,7 @@ import { BroadcastFullscreenSection } from "./broadcast/BroadcastFullscreenSecti
 import { BroadcastMacrosSection } from "./broadcast/BroadcastMacrosSection";
 import { BroadcastSpotlightSection } from "./broadcast/BroadcastSpotlightSection";
 import { PreviewPopoutButton } from "./broadcast/PreviewPopoutButton";
+import { AudienceRequestsPanel } from "./AudienceRequestsPanel";
 
 async function postCmd(type: string, payload: Record<string, unknown>): Promise<void> {
   const r = await fetch("/api/stream/cmd", {
@@ -134,6 +135,10 @@ export function BroadcastPanel() {
               scene={ss.scene}
               layoutMode={ss.layoutMode}
             />
+          </div>
+
+          <div className="border-t border-zinc-800 pt-4">
+            <AudienceRequestsPanel />
           </div>
 
           <div className="grid grid-cols-12 gap-4 border-t border-zinc-800 pt-4">

@@ -186,6 +186,9 @@ export function SceneRotator({
         />
         <MacroFireBurst event={macroFire ?? null} />
         <ChapterBanner key={chapter.id} label={chapter.label} />
+        {/* Audience overlays (sentiment gauge, predictions widget, pin banner)
+            are mounted at App.tsx so they show across the V1 broadcast layout
+            too — don't double-render here. */}
 
         {snapshot.error && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-rose-500/20 border border-rose-500/50 px-6 py-4 text-(--color-loss) font-mono">

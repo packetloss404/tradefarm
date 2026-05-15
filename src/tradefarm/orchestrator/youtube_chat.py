@@ -28,13 +28,16 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
 
 from tradefarm.api.events import publish_event
 from tradefarm.config import settings
+
+if TYPE_CHECKING:
+    from tradefarm.orchestrator.scheduler import Orchestrator
 
 log = structlog.get_logger()
 
@@ -87,6 +90,10 @@ class YouTubeChatPoller:
     """
 
     poll_interval_sec: float = DEFAULT_POLL_SEC
+    # Optional back-pointer for routing messages into the audience coordinator
+    # after they're published as ``chat_message`` events. Kept optional so the
+    # poller can be constructed standalone in tests.
+    orch: "Orchestrator | None" = None
 
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _stopped: bool = field(default=False, init=False, repr=False)
@@ -305,6 +312,16 @@ class YouTubeChatPoller:
             if payload is None:
                 continue
             await publish_event("chat_message", payload)
+            # Route through the audience coordinator (if attached) so commands
+            # like ``!vote`` / ``!pin`` / ``!pick`` / ``!spy`` reach the
+            # sentiment + predictions sub-systems. Defensive: don't crash the
+            # poll loop if the coordinator isn't running or raises.
+            aud = getattr(self.orch, "_audience", None) if self.orch is not None else None
+            if aud is not None:
+                try:
+                    await aud.on_chat_message(payload)
+                except Exception as e:  # pragma: no cover — defensive only
+                    log.warning("audience_route_failed", error=str(e))
             published += 1
 
         if published:

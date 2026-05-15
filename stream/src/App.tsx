@@ -4,6 +4,9 @@ import { SceneRotator } from "./scenes/SceneRotator";
 import { PreRollScene } from "./scenes/PreRollScene";
 import { Broadcast as V1Broadcast } from "./broadcast/v1/Broadcast";
 import { AdminOverlay } from "./components/AdminOverlay";
+import { SentimentGauge } from "./components/SentimentGauge";
+import { PredictionsWidget } from "./components/PredictionsWidget";
+import { AudiencePinBanner } from "./components/AudiencePinBanner";
 import { useStreamData } from "./hooks/useStreamData";
 import { useStreamAudio } from "./hooks/useStreamAudio";
 import { useStreamCommands } from "./hooks/useStreamCommands";
@@ -198,6 +201,20 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      {/* Audience overlays sit at the App level so they render across ALL
+          layouts — V1 broadcast, scene rotator, and even the pre-roll splash
+          (pre-show is when audience predictions are most active). They're
+          absolute-positioned and z-stacked above the scene body but below
+          AdminOverlay. */}
+      {!showPreroll && (
+        <>
+          <SentimentGauge sentiment={cmds.audienceSentiment} />
+          <PredictionsWidget predictions={cmds.predictions} />
+          <AudiencePinBanner resolved={cmds.audiencePinResolved} agents={snapshot.agents} />
+        </>
+      )}
+
       {showAdmin && (
         <AdminOverlay initial={settings} onClose={() => setShowAdmin(false)} />
       )}

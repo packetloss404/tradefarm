@@ -57,6 +57,46 @@ export type ChatMessagePayload = {
   at: string;
 };
 
+// ── Audience interactivity ────────────────────────────────────────────────
+// Score is signed in [-1, 1] (-1 fully bearish, +1 fully bullish). `up`/`down`
+// are raw tally counts within a rolling `window_sec` window so the overlay can
+// gate on minimum sample size.
+export type AudienceSentimentPayload = {
+  score: number;
+  up: number;
+  down: number;
+  window_sec: number;
+};
+// Operator-only — pin requests never surface to the stream overlay; the
+// dashboard polls REST and renders them in the approval queue.
+export type AudiencePinRequestPayload = {
+  id: string;
+  requester: string;
+  agent_id: number | null;
+  agent_name_query: string;
+  requested_at: string;
+};
+// Resolution event — fans out to the stream so the AudiencePinBanner can fire
+// the "Audience pinned X" overlay on approval. Rejected resolutions are also
+// emitted but the banner ignores them.
+export type AudiencePinResolvedPayload = {
+  id: string;
+  status: "approved" | "rejected";
+  agent_id: number | null;
+};
+// Prediction lifecycle: open → locked → revealed. Tally is a vote count per
+// option keyed by option string.
+export type PredictionStatePayload = {
+  id: string;
+  question: string;
+  options: string[];
+  status: "open" | "locked" | "revealed";
+  tally: Record<string, number>;
+  locks_at: string;
+  reveals_at: string;
+  winning_option: string | null;
+};
+
 export type LiveEvent =
   | { type: "tick"; ts: string; payload: TickPayload }
   | { type: "fill"; ts: string; payload: FillPayload }
@@ -78,7 +118,11 @@ export type LiveEvent =
   | { type: "stream_fullscreen"; ts: string; payload: { enabled: boolean } }
   | { type: "stream_macro_fired"; ts: string; payload: StreamMacroFiredPayload }
   | { type: "stream_commentary"; ts: string; payload: StreamCommentaryPayload }
-  | { type: "chat_message"; ts: string; payload: ChatMessagePayload };
+  | { type: "chat_message"; ts: string; payload: ChatMessagePayload }
+  | { type: "audience_sentiment"; ts: string; payload: AudienceSentimentPayload }
+  | { type: "audience_pin_request"; ts: string; payload: AudiencePinRequestPayload }
+  | { type: "audience_pin_resolved"; ts: string; payload: AudiencePinResolvedPayload }
+  | { type: "prediction_state"; ts: string; payload: PredictionStatePayload };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 
