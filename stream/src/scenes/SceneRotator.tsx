@@ -13,6 +13,7 @@ import { useMarketClock } from "../hooks/useMarketClock";
 import { useChapter } from "../hooks/useChapter";
 import type { StreamSnapshot } from "../hooks/useStreamData";
 import type {
+  AgentDecision,
   BannerState,
   CommentaryState,
   MacroFireState,
@@ -24,8 +25,17 @@ import { BrainScene } from "./BrainScene";
 import { StrategyScene } from "./StrategyScene";
 import { RecapScene } from "./RecapScene";
 import { ShowdownScene } from "./ShowdownScene";
+import { DecisionLabScene } from "./DecisionLabScene";
 
-const ORDER = ["hero", "leaderboard", "showdown", "brain", "strategy", "recap"] as const;
+const ORDER = [
+  "hero",
+  "leaderboard",
+  "showdown",
+  "brain",
+  "decision-lab",
+  "strategy",
+  "recap",
+] as const;
 type SceneId = (typeof ORDER)[number];
 
 function pickWeighted(
@@ -69,6 +79,7 @@ export function SceneRotator({
   commentary,
   realtimeChat,
   simulatedChatFallback,
+  latestDecisions,
 }: {
   snapshot: StreamSnapshot;
   rotationSec: number;
@@ -82,6 +93,7 @@ export function SceneRotator({
   commentary?: CommentaryState | null;
   realtimeChat: RealtimeChatMessage[];
   simulatedChatFallback: boolean;
+  latestDecisions: AgentDecision[];
 }) {
   const { phase } = useMarketClock();
   const chapter = useChapter();
@@ -171,6 +183,7 @@ export function SceneRotator({
             {id === "leaderboard" && <LeaderboardScene snapshot={snapshot} />}
             {id === "showdown" && <ShowdownScene snapshot={snapshot} />}
             {id === "brain" && <BrainScene snapshot={snapshot} pinAgentId={pinAgentId} />}
+            {id === "decision-lab" && <DecisionLabScene decisions={latestDecisions} />}
             {id === "strategy" && <StrategyScene snapshot={snapshot} />}
             {id === "recap" && <RecapScene snapshot={snapshot} />}
           </motion.div>

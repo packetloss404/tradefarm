@@ -25,6 +25,7 @@ from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
 from tradefarm.orchestrator.audience import AudienceCoordinator
 from tradefarm.orchestrator.auto_director import AutoDirector
 from tradefarm.orchestrator.commentary_loop import CommentaryLoop
+from tradefarm.orchestrator.decision_feed import build_decisions_batch
 from tradefarm.orchestrator.predictions import PredictionsBoard
 from tradefarm.orchestrator.streak_watcher import StreakWatcher
 from tradefarm.orchestrator.youtube_chat import YouTubeChatPoller
@@ -211,6 +212,17 @@ class Orchestrator:
                     return a, []
 
         results = await asyncio.gather(*(gather(a) for a in self.agents))
+
+        # Decision Lab — publish every agent's per-tick reasoning (including
+        # WAIT verdicts) as a single batch event so the broadcast app can
+        # render the system "thinking out loud" on flat days. Done *before*
+        # risk-driven exits because risk exits aren't part of the agent's
+        # own thinking — they're forced overrides we apply on top.
+        try:
+            batch = build_decisions_batch(results, marks, tick_id=uuid.uuid4().hex[:12])
+            await publish_event("agent_decisions_batch", batch)
+        except Exception as e:  # pragma: no cover — never let surfacing break a tick
+            log.warning("agent_decisions_batch_failed", error=str(e))
 
         # Reset per-tick journal counters.
         JOURNAL_COUNTERS["notes_this_tick"] = 0

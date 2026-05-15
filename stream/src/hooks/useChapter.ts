@@ -16,6 +16,7 @@ export type SceneId =
   | "leaderboard"
   | "showdown"
   | "brain"
+  | "decision-lab"
   | "strategy"
   | "recap";
 
@@ -35,6 +36,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 3,
       showdown: 2,
       brain: 2,
+      "decision-lab": 1,
       strategy: 3,
       recap: 0,
     },
@@ -47,6 +49,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 2,
       showdown: 2,
       brain: 4,
+      "decision-lab": 1,
       strategy: 1,
       recap: 0,
     },
@@ -59,6 +62,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 2,
       showdown: 2,
       brain: 2,
+      "decision-lab": 3,
       strategy: 2,
       recap: 0,
     },
@@ -71,6 +75,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 3,
       showdown: 1,
       brain: 1,
+      "decision-lab": 4,
       strategy: 4,
       recap: 0,
     },
@@ -83,6 +88,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 2,
       showdown: 2,
       brain: 2,
+      "decision-lab": 3,
       strategy: 2,
       recap: 0,
     },
@@ -95,6 +101,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 1,
       showdown: 3,
       brain: 4,
+      "decision-lab": 1,
       strategy: 1,
       recap: 0,
     },
@@ -107,6 +114,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 3,
       showdown: 1,
       brain: 1,
+      "decision-lab": 1,
       strategy: 1,
       recap: 4,
     },
@@ -119,6 +127,7 @@ const CHAPTERS: Record<ChapterId, Omit<Chapter, "id">> = {
       leaderboard: 1,
       showdown: 1,
       brain: 1,
+      "decision-lab": 2,
       strategy: 1,
       recap: 2,
     },

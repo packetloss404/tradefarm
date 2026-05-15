@@ -198,6 +198,7 @@ export default function App() {
             commentary={cmds.commentary}
             realtimeChat={cmds.realtimeChat}
             simulatedChatFallback={settings.simulatedChatFallback}
+            latestDecisions={cmds.latestDecisions}
           />
         )}
       </AnimatePresence>

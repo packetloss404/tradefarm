@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiUrl } from "../shared/api";
-import { useLiveEvents, type LiveEvent } from "../shared/useLiveEvents";
+import {
+  useLiveEvents,
+  type AgentDecisionPayload,
+  type LiveEvent,
+} from "../shared/useLiveEvents";
 import { streamAudio } from "../audio/StreamAudio";
+
+// Re-export so consumers (DecisionLabScene, SceneRotator) can import the
+// decision payload type alongside the StreamCommandsHandle.
+export type AgentDecision = AgentDecisionPayload;
 
 const HEARTBEAT_MS = 5_000;
 // Cap the in-memory realtime chat buffer. The strip only ever renders the
@@ -116,6 +124,11 @@ export type StreamCommandsHandle = {
   // long-revealed predictions) is not done here — the backend is expected
   // to stop re-publishing terminal states after a grace window.
   predictions: Record<string, PredictionState>;
+  // Latest per-agent decisions from the most-recent ``agent_decisions_batch``
+  // event. Replaced wholesale on every tick — we only ever care about
+  // "this tick's thinking", and the array itself is the natural bounded
+  // buffer (100 agents max). Empty array before the first batch arrives.
+  latestDecisions: AgentDecision[];
 };
 
 export type UseStreamCommandsArgs = {
@@ -185,6 +198,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   const [audienceSentiment, setAudienceSentiment] = useState<AudienceSentimentState | null>(null);
   const [audiencePinResolved, setAudiencePinResolved] = useState<AudiencePinResolvedState | null>(null);
   const [predictions, setPredictions] = useState<Record<string, PredictionState>>({});
+  const [latestDecisions, setLatestDecisions] = useState<AgentDecision[]>([]);
   const audiencePinResolvedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Dedup ring so a brief WS reconnect (which sometimes replays the last
   // few messages) doesn't double-render the same chat row.
@@ -397,6 +411,23 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           setPredictions((prev) => ({ ...prev, [next.id]: next }));
           break;
         }
+        case "agent_decisions_batch": {
+          const p = ev.payload;
+          if (!Array.isArray(p?.decisions)) break;
+          // Defensive: ignore malformed rows so the scene never blows up on a
+          // partial payload. Keep `null` LSTM slots — they're meaningful (the
+          // agent is momentum-only and has no LSTM bars to render).
+          const cleaned: AgentDecision[] = [];
+          for (const d of p.decisions) {
+            if (!d || typeof d !== "object") continue;
+            if (typeof d.agent_id !== "number") continue;
+            if (typeof d.agent_name !== "string") continue;
+            if (d.verdict !== "trade" && d.verdict !== "wait") continue;
+            cleaned.push(d as AgentDecision);
+          }
+          setLatestDecisions(cleaned);
+          break;
+        }
         case "chat_message": {
           const p = ev.payload;
           if (typeof p.id !== "string" || p.id.length === 0) break;
@@ -506,5 +537,6 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     audienceSentiment,
     audiencePinResolved,
     predictions,
+    latestDecisions,
   };
 }

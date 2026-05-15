@@ -20,6 +20,7 @@ const STREAM_SCENES: { id: string; pretty: string }[] = [
   { id: "leaderboard", pretty: "Leaderboard" },
   { id: "showdown", pretty: "Showdown" },
   { id: "brain", pretty: "Brain" },
+  { id: "decision-lab", pretty: "Decision Lab" },
   { id: "strategy", pretty: "Strategy" },
   { id: "recap", pretty: "Recap" },
 ];

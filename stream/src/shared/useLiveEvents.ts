@@ -57,6 +57,30 @@ export type ChatMessagePayload = {
   at: string;
 };
 
+// ── Decision Lab ──────────────────────────────────────────────────────────
+// Per-agent reasoning, fired once per tick as a single batch event so the
+// fan-out cost stays bounded at 100 agents/tick. WAIT verdicts are first-
+// class: this is what the broadcast app renders when no fills are happening.
+export type AgentDecisionPayload = {
+  agent_id: number;
+  agent_name: string;
+  strategy: string;
+  symbol: string | null;
+  verdict: "trade" | "wait";
+  lstm_probs: [number, number, number] | null;
+  lstm_max_prob: number | null;
+  lstm_direction: "down" | "flat" | "up" | null;
+  llm_bias: "long" | "flat" | "short" | null;
+  llm_stance: "trade" | "wait" | null;
+  reason: string;
+  at: string;
+};
+export type AgentDecisionsBatchPayload = {
+  at: string;
+  tick_id: string;
+  decisions: AgentDecisionPayload[];
+};
+
 // ── Audience interactivity ────────────────────────────────────────────────
 // Score is signed in [-1, 1] (-1 fully bearish, +1 fully bullish). `up`/`down`
 // are raw tally counts within a rolling `window_sec` window so the overlay can
@@ -122,7 +146,8 @@ export type LiveEvent =
   | { type: "audience_sentiment"; ts: string; payload: AudienceSentimentPayload }
   | { type: "audience_pin_request"; ts: string; payload: AudiencePinRequestPayload }
   | { type: "audience_pin_resolved"; ts: string; payload: AudiencePinResolvedPayload }
-  | { type: "prediction_state"; ts: string; payload: PredictionStatePayload };
+  | { type: "prediction_state"; ts: string; payload: PredictionStatePayload }
+  | { type: "agent_decisions_batch"; ts: string; payload: AgentDecisionsBatchPayload };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 
