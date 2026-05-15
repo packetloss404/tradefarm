@@ -22,6 +22,7 @@ from tradefarm.market.hours import is_market_open
 from tradefarm.risk.manager import RiskManager
 from tradefarm.api.events import publish_event
 from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
+from tradefarm.orchestrator.auto_director import AutoDirector
 from tradefarm.storage import journal, repo
 
 log = structlog.get_logger()
@@ -99,6 +100,8 @@ class Orchestrator:
         # Phase 4 — curriculum loop gates on this to avoid mid-tick rank flips.
         self._tick_in_progress: bool = False
         self._curriculum_task: asyncio.Task | None = None
+        # Auto-director — broadcasts macros based on agent/market state.
+        self._auto_director: AutoDirector | None = None
 
     @classmethod
     def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
@@ -385,6 +388,13 @@ class Orchestrator:
         # Phase 4 — opt-in curriculum loop (0 disables).
         self.start_curriculum()
 
+        # Auto-director — always on; it's a presentation layer, not execution.
+        if self._auto_director is None:
+            self._auto_director = AutoDirector(orch=self)
+            asyncio.create_task(
+                self._auto_director.start(), name="orch_auto_director_start",
+            )
+
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""
         if settings.academy_eval_interval_sec > 0 and self._curriculum_task is None:
@@ -474,3 +484,6 @@ class Orchestrator:
         self._task = None
         self._recon_task = None
         await self.stop_curriculum()
+        if self._auto_director is not None:
+            await self._auto_director.stop()
+            self._auto_director = None
