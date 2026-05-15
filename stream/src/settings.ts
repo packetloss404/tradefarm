@@ -47,7 +47,7 @@ export const DEFAULT_SETTINGS: StreamSettings = {
   fullscreen: true,
   commentaryEnabled: true,
   tickerSpeedPxPerSec: 60,
-  prerollDurationSec: 5,
+  prerollDurationSec: 12,
   sceneRotationSec: 60,
   rotationEnabled: false,
   audioEnabled: true,
