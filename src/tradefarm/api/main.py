@@ -47,11 +47,22 @@ app.add_middleware(
     CORSMiddleware,
     # Web dashboard runs on 5179, stream-app dev on 5180, packaged Tauri
     # webview origin varies by platform (`http(s)://tauri.localhost` on
-    # Windows, `tauri://localhost` on macOS/Linux). Use a regex to cover
-    # every reasonable local origin without juggling a long allow-list.
-    # This API is paper-trading-only and listens on 127.0.0.1; widening
-    # CORS does not expose anything external.
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|https?://tauri\.localhost|tauri://localhost)$",
+    # Windows, `tauri://localhost` on macOS/Linux).
+    #
+    # We also allow private/LAN IPv4 ranges so the split-machine topology
+    # works (dashboard on workstation, backend on a broadcast VM running
+    # `npm run broadcast`). The API is paper-trading-only and binds the LAN
+    # interface only when explicitly run as the broadcast flavor.
+    allow_origin_regex=(
+        r"^("
+        r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+        r"|https?://10(\.\d{1,3}){3}(:\d+)?"
+        r"|https?://192\.168(\.\d{1,3}){2}(:\d+)?"
+        r"|https?://172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}(:\d+)?"
+        r"|https?://tauri\.localhost"
+        r"|tauri://localhost"
+        r")$"
+    ),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

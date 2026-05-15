@@ -12,8 +12,26 @@ frontend, PyTorch LSTMs, Claude or MiniMax for the LLM overlay.
 ## Run commands
 
 ```bash
-# Backend — ALWAYS from project root (it reads ./.env and ./tradefarm.db).
+# One-command launcher — backend + dashboard + stream Tauri, color-coded
+# in a single terminal. Ctrl+C kills all three. Double-click start.bat
+# from Explorer for the same effect.
 cd /d/projects/tradefarm
+npm install            # one-time: installs concurrently at root
+npm run dev            # api + dash + stream (Tauri shell) — local rig
+npm run dev:headless   # same, but stream as browser-only Vite (use the
+                       #   dashboard's "Pop out preview" instead of Tauri)
+npm run broadcast      # api (binds 0.0.0.0:8000) + stream Tauri — for the
+                       #   broadcast VM. OBS captures the Tauri window.
+                       #   Double-click broadcast.bat from Explorer.
+npm run dashboard      # dashboard Vite only — for the operator workstation
+                       #   when the backend lives on a remote VM. Point it
+                       #   at the VM by setting TRADEFARM_BACKEND in
+                       #   web/.env.local (see web/.env.example).
+npm run stream-only    # stream Tauri only — backend assumed remote.
+
+# Or run each individually (still supported):
+
+# Backend — ALWAYS from project root (it reads ./.env and ./tradefarm.db).
 uv run uvicorn tradefarm.api.main:app --host 127.0.0.1 --port 8000 \
                                       --reload --reload-dir src
 
@@ -35,6 +53,24 @@ uv run python -m tradefarm.agents.lstm_train --universe
 uv run python -m tradefarm.agents.backtest --symbol SPY
 uv run python -m tradefarm.agents.backtest --universe
 ```
+
+## Split-machine topology (VM ↔ workstation)
+
+Three pieces wired so the operator can run the broadcast VM headlessly and
+control it from the workstation:
+
+1. **VM**: `npm run broadcast` — uvicorn binds **0.0.0.0:8000** (LAN-reachable)
+   plus the stream Tauri locally. OBS captures the Tauri window, streams to
+   YouTube. Use `broadcast.bat` for one-click start.
+2. **Workstation**: `npm run dashboard` — dashboard Vite only on 5179. Set
+   `TRADEFARM_BACKEND=<vm-ip>:8000` in `web/.env.local` so Vite proxies
+   `/api` and `/ws` to the VM. Browser still hits `http://localhost:5179`
+   (Origin stays localhost → existing CORS allow-list matches; LAN IP
+   ranges are also permitted defensively).
+3. **Stream WS**: the Tauri shell hardcodes `ws://127.0.0.1:8000/ws` so it
+   only works when the backend is on the same machine as the Tauri shell.
+   `stream-only` (no co-located backend) needs a future
+   `wsUrlOverride` plumbed through settings before it's useful.
 
 ## Gotchas worth knowing
 

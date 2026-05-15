@@ -33,6 +33,7 @@ _*.json
 _*.csv
 
 # Frontend
+/node_modules/
 web/node_modules/
 web/.next/
 web/out/

@@ -1,0 +1,21 @@
+{
+  "name": "tradefarm",
+  "private": true,
+  "version": "0.5.0",
+  "description": "TradeFarm — one-command launcher for backend (uvicorn:8000), dashboard (vite:5179), and stream (tauri/vite:5180).",
+  "scripts": {
+    "dev": "concurrently -k -n api,dash,stream -c cyan,green,magenta \"npm:dev:api\" \"npm:dev:dash\" \"npm:dev:stream\"",
+    "dev:headless": "concurrently -k -n api,dash,stream -c cyan,green,magenta \"npm:dev:api\" \"npm:dev:dash\" \"npm:dev:stream-browser\"",
+    "broadcast": "concurrently -k -n api,stream -c cyan,magenta \"npm:broadcast:api\" \"npm:dev:stream\"",
+    "dashboard": "npm --prefix web run dev",
+    "stream-only": "npm --prefix stream run tauri:dev",
+    "dev:api": "uv run uvicorn tradefarm.api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir src",
+    "broadcast:api": "uv run uvicorn tradefarm.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir src",
+    "dev:dash": "npm --prefix web run dev",
+    "dev:stream": "npm --prefix stream run tauri:dev",
+    "dev:stream-browser": "npm --prefix stream run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
