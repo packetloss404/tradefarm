@@ -45,6 +45,8 @@ export function HeroBody({
           promotionEvents={snapshot.promotions}
           marketPhase={phase}
           todayPnlPct={pnlPct}
+          fills={snapshot.fills}
+          pinAgentId={pinAgentId}
         />
         <AnimatePresence>
           {pinned && (

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import type { AgentRow, MarketPhase, PromotionEventPayload, Rank } from "../shared/api";
+import type { FillEvent } from "../hooks/useStreamData";
 import { MascotPet } from "./MascotPet";
 
 /* ------------------------------------------------------------------ *
@@ -284,6 +286,9 @@ const BRIDGES: { from: [number, number]; to: [number, number] }[] = [
 const HALO_MS = 2_400;
 const FLOW_MS = 4_000;
 const WALK_MS = 2_400;
+const FILL_BOUNCE_MS = 1_500;
+const STARTING_CAPITAL = 1_000;
+const SLUMP_PNL_THRESHOLD = -STARTING_CAPITAL * 0.05;
 
 type Transition = { from: ZoneId; to: ZoneId; expiresAt: number };
 
@@ -316,12 +321,28 @@ export function AgentWorldXL({
   promotionEvents,
   marketPhase = "rth",
   todayPnlPct = 0,
+  fills,
+  pinAgentId = null,
 }: {
   agents: AgentRow[];
   promotionEvents?: { type: "promotion" | "demotion"; ts: string; payload: PromotionEventPayload }[];
   marketPhase?: MarketPhase;
   todayPnlPct?: number;
+  fills?: FillEvent[];
+  pinAgentId?: number | null;
 }) {
+  const lastFillAt = useMemo(() => {
+    const m = new Map<number, number>();
+    if (!fills || fills.length === 0) return m;
+    for (const f of fills) {
+      const t = Date.parse(f.ts);
+      if (Number.isNaN(t)) continue;
+      const prev = m.get(f.payload.agent_id);
+      if (prev === undefined || t > prev) m.set(f.payload.agent_id, t);
+    }
+    return m;
+  }, [fills]);
+
   const islandById = useMemo(() => {
     const m = new Map<ZoneId, Island>();
     for (const i of ISLANDS) m.set(i.id, i);
@@ -720,6 +741,18 @@ export function AgentWorldXL({
           const haloColor = halo?.kind === "promotion" ? "#34d399" : halo?.kind === "demotion" ? "#f87171" : null;
           const delay = `${-((a.id * 113) % 2500) / 1000}s`;
 
+          const fillAt = lastFillAt.get(a.id);
+          const isBouncing =
+            fillAt !== undefined && Date.now() - fillAt < FILL_BOUNCE_MS;
+          const isSlumping =
+            a.status === "loss" && a.unrealized_pnl < SLUMP_PNL_THRESHOLD;
+          const isPinned = pinAgentId === a.id;
+
+          const bounceY = isBouncing ? [0, -8, 0] : 0;
+          const slumpRotate = isSlumping ? -6 : 0;
+          const slumpY = isSlumping ? 2 : 0;
+          const pinLean = isPinned ? 4 : 0;
+
           return (
             <g
               key={a.id}
@@ -728,6 +761,18 @@ export function AgentWorldXL({
                 transition: `transform ${WALK_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
               }}
             >
+              {isPinned && (
+                <motion.circle
+                  r={22}
+                  fill="none"
+                  stroke="var(--color-profit)"
+                  strokeOpacity={0.6}
+                  strokeWidth={3}
+                  style={{ filter: "blur(4px)" }}
+                  animate={{ scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                />
+              )}
               {haloColor && (
                 <circle r={20} fill="none" stroke={haloColor} strokeOpacity={0.85} strokeWidth={2.4}>
                   <animate attributeName="r" from={10} to={28} dur="1.5s" repeatCount="indefinite" />
@@ -737,17 +782,32 @@ export function AgentWorldXL({
               {hasPosition && (
                 <circle r={15} fill="none" stroke="#fbbf24" strokeOpacity={0.85} strokeWidth={1.6} />
               )}
-              <g
-                transform={`scale(${SPRITE_SCALE})`}
-                style={{
-                  animation: `tf-bob 2.5s ease-in-out infinite`,
-                  animationDelay: delay,
-                  transformBox: "fill-box",
-                  transformOrigin: "center bottom",
+              <motion.g
+                key={fillAt ?? 0}
+                animate={{
+                  y: typeof bounceY === "number" ? bounceY + slumpY : bounceY.map((v) => v + slumpY),
+                  rotate: slumpRotate + pinLean,
                 }}
+                transition={{
+                  y: isBouncing
+                    ? { duration: 0.6, ease: [0.22, 1, 0.36, 1] }
+                    : { duration: 0.4, ease: "easeOut" },
+                  rotate: { duration: 0.4, ease: "easeOut" },
+                }}
+                style={{ transformBox: "fill-box", transformOrigin: "center bottom" }}
               >
-                <use href={`#sprite-${rank}-xl`} />
-              </g>
+                <g
+                  transform={`scale(${SPRITE_SCALE})`}
+                  style={{
+                    animation: `tf-bob 2.5s ease-in-out infinite`,
+                    animationDelay: delay,
+                    transformBox: "fill-box",
+                    transformOrigin: "center bottom",
+                  }}
+                >
+                  <use href={`#sprite-${rank}-xl`} />
+                </g>
+              </motion.g>
             </g>
           );
         })}
