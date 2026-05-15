@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 const SCENES: { id: string; label: string; hint?: string }[] = [
   { id: "hero", label: "Hero" },
   { id: "leaderboard", label: "Leaderboard" },
+  { id: "showdown", label: "Showdown" },
   { id: "brain", label: "Brain" },
   { id: "strategy", label: "Strategy" },
   { id: "recap", label: "Recap", hint: "after 4pm ET" },

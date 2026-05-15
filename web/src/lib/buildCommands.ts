@@ -18,6 +18,7 @@ const TOP_SYMBOLS = [
 const STREAM_SCENES: { id: string; pretty: string }[] = [
   { id: "hero", pretty: "Hero" },
   { id: "leaderboard", pretty: "Leaderboard" },
+  { id: "showdown", pretty: "Showdown" },
   { id: "brain", pretty: "Brain" },
   { id: "strategy", pretty: "Strategy" },
   { id: "recap", pretty: "Recap" },

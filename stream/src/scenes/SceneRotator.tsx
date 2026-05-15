@@ -15,8 +15,9 @@ import { LeaderboardScene } from "./LeaderboardScene";
 import { BrainScene } from "./BrainScene";
 import { StrategyScene } from "./StrategyScene";
 import { RecapScene } from "./RecapScene";
+import { ShowdownScene } from "./ShowdownScene";
 
-const ORDER = ["hero", "leaderboard", "brain", "strategy", "recap"] as const;
+const ORDER = ["hero", "leaderboard", "showdown", "brain", "strategy", "recap"] as const;
 type SceneId = (typeof ORDER)[number];
 
 /**
@@ -123,6 +124,7 @@ export function SceneRotator({
           >
             {id === "hero" && <HeroBody snapshot={snapshot} pinAgentId={pinAgentId} />}
             {id === "leaderboard" && <LeaderboardScene snapshot={snapshot} />}
+            {id === "showdown" && <ShowdownScene snapshot={snapshot} />}
             {id === "brain" && <BrainScene snapshot={snapshot} pinAgentId={pinAgentId} />}
             {id === "strategy" && <StrategyScene snapshot={snapshot} />}
             {id === "recap" && <RecapScene snapshot={snapshot} />}
