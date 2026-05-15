@@ -338,3 +338,144 @@ def test_parse_commentary_json_defaults_unknown_kind_to_color():
 def test_parse_commentary_json_rejects_empty_text():
     with pytest.raises(ValueError):
         cl._parse_commentary_json('{"text": "", "kind": "color"}')
+
+
+# ---------------------------------------------------------------------------
+# 9. Prompt formatting — recent-fills line includes "shares" + notional.
+# ---------------------------------------------------------------------------
+
+
+def test_user_message_formats_fills_with_shares_and_notional():
+    # Replicates the bug case: 1.0 shares XLV @ $146.63 → notional ≈ $146.63.
+    # (1.364 * 146.63 ≈ 199.997 which rounds to $200.00 — pick whole share
+    # so the exact formatted notional is unambiguous.)
+    agent = _make_agent(
+        agent_id=88,
+        name="agent-088",
+        symbol="XLV",
+        positions={"XLV": _StubPos(qty=1.0, avg_price=146.63)},
+    )
+    orch = _StubOrch(agents=[agent], last_marks={"XLV": 146.63, "SPY": 400.0})
+    loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
+
+    snap = loop._snapshot()
+    msg = loop._user_message(snap)
+
+    # The line must call out "shares" so qty can't be misread as a kilo-share,
+    # and must pre-compute the dollar notional so the LLM doesn't multiply.
+    assert "1 shares XLV" in msg
+    assert "(notional ≈ $146.63)" in msg
+
+
+def test_user_message_formats_large_notional_without_decimals():
+    # Notional >= $10k drops the decimals (".0f").
+    agent = _make_agent(
+        agent_id=7,
+        name="agent-007",
+        symbol="AAPL",
+        positions={"AAPL": _StubPos(qty=100, avg_price=150.0)},
+    )
+    orch = _StubOrch(agents=[agent], last_marks={"AAPL": 150.0, "SPY": 400.0})
+    loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
+
+    snap = loop._snapshot()
+    msg = loop._user_message(snap)
+
+    assert "100 shares AAPL" in msg
+    assert "(notional ≈ $15,000)" in msg
+
+
+# ---------------------------------------------------------------------------
+# 10. _strip_hallucinated_magnitudes — clean text passes, hallucinated returns None.
+# ---------------------------------------------------------------------------
+
+
+def _snap_with_max_notional(notional: float) -> cl._StateSnapshot:
+    """Build a minimal snapshot whose max recent-fill notional matches `notional`."""
+    fills = (
+        [cl._FillSnap(agent_name="agent-001", side="long", qty=1.0, symbol="XLV", price=notional)]
+        if notional > 0
+        else []
+    )
+    return cl._StateSnapshot(
+        top_agents=[],
+        recent_fills=fills,
+        spy_mark=400.0,
+        spy_pct=0.0,
+        provider_name="stub",
+    )
+
+
+def test_strip_hallucinated_magnitudes_passes_clean_text():
+    snap = _snap_with_max_notional(200.0)
+    text = "Agent-088 picking up XLV on the dip."
+    assert cl._strip_hallucinated_magnitudes(text, snap) == text
+
+
+def test_strip_hallucinated_magnitudes_returns_none_for_inflated_dollar_claim():
+    # Max notional $200; LLM claims "$200K" → 1000× inflation → hallucinated.
+    snap = _snap_with_max_notional(200.0)
+    text = "Agent-088 just dropped a $200K long on XLV."
+    assert cl._strip_hallucinated_magnitudes(text, snap) is None
+
+
+def test_strip_hallucinated_magnitudes_returns_none_for_inflated_bare_magnitude():
+    # Max notional $200; threshold = $2000. LLM says "5k shares" → magnitude
+    # 5000 > 2000 → flagged as hallucinated.
+    snap = _snap_with_max_notional(200.0)
+    text = "Agent-088 sitting on 5k shares of XLV."
+    assert cl._strip_hallucinated_magnitudes(text, snap) is None
+
+
+def test_strip_hallucinated_magnitudes_allows_modest_overstatement():
+    # Max notional $200, 10× threshold → claims up to $2000 are tolerated.
+    # "$1k" = 5× → fine; "$2k" = 10× → still at the boundary (not strictly >).
+    snap = _snap_with_max_notional(200.0)
+    assert cl._strip_hallucinated_magnitudes("XLV $1k clip just hit.", snap) is not None
+
+
+def test_strip_hallucinated_magnitudes_allows_text_when_no_positions():
+    # Empty snapshot — no positions to misrepresent; ambient flavor is fine.
+    snap = _snap_with_max_notional(0.0)
+    text = "Quiet $2M tape, options gamma is muted."
+    assert cl._strip_hallucinated_magnitudes(text, snap) == text
+
+
+def test_strip_hallucinated_magnitudes_ignores_word_boundary_letters():
+    # Make sure "Mark", "Karen", etc. aren't read as magnitude tokens.
+    snap = _snap_with_max_notional(200.0)
+    text = "Agent Mark and Karen are leaning long on XLV."
+    assert cl._strip_hallucinated_magnitudes(text, snap) == text
+
+
+# ---------------------------------------------------------------------------
+# 11. End-to-end — LLM emits "$200K" against $200 snapshot → fallback path.
+# ---------------------------------------------------------------------------
+
+
+async def test_hallucinated_llm_response_falls_back():
+    # 1.364 shares XLV @ $146.63 → max notional $199.99
+    agent = _make_agent(
+        agent_id=88,
+        name="agent-088",
+        symbol="XLV",
+        positions={"XLV": _StubPos(qty=1.364, avg_price=146.63)},
+    )
+    orch = _StubOrch(agents=[agent], last_marks={"XLV": 146.63, "SPY": 400.0})
+    loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
+
+    stub_completion = AsyncMock(
+        return_value='{"text": "Agent-088 throwing a $200K long on XLV!", "kind": "play_by_play"}'
+    )
+    fake_publish = AsyncMock()
+    with patch.object(cl, "_commentary_completion", stub_completion), \
+         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
+         patch.object(cl, "publish_event", fake_publish):
+        result = await loop.tick_once()
+
+    # The LLM call succeeded but its output was rejected → fallback path.
+    assert result is not None
+    assert result["source"] == "fallback"
+    # And the fabricated "$200K" claim must not have made it through.
+    assert "$200K" not in result["text"]
+    assert "200K" not in result["text"]

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -58,7 +59,11 @@ Given the recent state below, write ONE short sentence (<= 140 chars) that a TV 
 Respond with JSON only, exactly this shape:
 {"text": "<one sentence, <=140 chars>", "kind": "play_by_play" | "color"}
 
-Pick "play_by_play" when narrating a specific fill/event, "color" for ambient observation."""
+Pick "play_by_play" when narrating a specific fill/event, "color" for ambient observation.
+
+Use the exact share counts from the data; never round to 'k', 'thousand', 'M', or any magnitude shorthand.
+Position sizes are listed with the explicit notional in dollars; do not invent or scale them.
+If a position is small (e.g., under $500 notional), do not characterize it as large."""
 
 # Fallback pool, keyed on the dominant state signal. Picked deterministically
 # from a small bucket so the stream still moves when the LLM is down.
@@ -267,8 +272,13 @@ class CommentaryLoop:
         if snap.recent_fills:
             lines.append("Recent open positions (heaviest notional):")
             for f in snap.recent_fills:
+                notional = f.qty * f.price
+                notional_str = (
+                    f"${notional:,.2f}" if notional < 10_000 else f"${notional:,.0f}"
+                )
                 lines.append(
-                    f"- {f.agent_name} {f.side} {f.qty:g} {f.symbol} @ ${f.price:.2f}"
+                    f"- {f.agent_name} {f.side} {f.qty:g} shares {f.symbol} "
+                    f"@ ${f.price:.2f} (notional ≈ {notional_str})"
                 )
         else:
             lines.append("No open positions across the farm.")
@@ -281,7 +291,9 @@ class CommentaryLoop:
         """Call the active provider with the commentary prompt.
 
         Returns (text, kind). Raises if the call or parse fails — the caller
-        catches and falls back.
+        catches and falls back. Also raises ``ValueError`` if the response
+        appears to hallucinate a position magnitude (e.g., claims "$200K"
+        when the farm's largest position is $200).
         """
         overlay = LlmOverlay.from_settings()
         provider = overlay.provider
@@ -290,7 +302,17 @@ class CommentaryLoop:
         # MinimaxProvider already uses httpx with its own timeout; this also
         # protects the Anthropic SDK path which has no override.
         raw = await asyncio.wait_for(_commentary_completion(provider, user), timeout=20.0)
-        return _parse_commentary_json(raw)
+        text, kind = _parse_commentary_json(raw)
+        clean = _strip_hallucinated_magnitudes(text, snap)
+        if clean is None:
+            max_notional = _max_notional(snap)
+            log.warning(
+                "commentary_hallucinated_magnitude",
+                text=text,
+                max_notional=max_notional,
+            )
+            raise ValueError("hallucinated magnitude")
+        return clean, kind
 
     # ------------------------------------------------------------------
     # Main tick.
@@ -424,3 +446,84 @@ def _fallback_for(snap: _StateSnapshot) -> tuple[str, CommentaryKind]:
     if len(snap.recent_fills) >= 3:
         return random.choice(_FALLBACK_ACTIVE), "color"
     return random.choice(_FALLBACK_QUIET), "color"
+
+
+# ---------------------------------------------------------------------------
+# Hallucination guard.
+#
+# The LLM has been observed to read a line like "1.364 shares XLV @ $146.63"
+# and emit "$200K long XLV" — material misrepresentation on a live broadcast.
+# We post-validate the response: if it claims a magnitude (10k+, $1M, etc.)
+# that's wildly out of line with the actual largest notional in the snapshot,
+# we drop the response and let the caller fall back to a canned line.
+# ---------------------------------------------------------------------------
+
+# Magnitude threshold: claim must exceed 10× the actual max notional to count
+# as hallucinated. Rationale: a 10× factor is generous enough to permit normal
+# rhetorical compression (e.g. saying "$2k" when the position is $1850) but
+# tight enough to catch the failure mode we actually see in production — the
+# LLM jumping from "$200" to "$200K" (1000× overstatement). Below 10× we
+# defer to the LLM's wording.
+_HALLUCINATION_FACTOR: float = 10.0
+
+# "5k", "200K", "1.5M", "3 m"
+_MAGNITUDE_TOKEN_RE = re.compile(r"(?<![A-Za-z])(\d+(?:\.\d+)?)\s*([kKmM])\b")
+# "$200K", "$1,500K", "$2M", "$200 million", "$5 thousand"
+_DOLLAR_MAGNITUDE_RE = re.compile(
+    r"\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(K|M|k|m|million|thousand|MILLION|THOUSAND)",
+)
+
+
+def _max_notional(snap: _StateSnapshot) -> float:
+    """Largest qty * price across recent_fills; 0.0 if empty."""
+    if not snap.recent_fills:
+        return 0.0
+    return max(f.qty * f.price for f in snap.recent_fills)
+
+
+def _parse_magnitude(num_str: str, suffix: str) -> float:
+    """Resolve a "200K"/"1.5M"/"thousand" pair to a dollar magnitude."""
+    n = float(num_str.replace(",", ""))
+    s = suffix.lower()
+    if s in ("k", "thousand"):
+        return n * 1_000.0
+    if s in ("m", "million"):
+        return n * 1_000_000.0
+    return n
+
+
+def _strip_hallucinated_magnitudes(
+    text: str, snap: _StateSnapshot
+) -> str | None:
+    """Validate the LLM's text against the snapshot's actual notional.
+
+    Returns the text unchanged when no magnitude tokens are present, or when
+    every magnitude token is within ``_HALLUCINATION_FACTOR`` of the actual
+    max notional. Returns ``None`` when at least one token claims a magnitude
+    that's wildly inflated relative to reality — the caller should fall back
+    to a canned line.
+
+    Empty snapshots (max_notional == 0) skip the check: with no positions to
+    misrepresent, there's nothing to hallucinate about (the LLM might mention
+    "$2M of options flow" as ambient color — that's fine).
+    """
+    max_notional = _max_notional(snap)
+    if max_notional <= 0:
+        return text
+
+    threshold = max_notional * _HALLUCINATION_FACTOR
+
+    # Dollar-prefixed magnitudes first ("$200K") — strongest signal.
+    for m in _DOLLAR_MAGNITUDE_RE.finditer(text):
+        claimed = _parse_magnitude(m.group(1), m.group(2))
+        if claimed > threshold:
+            return None
+
+    # Bare magnitude tokens ("5k shares", "1.5M long") — weaker, but still
+    # a misrepresentation when they exceed the threshold.
+    for m in _MAGNITUDE_TOKEN_RE.finditer(text):
+        claimed = _parse_magnitude(m.group(1), m.group(2))
+        if claimed > threshold:
+            return None
+
+    return text
