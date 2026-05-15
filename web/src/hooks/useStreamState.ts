@@ -14,6 +14,7 @@ export type StreamState = {
   layoutMode: "scenes" | "v1-broadcast" | null;
   crtEnabled: boolean | null;
   rotationSec: number | null;
+  pinAgentId: number | null;
   lastSeenAt: number | null;
 };
 
@@ -35,6 +36,7 @@ export function useStreamState(): StreamState {
     layoutMode: null,
     crtEnabled: null,
     rotationSec: null,
+    pinAgentId: null,
     lastSeenAt: null,
   });
   const lastSeenRef = useRef<number | null>(null);
@@ -44,7 +46,7 @@ export function useStreamState(): StreamState {
     const p = ev.payload;
     const now = Date.now();
     lastSeenRef.current = now;
-    setState({
+    setState((prev) => ({
       isOnline: true,
       scene: p.scene ?? null,
       audioEnabled: p.audio_enabled ?? null,
@@ -54,8 +56,16 @@ export function useStreamState(): StreamState {
       layoutMode: p.layout_mode === "scenes" || p.layout_mode === "v1-broadcast" ? p.layout_mode : null,
       crtEnabled: typeof p.crt_enabled === "boolean" ? p.crt_enabled : null,
       rotationSec: typeof p.rotation_sec === "number" ? p.rotation_sec : null,
+      pinAgentId:
+        "pin_agent_id" in p
+          ? typeof p.pin_agent_id === "number"
+            ? p.pin_agent_id
+            : p.pin_agent_id === null
+              ? null
+              : prev.pinAgentId
+          : prev.pinAgentId,
       lastSeenAt: now,
-    });
+    }));
   }, []);
 
   useLiveEvents(handler);

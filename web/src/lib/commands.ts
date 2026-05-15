@@ -1,6 +1,7 @@
 export type CommandSection =
   | "Navigation"
   | "Stream"
+  | "Macros"
   | "Admin"
   | "Tick"
   | "Theme"

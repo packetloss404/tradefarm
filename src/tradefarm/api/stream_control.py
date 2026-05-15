@@ -33,6 +33,7 @@ ALLOWED_TYPES: frozenset[str] = frozenset({
     "stream_crt",
     "stream_cadence",
     "stream_fullscreen",
+    "stream_macro_fired",
     "stream_state",
 })
 

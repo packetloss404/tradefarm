@@ -190,6 +190,8 @@ export default function App() {
             tickerSpeedPxPerSec={settings.tickerSpeedPxPerSec}
             forceSceneId={cmds.forceSceneId}
             banner={cmds.banner}
+            macroFire={cmds.macroFire}
+            pinAgentId={cmds.pinAgentId}
           />
         )}
       </AnimatePresence>

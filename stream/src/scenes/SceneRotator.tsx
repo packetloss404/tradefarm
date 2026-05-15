@@ -5,10 +5,11 @@ import { BottomTicker } from "../components/BottomTicker";
 import { CommentaryCaption } from "../components/CommentaryCaption";
 import { PromotionToast } from "../components/PromotionToast";
 import { LowerThird } from "../components/LowerThird";
+import { MacroFireBurst } from "../components/MacroFireBurst";
 import { useCommentary } from "../hooks/useCommentary";
 import { useMarketClock } from "../hooks/useMarketClock";
 import type { StreamSnapshot } from "../hooks/useStreamData";
-import type { BannerState } from "../hooks/useStreamCommands";
+import type { BannerState, MacroFireState } from "../hooks/useStreamCommands";
 import { HeroBody } from "./HeroBody";
 import { LeaderboardScene } from "./LeaderboardScene";
 import { BrainScene } from "./BrainScene";
@@ -34,6 +35,8 @@ export function SceneRotator({
   tickerSpeedPxPerSec,
   forceSceneId,
   banner,
+  macroFire,
+  pinAgentId,
 }: {
   snapshot: StreamSnapshot;
   rotationSec: number;
@@ -42,6 +45,8 @@ export function SceneRotator({
   tickerSpeedPxPerSec: number;
   forceSceneId?: string | null;
   banner?: BannerState | null;
+  macroFire?: MacroFireState | null;
+  pinAgentId: number | null;
 }) {
   const { phase } = useMarketClock();
 
@@ -113,9 +118,9 @@ export function SceneRotator({
             transition={{ duration: 0.5 }}
             className="absolute inset-0"
           >
-            {id === "hero" && <HeroBody snapshot={snapshot} />}
+            {id === "hero" && <HeroBody snapshot={snapshot} pinAgentId={pinAgentId} />}
             {id === "leaderboard" && <LeaderboardScene snapshot={snapshot} />}
-            {id === "brain" && <BrainScene snapshot={snapshot} />}
+            {id === "brain" && <BrainScene snapshot={snapshot} pinAgentId={pinAgentId} />}
             {id === "strategy" && <StrategyScene snapshot={snapshot} />}
             {id === "recap" && <RecapScene snapshot={snapshot} />}
           </motion.div>
@@ -124,6 +129,7 @@ export function SceneRotator({
         <PromotionToast promotions={snapshot.promotions} />
         <CommentaryCaption highlight={commentary.current} />
         <LowerThird banner={banner ?? null} />
+        <MacroFireBurst event={macroFire ?? null} />
 
         {snapshot.error && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-rose-500/20 border border-rose-500/50 px-6 py-4 text-(--color-loss) font-mono">

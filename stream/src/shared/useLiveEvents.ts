@@ -27,14 +27,21 @@ export type StreamStatePayload = {
   volume?: number | null;
   fullscreen?: boolean | null;
   ts?: number | string | null;
+  pin_agent_id?: number | null;
 };
-export type StreamScenePayload = { scene_id: string };
+export type StreamScenePayload = { scene_id: string; pin_agent_id?: number | null };
 export type StreamBannerPayload = {
   title: string;
   subtitle?: string;
   ttl_sec?: number;
 };
 export type StreamAudioPayload = { enabled: boolean; volume: number };
+export type StreamMacroFiredPayload = {
+  id: string;
+  label: string;
+  color?: "profit" | "loss" | "neutral";
+  subtitle?: string;
+};
 
 export type LiveEvent =
   | { type: "tick"; ts: string; payload: TickPayload }
@@ -54,7 +61,8 @@ export type LiveEvent =
   | { type: "stream_layout"; ts: string; payload: { mode: "scenes" | "v1-broadcast" } }
   | { type: "stream_crt"; ts: string; payload: { enabled: boolean } }
   | { type: "stream_cadence"; ts: string; payload: { sec: number } }
-  | { type: "stream_fullscreen"; ts: string; payload: { enabled: boolean } };
+  | { type: "stream_fullscreen"; ts: string; payload: { enabled: boolean } }
+  | { type: "stream_macro_fired"; ts: string; payload: StreamMacroFiredPayload };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 

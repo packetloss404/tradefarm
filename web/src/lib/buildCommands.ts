@@ -1,4 +1,5 @@
 import type { AgentRow } from "../api";
+import { MACROS, runMacro } from "../components/broadcast/BroadcastMacrosSection";
 import type { Command } from "./commands";
 
 const TOP_SYMBOLS = [
@@ -91,6 +92,15 @@ export function buildCommands(deps: BuildCommandsDeps): Command[] {
     section: "Stream",
     action: () => postStreamCmd("stream_audio", { enabled: false, volume: 0 }),
   });
+
+  for (const macro of MACROS) {
+    cmds.push({
+      id: `macro-${macro.id}`,
+      label: `Macro: ${macro.label}`,
+      section: "Macros",
+      action: () => runMacro(macro, ""),
+    });
+  }
 
   cmds.push({
     id: "open-admin",

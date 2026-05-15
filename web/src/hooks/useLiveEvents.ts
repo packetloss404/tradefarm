@@ -25,9 +25,10 @@ export type StreamStatePayload = {
   layout_mode?: "scenes" | "v1-broadcast" | null;
   crt_enabled?: boolean | null;
   rotation_sec?: number | null;
+  pin_agent_id?: number | null;
   ts?: number | string | null;
 };
-export type StreamScenePayload = { scene_id: string };
+export type StreamScenePayload = { scene_id: string; pin_agent_id?: number | null };
 export type StreamBannerPayload = {
   title: string;
   subtitle?: string;

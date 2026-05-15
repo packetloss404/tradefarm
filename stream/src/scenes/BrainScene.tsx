@@ -22,14 +22,25 @@ const BIAS_COLOR: Record<string, string> = {
  * Brain scene: a 3×4 grid of cards showing the most-recently-thinking
  * agents. Each card displays the LSTM probability bars + the LLM overlay's
  * stance / bias / size and the (truncated) reason text.
+ *
+ * When `pinAgentId` is set we force that agent into slot 0 (even if they have
+ * no decision/lstm activity) and cap the rest to 11 so the grid still totals 12.
  */
-export function BrainScene({ snapshot }: { snapshot: StreamSnapshot }) {
+export function BrainScene({
+  snapshot,
+  pinAgentId,
+}: {
+  snapshot: StreamSnapshot;
+  pinAgentId: number | null;
+}) {
   const cards = useMemo(() => {
-    return [...snapshot.agents]
-      .filter((a) => a.last_decision || a.last_lstm)
-      .sort((x, y) => activityScore(y) - activityScore(x))
-      .slice(0, 12);
-  }, [snapshot.agents]);
+    const pinned = pinAgentId != null ? snapshot.agents.find((a) => a.id === pinAgentId) ?? null : null;
+    const rest = [...snapshot.agents]
+      .filter((a) => (a.last_decision || a.last_lstm) && (!pinned || a.id !== pinned.id))
+      .sort((x, y) => activityScore(y) - activityScore(x));
+    if (pinned) return [pinned, ...rest.slice(0, 11)];
+    return rest.slice(0, 12);
+  }, [snapshot.agents, pinAgentId]);
 
   return (
     <div className="absolute inset-0 px-8 py-6 overflow-hidden">
@@ -48,7 +59,7 @@ export function BrainScene({ snapshot }: { snapshot: StreamSnapshot }) {
           </div>
         )}
         {cards.map((a) => (
-          <BrainCard key={a.id} agent={a} />
+          <BrainCard key={a.id} agent={a} pinned={pinAgentId != null && a.id === pinAgentId} />
         ))}
       </div>
     </div>
@@ -62,13 +73,24 @@ function activityScore(a: AgentRow): number {
   return 0;
 }
 
-function BrainCard({ agent }: { agent: AgentRow }) {
+function BrainCard({ agent, pinned = false }: { agent: AgentRow; pinned?: boolean }) {
   const d = agent.last_decision;
   const l = agent.last_lstm;
   const total = agent.realized_pnl + agent.unrealized_pnl;
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 flex flex-col gap-2 min-h-[155px]">
+    <div
+      className={`relative rounded-lg p-3 flex flex-col gap-2 min-h-[155px] ${
+        pinned
+          ? "border border-emerald-500/60 bg-emerald-950/20 ring-2 ring-emerald-500/40 shadow-lg shadow-emerald-900/20"
+          : "border border-zinc-800 bg-zinc-900/40"
+      }`}
+    >
+      {pinned && (
+        <span className="absolute -top-2 -right-2 z-10 rounded-full bg-emerald-500 px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-widest text-zinc-950 shadow">
+          Pinned
+        </span>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
           <span className="font-semibold truncate">{agent.name}</span>
