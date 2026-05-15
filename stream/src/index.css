@@ -29,6 +29,15 @@ body.idle, body.idle * {
   50%      { transform: translateY(-1.4px); }
 }
 
+/* Pre-roll splash starfield. Particles drift diagonally and fade in/out
+   over the cycle so the background never feels still. */
+@keyframes tf-star-drift {
+  0%   { transform: translate(0, 0);     opacity: 0; }
+  20%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { transform: translate(40px, -60px); opacity: 0; }
+}
+
 /* ----------------------------------------------------------------------- *
  * V1 broadcast — keyframes used by the sports-broadcast layout.
  * ----------------------------------------------------------------------- */
