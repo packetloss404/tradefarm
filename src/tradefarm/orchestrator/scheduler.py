@@ -23,6 +23,7 @@ from tradefarm.risk.manager import RiskManager
 from tradefarm.api.events import publish_event
 from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
 from tradefarm.orchestrator.auto_director import AutoDirector
+from tradefarm.orchestrator.streak_watcher import StreakWatcher
 from tradefarm.storage import journal, repo
 
 log = structlog.get_logger()
@@ -102,6 +103,8 @@ class Orchestrator:
         self._curriculum_task: asyncio.Task | None = None
         # Auto-director — broadcasts macros based on agent/market state.
         self._auto_director: AutoDirector | None = None
+        # Streak watcher — broadcasts macros based on trade-history patterns.
+        self._streak_watcher: StreakWatcher | None = None
 
     @classmethod
     def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
@@ -395,6 +398,14 @@ class Orchestrator:
                 self._auto_director.start(), name="orch_auto_director_start",
             )
 
+        # Streak watcher — always on; complements auto-director with
+        # journal-driven pattern detection.
+        if self._streak_watcher is None:
+            self._streak_watcher = StreakWatcher(orch=self)
+            asyncio.create_task(
+                self._streak_watcher.start(), name="orch_streak_watcher_start",
+            )
+
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""
         if settings.academy_eval_interval_sec > 0 and self._curriculum_task is None:
@@ -487,3 +498,6 @@ class Orchestrator:
         if self._auto_director is not None:
             await self._auto_director.stop()
             self._auto_director = None
+        if self._streak_watcher is not None:
+            await self._streak_watcher.stop()
+            self._streak_watcher = None
