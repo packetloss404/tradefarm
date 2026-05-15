@@ -1,6 +1,12 @@
-# TradeFarm — unattended auto-restart wrapper for `npm run dev`.
+# TradeFarm — unattended auto-restart wrapper for `npm run <Target>`.
 # Survives Tauri/desktop-sleep exits that would otherwise cascade-kill the rig.
 # Ctrl+C breaks the loop cleanly. 5 crashes within 60s trips the circuit breaker.
+#
+# Default target is "dev" (full local rig). Use "broadcast" on the broadcast VM
+# where the dashboard runs separately on the operator workstation.
+param(
+    [string]$Target = "dev"
+)
 Set-Location -LiteralPath $PSScriptRoot
 
 $logDir = Join-Path $PSScriptRoot 'dev'
@@ -21,14 +27,14 @@ function Write-Event {
     Add-Content -Path $logFile -Value $line
 }
 
-Write-Event "autorun starting — wrapping 'npm run dev' (Ctrl+C to stop)" 'Cyan'
+Write-Event "autorun starting — wrapping 'npm run $Target' (Ctrl+C to stop)" 'Cyan'
 
 try {
     while ($true) {
-        Write-Event "starting npm run dev" 'Cyan'
+        Write-Event "starting npm run $Target" 'Cyan'
         # Run in the foreground so child processes inherit our console and
         # Ctrl+C propagates. npm.cmd is the Windows shim; & invokes it.
-        & npm.cmd run dev
+        & npm.cmd run $Target
         $code = $LASTEXITCODE
 
         $color = if ($code -eq 0) { 'Yellow' } else { 'Red' }
