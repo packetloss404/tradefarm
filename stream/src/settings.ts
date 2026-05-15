@@ -30,6 +30,11 @@ export type StreamSettings = {
   // 1920×1080 frame (Scoreboard / Leaderboard / Race Lanes / Farm grid /
   // Plays / Lower third / Ticker). The two are mutually exclusive at runtime.
   layoutMode: "scenes" | "v1-broadcast";
+  // When real YouTube Live Chat messages haven't arrived recently (or ever),
+  // the chat strip falls back to the simulated audience source if this is on.
+  // Operator-controlled — the app never auto-toggles this. Default true so
+  // dev mode and off-air rehearsals still show a populated strip.
+  simulatedChatFallback: boolean;
 };
 
 export const DEFAULT_SETTINGS: StreamSettings = {
@@ -49,6 +54,7 @@ export const DEFAULT_SETTINGS: StreamSettings = {
   audioVolume: 0.6,
   crtEnabled: false,
   layoutMode: "scenes",
+  simulatedChatFallback: true,
 };
 
 const SETTINGS_FILE = "stream-settings.json";

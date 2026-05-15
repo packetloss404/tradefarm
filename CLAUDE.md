@@ -100,6 +100,47 @@ control it from the workstation:
 10. **Writing `.env` via admin panel** uses `python-dotenv.set_key` with
     `quote_mode="never"`. Comma-separated lists (e.g. `DISABLED_STRATEGIES`)
     are the chosen format — don't switch to JSON.
+11. **YouTube chat credentials are `.env`-only.** They're sensitive, so they
+    are NOT in `admin.py`'s `EDITABLE` allowlist — the admin panel can't
+    leak or mutate them. The poller self-disables when any of them are
+    missing; first poll seeds the pagination cursor without publishing so
+    a restart doesn't replay chat history.
+
+## YouTube chat setup
+
+The stream broadcasts to YouTube, and we surface the live chat into the
+dashboard via the YouTube Data API v3. One-time setup:
+
+1. **Google Cloud Console → APIs & Services → Library:** enable
+   *YouTube Data API v3*.
+2. **APIs & Services → Credentials:** create an *OAuth 2.0 Client ID* of
+   type **Desktop app**. Note the client_id and client_secret.
+3. **APIs & Services → OAuth consent screen:** add your YouTube Google
+   account under "Test users" (required while the app is in Testing mode).
+4. Run the helper to capture a refresh token:
+   ```bash
+   uv run python -m tradefarm.tools.youtube_auth
+   ```
+   It will prompt for the client_id / client_secret, open a localhost
+   one-shot HTTP server, print an auth URL — open it in your browser, grant
+   `youtube.readonly`, and the script prints the refresh token to copy into
+   `.env`:
+   ```
+   YOUTUBE_CHAT_ENABLED=true
+   YOUTUBE_CLIENT_ID=...
+   YOUTUBE_CLIENT_SECRET=...
+   YOUTUBE_REFRESH_TOKEN=...
+   ```
+5. Restart the backend. The `YouTubeChatPoller` (started inside
+   `Orchestrator.start_background`) discovers the active broadcast,
+   subscribes to live chat, and publishes each new message as a
+   `chat_message` event on the WS bus.
+
+**Quota.** The YouTube Data API v3 ships with a 10,000 units/day default
+quota. `liveChatMessages.list` is 1 unit per call; honoring the server's
+`pollingIntervalMillis` (typically 3-5s) keeps usage well inside quota for
+a sub-12-hr broadcast. For all-day streaming, request a quota increase in
+the Google Cloud Console (free).
 
 ## Architecture landmarks
 
@@ -119,6 +160,14 @@ control it from the workstation:
   when `execution_mode == "alpaca_paper"`. It uses
   `self._optimistic_marks: dict[client_order_id, mark_price]` which the
   scheduler populates at submit time.
+- **YouTube chat poller** lives in
+  `src/tradefarm/orchestrator/youtube_chat.py`. Started unconditionally
+  from `start_background()`; the poller's own `_enabled()` check keeps it
+  dormant unless all four `youtube_*` settings are populated. OAuth refresh
+  is handled inline (no `google-auth` dependency); on 401 the poller
+  refreshes the access token once and retries. Messages are published as
+  `chat_message` events with `source: "youtube"` so the frontend ChatStrip
+  can prioritize them over the simulated source.
 
 ## Conventions
 

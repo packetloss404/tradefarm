@@ -7,12 +7,17 @@ import { PromotionToast } from "../components/PromotionToast";
 import { LowerThird } from "../components/LowerThird";
 import { MacroFireBurst } from "../components/MacroFireBurst";
 import { ChapterBanner } from "../components/ChapterBanner";
-import { SimulatedChatStrip } from "../components/SimulatedChatStrip";
+import { ChatStrip } from "../components/ChatStrip";
 import { useCommentary } from "../hooks/useCommentary";
 import { useMarketClock } from "../hooks/useMarketClock";
 import { useChapter } from "../hooks/useChapter";
 import type { StreamSnapshot } from "../hooks/useStreamData";
-import type { BannerState, CommentaryState, MacroFireState } from "../hooks/useStreamCommands";
+import type {
+  BannerState,
+  CommentaryState,
+  MacroFireState,
+  RealtimeChatMessage,
+} from "../hooks/useStreamCommands";
 import { HeroBody } from "./HeroBody";
 import { LeaderboardScene } from "./LeaderboardScene";
 import { BrainScene } from "./BrainScene";
@@ -62,6 +67,8 @@ export function SceneRotator({
   macroFire,
   pinAgentId,
   commentary,
+  realtimeChat,
+  simulatedChatFallback,
 }: {
   snapshot: StreamSnapshot;
   rotationSec: number;
@@ -73,6 +80,8 @@ export function SceneRotator({
   macroFire?: MacroFireState | null;
   pinAgentId: number | null;
   commentary?: CommentaryState | null;
+  realtimeChat: RealtimeChatMessage[];
+  simulatedChatFallback: boolean;
 }) {
   const { phase } = useMarketClock();
   const chapter = useChapter();
@@ -170,7 +179,11 @@ export function SceneRotator({
         <PromotionToast promotions={snapshot.promotions} />
         <CommentaryCaption highlight={commentaryFeed.current} />
         <LowerThird banner={banner ?? null} />
-        <SimulatedChatStrip snapshot={snapshot} />
+        <ChatStrip
+          snapshot={snapshot}
+          realtimeMessages={realtimeChat}
+          simulatedFallback={simulatedChatFallback}
+        />
         <MacroFireBurst event={macroFire ?? null} />
         <ChapterBanner key={chapter.id} label={chapter.label} />
 

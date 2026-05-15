@@ -25,6 +25,7 @@ from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
 from tradefarm.orchestrator.auto_director import AutoDirector
 from tradefarm.orchestrator.commentary_loop import CommentaryLoop
 from tradefarm.orchestrator.streak_watcher import StreakWatcher
+from tradefarm.orchestrator.youtube_chat import YouTubeChatPoller
 from tradefarm.storage import journal, repo
 
 log = structlog.get_logger()
@@ -108,6 +109,9 @@ class Orchestrator:
         self._streak_watcher: StreakWatcher | None = None
         # Live LLM commentary — Bloomberg-style one-liner every ~45s.
         self._commentary_loop: CommentaryLoop | None = None
+        # YouTube Live Chat poller — surfaces real audience messages on the WS.
+        # Self-disables when credentials are absent; safe to always construct.
+        self._youtube_chat: YouTubeChatPoller | None = None
 
     @classmethod
     def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
@@ -416,6 +420,14 @@ class Orchestrator:
                 self._commentary_loop.start(), name="orch_commentary_loop_start",
             )
 
+        # YouTube Live Chat poller — always constructed; the poller itself
+        # checks ``settings.youtube_chat_enabled`` and stays dormant when off.
+        if self._youtube_chat is None:
+            self._youtube_chat = YouTubeChatPoller()
+            asyncio.create_task(
+                self._youtube_chat.start(), name="orch_youtube_chat_start",
+            )
+
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""
         if settings.academy_eval_interval_sec > 0 and self._curriculum_task is None:
@@ -514,3 +526,6 @@ class Orchestrator:
         if self._commentary_loop is not None:
             await self._commentary_loop.stop()
             self._commentary_loop = None
+        if self._youtube_chat is not None:
+            await self._youtube_chat.stop()
+            self._youtube_chat = None

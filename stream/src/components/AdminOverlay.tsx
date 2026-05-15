@@ -215,6 +215,13 @@ export function AdminOverlay({
                   onChange={(v) => setDraft({ ...draft, crtEnabled: v })}
                 />
               </div>
+              <div className="flex items-center gap-6">
+                <Toggle
+                  label="Simulated chat fallback (off-air / dev)"
+                  value={draft.simulatedChatFallback}
+                  onChange={(v) => setDraft({ ...draft, simulatedChatFallback: v })}
+                />
+              </div>
               <Field
                 label={`Audio volume: ${Math.round(draft.audioVolume * 100)}%`}
                 hint=""

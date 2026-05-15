@@ -94,6 +94,21 @@ class Settings(BaseSettings):
     academy_demote_cap_pct: float = Field(default=0.10, ge=0.0, le=1.0)
 
     # -------------------------------------------------------------------------
+    # YouTube Live Chat — poll the active broadcast's live chat via the
+    # YouTube Data API v3 and republish new messages on the WS as
+    # ``chat_message`` events. Credentials live in `.env` only (NOT exposed in
+    # the admin panel allowlist). Use ``uv run python -m tradefarm.tools.youtube_auth``
+    # to perform the one-time OAuth dance and capture a refresh token.
+    # -------------------------------------------------------------------------
+    youtube_chat_enabled: bool = False
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
+    youtube_refresh_token: str = ""
+    # Optional: pin to a specific live broadcast. When empty, the poller
+    # auto-detects via liveBroadcasts.list?broadcastStatus=active.
+    youtube_channel_id: str = ""
+
+    # -------------------------------------------------------------------------
     # Risk-based exits — apply to every open long regardless of brain.
     # First match fires a synthetic sell each tick: stop-loss, take-profit,
     # time-stop, trailing-stop (in that order).

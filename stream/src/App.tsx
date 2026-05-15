@@ -193,6 +193,8 @@ export default function App() {
             macroFire={cmds.macroFire}
             pinAgentId={cmds.pinAgentId}
             commentary={cmds.commentary}
+            realtimeChat={cmds.realtimeChat}
+            simulatedChatFallback={settings.simulatedChatFallback}
           />
         )}
       </AnimatePresence>

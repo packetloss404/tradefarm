@@ -4,6 +4,19 @@ import { useLiveEvents, type LiveEvent } from "../shared/useLiveEvents";
 import { streamAudio } from "../audio/StreamAudio";
 
 const HEARTBEAT_MS = 5_000;
+// Cap the in-memory realtime chat buffer. The strip only ever renders the
+// last ~15 messages, so anything beyond this is dead weight.
+const REALTIME_CHAT_CAP = 50;
+
+export type RealtimeChatMessage = {
+  id: string;
+  user: string;
+  text: string;
+  color: "neutral" | "member" | "moderator" | "owner";
+  source: "youtube";
+  at: string; // ISO timestamp from YouTube
+  receivedAt: number; // wall-clock ms; used for the 5-minute recency window
+};
 
 export type BannerState = {
   title: string;
@@ -55,6 +68,12 @@ export type StreamCommandsHandle = {
   // until the first emission. SceneRotator forwards this to useCommentary so
   // server-side LLM takes preempt the client-side template highlights.
   commentary: CommentaryState | null;
+  // Rolling buffer of real chat messages pushed by the backend's YouTube
+  // Live Chat poller via `chat_message` events. Capped at REALTIME_CHAT_CAP
+  // (FIFO eviction); the chat strip decides how many to actually render.
+  // Empty array means "no real chat seen this session" — the strip then
+  // falls back to simulated messages if `simulatedChatFallback` is on.
+  realtimeChat: RealtimeChatMessage[];
 };
 
 export type UseStreamCommandsArgs = {
@@ -120,6 +139,10 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   const [macroFire, setMacroFire] = useState<MacroFireState | null>(null);
   const [pinAgentId, setPinAgentId] = useState<number | null>(null);
   const [commentary, setCommentary] = useState<CommentaryState | null>(null);
+  const [realtimeChat, setRealtimeChat] = useState<RealtimeChatMessage[]>([]);
+  // Dedup ring so a brief WS reconnect (which sometimes replays the last
+  // few messages) doesn't double-render the same chat row.
+  const seenChatIds = useRef<Set<string>>(new Set());
   const [rotationEnabledOverride, setRotationEnabledOverride] = useState<boolean | null>(null);
   const [crtEnabledOverride, setCrtEnabledOverride] = useState<boolean | null>(null);
   const [rotationSecOverride, setRotationSecOverride] = useState<number | null>(null);
@@ -251,6 +274,41 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           });
           break;
         }
+        case "chat_message": {
+          const p = ev.payload;
+          if (typeof p.id !== "string" || p.id.length === 0) break;
+          if (typeof p.user !== "string" || p.user.length === 0) break;
+          if (typeof p.text !== "string" || p.text.length === 0) break;
+          if (seenChatIds.current.has(p.id)) break;
+          seenChatIds.current.add(p.id);
+          const color =
+            p.color === "member" || p.color === "moderator" || p.color === "owner"
+              ? p.color
+              : "neutral";
+          const msg: RealtimeChatMessage = {
+            id: p.id,
+            user: p.user,
+            text: p.text,
+            color,
+            source: "youtube",
+            at: typeof p.at === "string" ? p.at : new Date().toISOString(),
+            receivedAt: Date.now(),
+          };
+          setRealtimeChat((prev) => {
+            const next = [...prev, msg];
+            // FIFO trim once we cross the cap. Also prune the dedup set so it
+            // doesn't grow unbounded over a long session — keep only ids that
+            // are still in the visible buffer plus a small lookback.
+            if (next.length > REALTIME_CHAT_CAP) {
+              const evicted = next.slice(0, next.length - REALTIME_CHAT_CAP);
+              const trimmed = next.slice(next.length - REALTIME_CHAT_CAP);
+              for (const e of evicted) seenChatIds.current.delete(e.id);
+              return trimmed;
+            }
+            return next;
+          });
+          break;
+        }
         default:
           break;
       }
@@ -321,5 +379,6 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     macroFire,
     pinAgentId,
     commentary,
+    realtimeChat,
   };
 }

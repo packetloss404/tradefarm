@@ -48,6 +48,14 @@ export type StreamCommentaryPayload = {
   kind: "color" | "play_by_play";
   source: "llm" | "fallback";
 };
+export type ChatMessagePayload = {
+  id: string;
+  user: string;
+  text: string;
+  color?: "neutral" | "member" | "moderator" | "owner";
+  source: "youtube";
+  at: string;
+};
 
 export type LiveEvent =
   | { type: "tick"; ts: string; payload: TickPayload }
@@ -69,7 +77,8 @@ export type LiveEvent =
   | { type: "stream_cadence"; ts: string; payload: { sec: number } }
   | { type: "stream_fullscreen"; ts: string; payload: { enabled: boolean } }
   | { type: "stream_macro_fired"; ts: string; payload: StreamMacroFiredPayload }
-  | { type: "stream_commentary"; ts: string; payload: StreamCommentaryPayload };
+  | { type: "stream_commentary"; ts: string; payload: StreamCommentaryPayload }
+  | { type: "chat_message"; ts: string; payload: ChatMessagePayload };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 
