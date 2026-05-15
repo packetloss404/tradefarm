@@ -9,7 +9,7 @@ import { MacroFireBurst } from "../components/MacroFireBurst";
 import { useCommentary } from "../hooks/useCommentary";
 import { useMarketClock } from "../hooks/useMarketClock";
 import type { StreamSnapshot } from "../hooks/useStreamData";
-import type { BannerState, MacroFireState } from "../hooks/useStreamCommands";
+import type { BannerState, CommentaryState, MacroFireState } from "../hooks/useStreamCommands";
 import { HeroBody } from "./HeroBody";
 import { LeaderboardScene } from "./LeaderboardScene";
 import { BrainScene } from "./BrainScene";
@@ -37,6 +37,7 @@ export function SceneRotator({
   banner,
   macroFire,
   pinAgentId,
+  commentary,
 }: {
   snapshot: StreamSnapshot;
   rotationSec: number;
@@ -47,6 +48,7 @@ export function SceneRotator({
   banner?: BannerState | null;
   macroFire?: MacroFireState | null;
   pinAgentId: number | null;
+  commentary?: CommentaryState | null;
 }) {
   const { phase } = useMarketClock();
 
@@ -93,11 +95,12 @@ export function SceneRotator({
         ? "hero"
         : (cycle[idx] ?? "hero");
 
-  const commentary = useCommentary({
+  const commentaryFeed = useCommentary({
     agents: snapshot.agents,
     fills: snapshot.fills,
     promotions: snapshot.promotions,
     enabled: commentaryEnabled,
+    commentary: commentary ?? null,
   });
 
   return (
@@ -127,7 +130,7 @@ export function SceneRotator({
         </AnimatePresence>
 
         <PromotionToast promotions={snapshot.promotions} />
-        <CommentaryCaption highlight={commentary.current} />
+        <CommentaryCaption highlight={commentaryFeed.current} />
         <LowerThird banner={banner ?? null} />
         <MacroFireBurst event={macroFire ?? null} />
 

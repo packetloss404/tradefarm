@@ -7,6 +7,7 @@ const KIND_TONE: Record<Highlight["kind"], { ring: string; bg: string; label: st
   demotion:   { ring: "ring-rose-500/40",    bg: "bg-rose-500/10",    label: "Demotion" },
   hot_tick:   { ring: "ring-sky-500/40",     bg: "bg-sky-500/10",     label: "Hot Tick" },
   glory:      { ring: "ring-yellow-500/40",  bg: "bg-yellow-500/10",  label: "Glory" },
+  commentary: { ring: "ring-violet-500/40",  bg: "bg-violet-500/10",  label: "Commentary" },
 };
 
 export function CommentaryCaption({ highlight }: { highlight: Highlight | null }) {

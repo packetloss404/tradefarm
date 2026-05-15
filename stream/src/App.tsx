@@ -192,6 +192,7 @@ export default function App() {
             banner={cmds.banner}
             macroFire={cmds.macroFire}
             pinAgentId={cmds.pinAgentId}
+            commentary={cmds.commentary}
           />
         )}
       </AnimatePresence>

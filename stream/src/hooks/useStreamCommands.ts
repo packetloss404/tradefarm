@@ -20,6 +20,14 @@ export type MacroFireState = {
   firedAt: number;
 };
 
+export type CommentaryState = {
+  id: string;
+  text: string;
+  kind: "color" | "play_by_play";
+  source: "llm" | "fallback";
+  receivedAt: number;
+};
+
 export type StreamCommandsHandle = {
   forceSceneId: string | null;
   setForceScene: (id: string | null) => void;
@@ -43,6 +51,10 @@ export type StreamCommandsHandle = {
   // no pin is active. Hero/Brain scenes consume this to override their
   // default sort/sample logic and focus on a single agent.
   pinAgentId: number | null;
+  // Most-recent live commentary pushed by the backend's CommentaryLoop. Null
+  // until the first emission. SceneRotator forwards this to useCommentary so
+  // server-side LLM takes preempt the client-side template highlights.
+  commentary: CommentaryState | null;
 };
 
 export type UseStreamCommandsArgs = {
@@ -107,6 +119,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [macroFire, setMacroFire] = useState<MacroFireState | null>(null);
   const [pinAgentId, setPinAgentId] = useState<number | null>(null);
+  const [commentary, setCommentary] = useState<CommentaryState | null>(null);
   const [rotationEnabledOverride, setRotationEnabledOverride] = useState<boolean | null>(null);
   const [crtEnabledOverride, setCrtEnabledOverride] = useState<boolean | null>(null);
   const [rotationSecOverride, setRotationSecOverride] = useState<number | null>(null);
@@ -223,6 +236,21 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           });
           break;
         }
+        case "stream_commentary": {
+          const p = ev.payload;
+          if (typeof p.id !== "string" || p.id.length === 0) break;
+          if (typeof p.text !== "string" || p.text.length === 0) break;
+          const kind = p.kind === "play_by_play" ? "play_by_play" : "color";
+          const source = p.source === "llm" ? "llm" : "fallback";
+          setCommentary({
+            id: p.id,
+            text: p.text,
+            kind,
+            source,
+            receivedAt: Date.now(),
+          });
+          break;
+        }
         default:
           break;
       }
@@ -292,5 +320,6 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     rotationSec,
     macroFire,
     pinAgentId,
+    commentary,
   };
 }

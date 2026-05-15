@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { FillEvent, PromotionEvent } from "./useStreamData";
 import type { AgentRow } from "../shared/api";
+import type { CommentaryState } from "./useStreamCommands";
 
 export type Highlight = {
   id: string;
-  kind: "big_fill" | "promotion" | "demotion" | "hot_tick" | "glory";
+  kind: "big_fill" | "promotion" | "demotion" | "hot_tick" | "glory" | "commentary";
   text: string;
   at: number;
 };
@@ -22,23 +23,28 @@ function nameForAgent(agents: AgentRow[], id: number): string {
 
 /**
  * Detects stream-worthy moments client-side and emits short caption strings.
- * No live LLM calls in v1 (templates only).
+ * Now also accepts server-pushed LLM commentary (`commentary` prop) which
+ * preempts any active template highlight — server takes are richer and varied,
+ * templates are the fallback when the server has nothing to say.
  *
  * Triggers:
  *   - fill with notional >= BIG_FILL_NOTIONAL
  *   - promotion / demotion event
  *   - >= HOT_TICK_FILL_COUNT fills inside the same tick window
+ *   - server-pushed `stream_commentary` (preempts current highlight)
  */
 export function useCommentary(opts: {
   agents: AgentRow[];
   fills: FillEvent[];
   promotions: PromotionEvent[];
   enabled: boolean;
+  commentary?: CommentaryState | null;
 }): { current: Highlight | null; queueSize: number } {
-  const { agents, fills, promotions, enabled } = opts;
+  const { agents, fills, promotions, enabled, commentary } = opts;
   const [queue, setQueue] = useState<Highlight[]>([]);
   const seenFillKeys = useRef(new Set<string>());
   const seenPromotionKeys = useRef(new Set<string>());
+  const seenCommentaryIds = useRef(new Set<string>());
   const lastHotTickAt = useRef<number>(0);
 
   // Big-fill detection
@@ -109,6 +115,24 @@ export function useCommentary(opts: {
     }, DWELL_MS);
     return () => clearTimeout(t);
   }, [current, queue]);
+
+  // Server commentary preempts whatever is on-screen. We swap `current`
+  // directly (no queueing) so the LLM take lands immediately, then dwell it
+  // for DWELL_MS the same way templates dwell.
+  useEffect(() => {
+    if (!enabled || !commentary) return;
+    if (seenCommentaryIds.current.has(commentary.id)) return;
+    seenCommentaryIds.current.add(commentary.id);
+    const hl: Highlight = {
+      id: `commentary-${commentary.id}`,
+      kind: "commentary",
+      text: commentary.text,
+      at: Date.now(),
+    };
+    setCurrent(hl);
+    const t = setTimeout(() => setCurrent(null), DWELL_MS);
+    return () => clearTimeout(t);
+  }, [commentary, enabled]);
 
   return { current, queueSize: queue.length };
 }

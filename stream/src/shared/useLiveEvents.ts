@@ -42,6 +42,12 @@ export type StreamMacroFiredPayload = {
   color?: "profit" | "loss" | "neutral";
   subtitle?: string;
 };
+export type StreamCommentaryPayload = {
+  id: string;
+  text: string;
+  kind: "color" | "play_by_play";
+  source: "llm" | "fallback";
+};
 
 export type LiveEvent =
   | { type: "tick"; ts: string; payload: TickPayload }
@@ -62,7 +68,8 @@ export type LiveEvent =
   | { type: "stream_crt"; ts: string; payload: { enabled: boolean } }
   | { type: "stream_cadence"; ts: string; payload: { sec: number } }
   | { type: "stream_fullscreen"; ts: string; payload: { enabled: boolean } }
-  | { type: "stream_macro_fired"; ts: string; payload: StreamMacroFiredPayload };
+  | { type: "stream_macro_fired"; ts: string; payload: StreamMacroFiredPayload }
+  | { type: "stream_commentary"; ts: string; payload: StreamCommentaryPayload };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 

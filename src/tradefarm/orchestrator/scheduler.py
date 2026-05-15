@@ -23,6 +23,7 @@ from tradefarm.risk.manager import RiskManager
 from tradefarm.api.events import publish_event
 from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
 from tradefarm.orchestrator.auto_director import AutoDirector
+from tradefarm.orchestrator.commentary_loop import CommentaryLoop
 from tradefarm.orchestrator.streak_watcher import StreakWatcher
 from tradefarm.storage import journal, repo
 
@@ -105,6 +106,8 @@ class Orchestrator:
         self._auto_director: AutoDirector | None = None
         # Streak watcher — broadcasts macros based on trade-history patterns.
         self._streak_watcher: StreakWatcher | None = None
+        # Live LLM commentary — Bloomberg-style one-liner every ~45s.
+        self._commentary_loop: CommentaryLoop | None = None
 
     @classmethod
     def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
@@ -406,6 +409,13 @@ class Orchestrator:
                 self._streak_watcher.start(), name="orch_streak_watcher_start",
             )
 
+        # Live LLM commentary — always on; Bloomberg-style one-liner every ~45s.
+        if self._commentary_loop is None:
+            self._commentary_loop = CommentaryLoop(orch=self)
+            asyncio.create_task(
+                self._commentary_loop.start(), name="orch_commentary_loop_start",
+            )
+
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""
         if settings.academy_eval_interval_sec > 0 and self._curriculum_task is None:
@@ -501,3 +511,6 @@ class Orchestrator:
         if self._streak_watcher is not None:
             await self._streak_watcher.stop()
             self._streak_watcher = None
+        if self._commentary_loop is not None:
+            await self._commentary_loop.stop()
+            self._commentary_loop = None
