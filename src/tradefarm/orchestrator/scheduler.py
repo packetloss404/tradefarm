@@ -13,6 +13,7 @@ from tradefarm.agents.lstm_agent import LstmAgent
 from tradefarm.agents.lstm_llm_agent import LstmLlmAgent
 from tradefarm.agents.lstm_model import model_path
 from tradefarm.agents.momentum import MomentumAgent
+from tradefarm.agents.names import agent_display_name
 from tradefarm.config import settings
 from tradefarm.data.eodhd import EodhdClient
 from tradefarm.data.universe import default_universe
@@ -148,17 +149,18 @@ class Orchestrator:
             has_model = model_path(symbol).exists()
 
             slot = i % 3  # 0=momentum, 1=lstm, 2=lstm+llm
+            name = agent_display_name(i)
             if slot == 2 and has_model and overlay is not None:
                 strategy = LstmLlmAgent.strategy_name
-                state = AgentState(id=i, name=f"agent-{i:03d}", strategy=strategy, book=book)
+                state = AgentState(id=i, name=name, strategy=strategy, book=book)
                 agents.append(LstmLlmAgent(state, risk, symbol=symbol, overlay=overlay))
             elif slot == 1 and has_model:
                 strategy = LstmAgent.strategy_name
-                state = AgentState(id=i, name=f"agent-{i:03d}", strategy=strategy, book=book)
+                state = AgentState(id=i, name=name, strategy=strategy, book=book)
                 agents.append(LstmAgent(state, risk, symbol=symbol))
             else:
                 strategy = MomentumAgent.strategy_name
-                state = AgentState(id=i, name=f"agent-{i:03d}", strategy=strategy, book=book)
+                state = AgentState(id=i, name=name, strategy=strategy, book=book)
                 agents.append(MomentumAgent(state, risk, symbol=symbol))
         return cls(agents)
 

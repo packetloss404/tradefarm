@@ -23,17 +23,25 @@ __all__ = [
 async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital: float) -> None:
     async with SessionLocal() as session:
         existing = (await session.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
-        if existing is not None and existing.strategy != strategy:
-            # Strategy reassignment on restart (e.g. LSTM model trained since last run).
-            existing.strategy = strategy
-            await session.commit()
+        if existing is not None:
+            dirty = False
+            if existing.strategy != strategy:
+                # Strategy reassignment on restart (e.g. LSTM model trained since last run).
+                existing.strategy = strategy
+                dirty = True
+            if existing.name != name:
+                # Display-name refresh — names.py is the source of truth, so a
+                # rename rule change should propagate to historical DB rows too.
+                existing.name = name
+                dirty = True
+            if dirty:
+                await session.commit()
             return
-        if existing is None:
-            session.add(Agent(
-                id=agent_id, name=name, strategy=strategy,
-                starting_capital=starting_capital, cash=starting_capital, status="waiting",
-            ))
-            await session.commit()
+        session.add(Agent(
+            id=agent_id, name=name, strategy=strategy,
+            starting_capital=starting_capital, cash=starting_capital, status="waiting",
+        ))
+        await session.commit()
 
 
 async def record_trade(agent_id: int, symbol: str, side: str, qty: float, price: float, reason: str) -> None:
