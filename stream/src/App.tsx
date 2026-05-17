@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { SceneRotator } from "./scenes/SceneRotator";
 import { PreRollScene } from "./scenes/PreRollScene";
@@ -42,6 +42,7 @@ export default function App() {
   const [settings, setSettings] = useState<StreamSettings | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
   const [prerollDone, setPrerollDone] = useState(false);
+  const handlePrerollComplete = useCallback(() => setPrerollDone(true), []);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load persisted settings once. Also prime the audio context — browsers
@@ -179,7 +180,7 @@ export default function App() {
             key="preroll"
             snapshot={snapshot}
             durationSec={settings.prerollDurationSec}
-            onComplete={() => setPrerollDone(true)}
+            onComplete={handlePrerollComplete}
           />
         ) : broadcastMode ? (
           <V1Broadcast key="v1-broadcast" snapshot={snapshot} />
