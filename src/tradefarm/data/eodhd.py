@@ -6,8 +6,8 @@ import pandas as pd
 from pydantic import BaseModel
 
 from tradefarm.config import settings
+from tradefarm.data import bar_cache
 
-CACHE_DIR = Path("data_cache")
 BASE_URL = "https://eodhd.com/api"
 
 
@@ -25,11 +25,6 @@ class EodhdClient:
     def __init__(self, api_key: str | None = None, *, use_cache: bool = True) -> None:
         self.api_key = api_key or settings.eodhd_api_key
         self.use_cache = use_cache
-        if use_cache:
-            CACHE_DIR.mkdir(exist_ok=True)
-
-    def _cache_path(self, symbol: str, start: date, end: date) -> Path:
-        return CACHE_DIR / f"eod_{symbol}_{start}_{end}.parquet"
 
     async def get_eod(
         self,
@@ -39,9 +34,10 @@ class EodhdClient:
         end: date,
         exchange: str = "US",
     ) -> pd.DataFrame:
-        cache = self._cache_path(symbol, start, end)
-        if self.use_cache and cache.exists():
-            return pd.read_parquet(cache)
+        if self.use_cache:
+            cached = bar_cache.load(symbol)
+            if bar_cache.covers(cached, start, end):
+                return bar_cache.slice_range(cached, start, end)
 
         if not self.api_key:
             raise RuntimeError("EODHD_API_KEY not configured")
@@ -64,10 +60,8 @@ class EodhdClient:
             return df
         df["date"] = pd.to_datetime(df["date"]).dt.date
         if self.use_cache:
-            try:
-                df.to_parquet(cache)
-            except Exception:
-                pass  # cache miss is non-fatal — fall back to live fetch next time
+            merged = bar_cache.merge(symbol, df)
+            return bar_cache.slice_range(merged, start, end)
         return df
 
     async def get_real_time(self, symbol: str, exchange: str = "US") -> dict:
