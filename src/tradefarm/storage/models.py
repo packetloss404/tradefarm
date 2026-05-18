@@ -55,6 +55,11 @@ class Trade(Base):
     price: Mapped[float] = mapped_column(Float)
     executed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     reason: Mapped[str] = mapped_column(String(256), default="")
+    # NULL for live trading; set by the session runner to tag every fill
+    # produced by a replay so downstream beat detection can pull a single
+    # session's worth of activity. Indexed for the "all trades in session
+    # X" query pattern.
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     agent: Mapped[Agent] = relationship(back_populates="trades")
 
@@ -68,6 +73,8 @@ class PnlSnapshot(Base):
     realized_pnl: Mapped[float] = mapped_column(Float)
     unrealized_pnl: Mapped[float] = mapped_column(Float)
     taken_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    # NULL for live snapshots; set by the session runner. See Trade.session_id.
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class AgentNote(Base):
@@ -92,6 +99,8 @@ class AgentNote(Base):
     outcome_trade_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outcome_realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     outcome_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # NULL for live notes; set by the session runner. See Trade.session_id.
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class AcademyPromotion(Base):
