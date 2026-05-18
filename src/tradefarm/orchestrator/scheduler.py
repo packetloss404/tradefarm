@@ -171,7 +171,8 @@ class Orchestrator:
             )
 
     async def _load_bars(self, symbols: list[str]) -> dict[str, pd.DataFrame]:
-        end = date.today()
+        from tradefarm.runtime.clock import today_utc
+        end = today_utc()
         start = end - timedelta(days=180)
         out: dict[str, pd.DataFrame] = {}
         for s in symbols:
