@@ -30,6 +30,7 @@ from typing import Any
 import structlog
 from sqlalchemy import select
 
+from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import Agent, AgentNote
 
@@ -97,6 +98,7 @@ async def write_note(
                 symbol=symbol,
                 content=content or "",
                 note_metadata=_encode_meta(metadata),
+                session_id=current_session_id(),
             )
             session.add(note)
             await session.commit()

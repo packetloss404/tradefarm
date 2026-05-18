@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 
 from tradefarm.execution.virtual_book import VirtualBook
 from tradefarm.runtime.clock import now_utc
+from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import Agent, PnlSnapshot, Position, Trade
@@ -49,6 +50,7 @@ async def record_trade(agent_id: int, symbol: str, side: str, qty: float, price:
     async with SessionLocal() as session:
         session.add(Trade(
             agent_id=agent_id, symbol=symbol, side=side, qty=qty, price=price, reason=reason,
+            session_id=current_session_id(),
         ))
         await session.commit()
 
@@ -60,6 +62,7 @@ async def snapshot_pnl(agent_id: int, book: VirtualBook, marks: dict[str, float]
             equity=book.equity(marks),
             realized_pnl=book.realized_pnl,
             unrealized_pnl=book.unrealized_pnl(marks),
+            session_id=current_session_id(),
         ))
         await session.commit()
 
