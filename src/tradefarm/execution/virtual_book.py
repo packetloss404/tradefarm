@@ -7,11 +7,13 @@ the agent that placed the parent order.
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
+
+from tradefarm.runtime.clock import now_utc
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_utc()
 
 
 @dataclass

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 
 from tradefarm.execution.virtual_book import VirtualBook
+from tradefarm.runtime.clock import now_utc
 from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import Agent, PnlSnapshot, Position, Trade
@@ -94,7 +95,7 @@ async def strategy_summary() -> list[dict]:
                   isouter=True)
         )).all()
 
-        midnight_utc = datetime.combine(datetime.now(timezone.utc).date(), datetime.min.time())
+        midnight_utc = datetime.combine(now_utc().date(), datetime.min.time())
         trade_rows = (await session.execute(
             select(Agent.strategy, func.count(Trade.id))
             .join(Trade, Trade.agent_id == Agent.id)
@@ -138,7 +139,7 @@ async def strategy_summary() -> list[dict]:
 
 async def strategy_equity_timeseries(days: int = 7) -> list[dict]:
     """For each (day, strategy), sum of each agent's last snapshot that day. UTC day boundary."""
-    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
+    cutoff = now_utc().date() - timedelta(days=days)
     async with SessionLocal() as session:
         sub = (
             select(

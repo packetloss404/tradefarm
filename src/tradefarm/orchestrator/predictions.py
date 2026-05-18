@@ -27,6 +27,7 @@ import structlog
 
 from tradefarm.api.events import publish_event
 from tradefarm.market.hours import ET
+from tradefarm.runtime.clock import now_utc
 
 if TYPE_CHECKING:
     from tradefarm.orchestrator.scheduler import Orchestrator
@@ -49,11 +50,11 @@ SPY_SYMBOL: str = "SPY"
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_utc()
 
 
 def _now_et() -> datetime:
-    return datetime.now(tz=ET)
+    return now_utc().astimezone(ET)
 
 
 @dataclass

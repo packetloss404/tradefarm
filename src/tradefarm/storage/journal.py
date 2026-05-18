@@ -133,10 +133,10 @@ async def close_outcome(
             note = (await session.execute(stmt)).scalar_one_or_none()
             if note is None:
                 return None
-            from datetime import datetime, timezone
+            from tradefarm.runtime.clock import now_utc
             note.outcome_realized_pnl = float(realized_pnl)
             note.outcome_trade_id = trade_id
-            note.outcome_closed_at = datetime.now(timezone.utc)
+            note.outcome_closed_at = now_utc()
             await session.commit()
             return note.id
     except Exception as e:

@@ -3,6 +3,8 @@ from zoneinfo import ZoneInfo
 
 import pandas_market_calendars as mcal
 
+from tradefarm.runtime.clock import now_utc
+
 NYSE = mcal.get_calendar("XNYS")
 ET = ZoneInfo("America/New_York")
 
@@ -11,7 +13,7 @@ RTH_CLOSE = time(16, 0)
 
 
 def now_et() -> datetime:
-    return datetime.now(tz=ET)
+    return now_utc().astimezone(ET)
 
 
 def is_market_open(dt: datetime | None = None) -> bool:

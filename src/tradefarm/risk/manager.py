@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 from tradefarm.execution.virtual_book import VirtualBook, VirtualPosition
+from tradefarm.runtime.clock import now_utc
 
 # Base (pre-multiplier) position-size cap. Phase 2 scales this by the rank
 # multiplier. Kept as a module-level constant so Phase 2 tests (and Phase 4's
@@ -37,7 +38,7 @@ class ExitTrigger:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_utc()
 
 
 class RiskManager:
