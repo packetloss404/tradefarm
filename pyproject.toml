@@ -34,6 +34,13 @@ dev = [
     "mypy>=1.11",
     "pillow>=12.2.0",
 ]
+vod = [
+    # Headless renderer (Session 4) drives the stream UI via Chromium.
+    # After `uv sync --extra vod` run `uv run playwright install chromium`.
+    # Downstream stages (stitcher / mixer / thumbnail) shell out to system
+    # `ffmpeg` — see docs/vod-build-roadmap.md.
+    "playwright>=1.40",
+]
 
 [build-system]
 requires = ["hatchling"]
