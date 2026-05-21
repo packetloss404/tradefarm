@@ -96,6 +96,20 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
         })
         return
 
+    # Path-traversal guard. A WS connection from anywhere CORS allows
+    # (the whole LAN, in this project's split-machine topology) can hit
+    # this handshake; an unsanitised session_id would let a peer read
+    # arbitrary `manifest.json` files anywhere reachable from cwd.
+    try:
+        replay_query._require_safe_session_id(session_id)
+    except ValueError as exc:
+        await ws.send_json({
+            "type": "hello",
+            "ts": _now_iso(),
+            "payload": {"replay": True, "error": str(exc)},
+        })
+        return
+
     try:
         manifest = replay_query.load_manifest(session_id)
     except FileNotFoundError:

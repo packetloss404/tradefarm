@@ -40,7 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tradefarm.render.stitch import DEFAULT_XFADE_SEC, ffmpeg_info
+from tradefarm.render.stitch import DEFAULT_XFADE_SEC, ffmpeg_info, load_reel_meta
 
 
 VO_LEAD_IN_SEC = 0.5     # delay from a beat's start before VO begins
@@ -185,19 +185,20 @@ def plan_mix(
     for v in vo_by_beat.values():
         v.sort(key=lambda t: t[0])
 
-    # Walk beats in on-screen order, computing each clip's start in the
-    # reel and threading VO onsets through it.
+    # Filter to beats that actually got rendered first — the stitcher
+    # only chained xfades between *existing* clips, so the mixer must
+    # use the same "rendered beats" list as the source of truth. Walking
+    # all of beat_order and `continue`-ing on missing sidecars used to
+    # subtract a phantom xfade after the second-to-last clip whenever a
+    # recap beat (default-skipped by the renderer) sat at the end of
+    # the day, drifting every VO onset by `xfade_sec`.
+    rendered = [bid for bid in beat_order if bid in sidecars]
+
     vo_lines: list[VoLine] = []
     clip_start = 0.0
-    for i, beat_id in enumerate(beat_order):
-        sidecar = sidecars.get(beat_id)
-        if sidecar is None:
-            continue  # beat that never got a clip (e.g. recap skip)
+    for i, beat_id in enumerate(rendered):
+        sidecar = sidecars[beat_id]
         clip_dur = _line_clip_duration_sec(sidecar)
-        # First clip starts at 0; thereafter the xfade overlap means the
-        # next clip's reel-start = prev_clip_start + prev_clip_dur - xfade
-        if vo_lines or (i == 0):
-            pass  # clip_start already correct for first beat
         # Lay out VO onsets within this clip.
         local_cursor = vo_lead_in_sec
         for line_idx, wav_path, dur in vo_by_beat.get(beat_id, []):
@@ -208,8 +209,8 @@ def plan_mix(
                 onset_sec=round(onset, 3),
             ))
             local_cursor += dur + 0.1  # small breath between lines
-        # Advance to the next clip.
-        clip_start += clip_dur - (xfade_sec if i < len(beat_order) - 1 else 0.0)
+        # Advance to the next clip. Last clip has no trailing xfade.
+        clip_start += clip_dur - (xfade_sec if i < len(rendered) - 1 else 0.0)
 
     return MixPlan(
         session_id=session_id,
@@ -335,7 +336,7 @@ def mix_session(
     music_path: Path | None = None,
     music_volume: float = DEFAULT_MUSIC_VOLUME,
     duck_reduction_db: float = DUCK_REDUCTION_DB,
-    xfade_sec: float = DEFAULT_XFADE_SEC,
+    xfade_sec: float | None = None,
     vo_lead_in_sec: float = VO_LEAD_IN_SEC,
     dry_run: bool = False,
 ) -> MixResult:
@@ -346,6 +347,14 @@ def mix_session(
 
     if not (sdir / "silent_reel.mp4").is_file():
         return MixResult(ok=False, error=f"silent_reel.mp4 not found in {sdir}")
+
+    # Prefer the xfade the stitcher actually used (persisted to
+    # reel.meta.json). Falls back to the operator's CLI flag, then the
+    # DEFAULT — so an operator who passes --xfade to the stitcher but
+    # forgets to pass it to the mixer can't silently drift the VO.
+    reel_meta = load_reel_meta(sdir)
+    if xfade_sec is None:
+        xfade_sec = float(reel_meta.get("xfade_sec", DEFAULT_XFADE_SEC))
 
     plan = plan_mix(
         session_id=session_id,

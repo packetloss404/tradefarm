@@ -87,13 +87,23 @@ def _ff_path(p: str | Path) -> str:
 def _ff_text(s: str) -> str:
     """Escape text for drawtext's `text='...'`. Order matters: backslash
     first, then the other meta-chars. CR/LF are dropped — drawtext
-    can't wrap and leaves them as literal box-glyphs."""
+    can't wrap and leaves them as literal box-glyphs.
+
+    Beats with operator-controlled or model-generated headlines can carry
+    `,` / `;` / `[` / `]` which ffmpeg's filter_complex uses as filter-
+    chain separators and stream-label delimiters. Escaping them here
+    closes a filter-graph-injection vector through caption text.
+    """
     cleaned = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     return (
         cleaned.replace("\\", r"\\")
                .replace(":", r"\:")
                .replace("'", r"\'")
                .replace("%", r"\%")
+               .replace(",", r"\,")
+               .replace(";", r"\;")
+               .replace("[", r"\[")
+               .replace("]", r"\]")
     )
 
 
@@ -595,6 +605,7 @@ def stitch_session(
     chain_cmd = build_xfade_command(intermediate_paths, plan=plan, out_path=out_path)
     ok, err = _run_one(chain_cmd, cleanup_on_fail=out_path)
     if ok:
+        _write_reel_meta(plan)
         return StitchResult(
             ok=True, plan=plan, out_path=out_path,
             elapsed_ms=(time.perf_counter() - started) * 1000,
@@ -615,11 +626,48 @@ def stitch_session(
                 error=f"pairwise step failed ({target.name}): {err.splitlines()[-1] if err else ''}",
                 fallback_used=True,
             )
+    _write_reel_meta(plan)
     return StitchResult(
         ok=True, plan=plan, out_path=out_path,
         elapsed_ms=(time.perf_counter() - started) * 1000,
         fallback_used=True,
     )
+
+
+def _write_reel_meta(plan: StitchPlan) -> None:
+    """Persist the stitcher's choice of constants so mix.py + yt.metadata
+    can read them back instead of trusting CLI defaults. Same xfade /
+    fps / dimensions across stages is what keeps captions, VO onsets,
+    and chapter markers aligned."""
+    meta = {
+        "session_id": plan.session_id,
+        "xfade_sec": plan.xfade_sec,
+        "fps": plan.fps,
+        "width": plan.width,
+        "height": plan.height,
+        "captions": plan.captions,
+        "clip_count": len(plan.clips),
+        "clip_order": [c.beat_id for c in plan.clips],
+    }
+    target = plan.out_path.with_name("reel.meta.json")
+    try:
+        target.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except OSError:
+        # Best-effort — losing the metadata doesn't invalidate the reel.
+        pass
+
+
+def load_reel_meta(session_dir: Path) -> dict[str, Any]:
+    """Read the sidecar written by _write_reel_meta. Returns {} if the
+    stitcher hasn't run (callers should fall back to their CLI/default
+    constants)."""
+    p = session_dir / "reel.meta.json"
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 # ----- CLI -----------------------------------------------------------------

@@ -37,10 +37,33 @@ from typing import Any, Iterable
 
 DEFAULT_SESSIONS_DIR = Path("out/sessions")
 
+# Session ids are file-system identifiers; reject anything that could
+# escape `out/sessions/` or carry a leading dot. Real session ids come
+# from session.run as `s_<YYYY-MM-DD>_<6-hex>`; the regex is wider so
+# operators can hand-craft ids during dev (e.g. `s_smoke_test`).
+import re as _re
+
+_SAFE_SESSION_ID = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _require_safe_session_id(session_id: str) -> str:
+    """Raise ValueError if session_id contains path-traversal characters,
+    URL-encoded equivalents, or NUL bytes. Returns the id on success.
+    Called at every public entrypoint that uses session_id as a path
+    component — REST endpoints, WS handshake, CLI."""
+    if not isinstance(session_id, str) or not _SAFE_SESSION_ID.match(session_id):
+        raise ValueError(
+            f"invalid session_id {session_id!r}: must match "
+            f"[A-Za-z0-9][A-Za-z0-9_.-]{{0,127}}"
+        )
+    if ".." in session_id or session_id.startswith("."):
+        raise ValueError(f"invalid session_id {session_id!r}: traversal-like")
+    return session_id
+
 
 def manifest_path(session_id: str, sessions_dir: Path | None = None) -> Path:
     base = sessions_dir or DEFAULT_SESSIONS_DIR
-    return base / session_id / "manifest.json"
+    return base / _require_safe_session_id(session_id) / "manifest.json"
 
 
 def load_manifest(session_id: str, sessions_dir: Path | None = None) -> dict[str, Any]:

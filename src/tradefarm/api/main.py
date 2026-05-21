@@ -63,7 +63,14 @@ def _replay_static_meta(orch: Orchestrator) -> tuple[dict[int, dict], list[dict]
 
 
 def _load_replay_manifest(session_id: str) -> dict:
-    """Read the on-disk manifest for `session_id`; raise 404 if absent."""
+    """Read the on-disk manifest for `session_id`; raise 404 if absent.
+    Validates session_id against the safe-id regex before touching disk
+    so path-traversal attempts get a 400 instead of leaking the resolved
+    file path through a 404 detail."""
+    try:
+        replay_query._require_safe_session_id(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         return replay_query.load_manifest(session_id)
     except FileNotFoundError as exc:

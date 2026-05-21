@@ -206,13 +206,19 @@ def build_episode_meta(
     publish_at_iso: str | None = None,
     tags: list[str] | None = None,
     category_id: str = DEFAULT_CATEGORY_ID,
-    xfade_sec: float = 0.4,
+    xfade_sec: float | None = None,
 ) -> EpisodeMeta:
     sdir = sessions_dir / session_id
     beats = _load_beats(sdir / "beats.json")
     sidecars = _load_sidecars(sdir / "clips")
     script = _load_json(sdir / "script.json")
     manifest = _load_json(sdir / "manifest.json")
+
+    # Honour the xfade the stitcher actually used (so chapter markers
+    # align with the real reel timeline). Falls back to CLI default.
+    if xfade_sec is None:
+        from tradefarm.render.stitch import load_reel_meta
+        xfade_sec = float(load_reel_meta(sdir).get("xfade_sec", 0.4))
 
     # Title.
     title = (title_override or "").strip()

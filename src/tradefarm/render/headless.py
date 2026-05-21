@@ -291,6 +291,15 @@ async def _render_one(
         # reduces the chance the last animation frame is mid-transition
         # when the recorder cuts.
         await asyncio.sleep(job.duration_sec + 0.25)
+    except asyncio.CancelledError:
+        # Operator hit Ctrl-C. Tear down the context and re-raise so the
+        # outer loop's bare `except Exception` doesn't swallow this and
+        # keep rendering — was a real footgun.
+        try:
+            await context.close()
+        except Exception:
+            pass
+        raise
     except Exception as exc:  # noqa: BLE001
         # Don't let context.close() in cleanup swallow the original error.
         try:
@@ -462,6 +471,10 @@ async def render_session(
                         scene_ready_timeout_ms=scene_ready_timeout_ms,
                         goto_timeout_ms=goto_timeout_ms,
                     )
+                except asyncio.CancelledError:
+                    # Propagate Ctrl-C / task cancellation. Otherwise the
+                    # bare except below ate it and the loop kept running.
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     res = RenderResult(
                         job=job,
