@@ -96,6 +96,13 @@ export function StickyHeader({
           >
             {ticking ? "ticking…" : "Manual Tick"}
           </button>
+          <a
+            href="#vod-studio/beats"
+            className="rounded-sm border border-amber-700/50 bg-amber-900/20 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-900/40"
+            title="Post-production surfaces — beat picker, pipeline, session control, episode review"
+          >
+            VOD Studio
+          </a>
           <button
             onClick={onOpenAdmin}
             className="rounded-sm border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-700"

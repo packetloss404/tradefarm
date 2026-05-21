@@ -81,8 +81,17 @@ export default function App() {
 
   if (err) {
     return (
-      <div className="flex h-full items-center justify-center text-(--color-loss)">
-        Backend unreachable. Start with: <code className="ml-2 rounded bg-zinc-800 px-2 py-1 font-mono">uv run uvicorn tradefarm.api.main:app --reload</code>
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-(--color-loss)">
+        <div>
+          Backend unreachable. Start with: <code className="ml-2 rounded bg-zinc-800 px-2 py-1 font-mono">uv run uvicorn tradefarm.api.main:app --reload</code>
+        </div>
+        <a
+          href="#vod-studio/beats"
+          onClick={() => window.location.reload()}
+          className="rounded-sm border border-amber-700/50 bg-amber-900/20 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-900/40"
+        >
+          → VOD Studio (no backend needed)
+        </a>
       </div>
     );
   }

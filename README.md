@@ -28,9 +28,38 @@ edge for trading.
   cuts ~78% of API calls with no loss of trades
 - **Walk-forward backtester** — per-symbol Sharpe / CAGR / max-drawdown / win-rate,
   launchable from the admin modal
-- **Live dashboard** (Vite + React 19 + Tailwind v4) — today PnL, open positions,
-  monthly PnL chart, brain activity, strategy attribution, order status,
-  100-agent grid with click-through detail modal
+- **Multi-page dashboard** (Vite + React 19) — four hash-routed surfaces
+  sharing one theme (dark / light / amber-CRT with scanlines, density
+  switcher, all in a bottom-right tweaks panel):
+  - **Today** (`#today`) — hero strip, cost burn rail, live equity chart,
+    25×4 agent pixel grid, tonight's render pipeline, episode preview,
+    recent fills, detected moments. Reads live `/api/account`,
+    `/api/agents`, `/api/llm/stats`, and the `/ws` fill stream.
+  - **Episodes** (`#episodes`) — featured latest episode, 6-week P&L
+    heatmap, archive grid with a "beats-as-day-shape" sparkline per
+    card (mocked until the episodes endpoint exists).
+  - **Research** (`#research`) — 14-session pool equity vs $100k
+    baseline, top-10 leaderboard with rank-history sparklines, strategy
+    attribution diverging bars, storyline cards (rivalries, streaks,
+    leaderboard climbs) with 14-day activity ribbons.
+  - **Admin** (`#admin`) — kill switch + brain provider / execution /
+    strategies / academy / VOD pipeline / danger zone, live-editable
+    against `/api/admin/config` with debounced auto-save.
+  - Original single-page dashboard kept at `#legacy` as a fallback.
+- **VOD Studio** (`#vod-studio`) — post-production app for the day's
+  auto-generated 10-minute recap episode. Four operator surfaces:
+  - **Beat picker** (keystone) — preview pane, scrubber, timeline with
+    master/rejected lanes, editable per-beat caption, beat-list rail.
+    Toggle `IN`/`OUT` to recompute reel length.
+  - **Pipeline status** — 10 subsystems (session → beats → render →
+    stitch → script → TTS → mix → thumb → metadata → upload) with
+    progress + tail-of-log detail.
+  - **Session control** — REC indicator, live equity chart, 100-agent
+    roster grid, manifest counters, moments rail, fills feed; flips to
+    live backend data with the chrome's `mock ↔ live` toggle.
+  - **Episode review** — finished VOD thumbnail, editable title /
+    description, auto chapters from selected beats, tags, schedule +
+    upload strip.
 - **Standalone broadcast app** (Tauri 2 + React) — fullscreen 1920x1080 window
   with the isometric Agent World hero scene, top/bottom tickers, stat pillar,
   promotion toasts and template-driven commentary captions. Designed for OBS
@@ -63,6 +92,12 @@ src/tradefarm/
 ├── risk/            # per-symbol cap, portfolio SL/TP/time-stop/trailing
 └── storage/         # SQLAlchemy async models + repo + journal
 web/                 # Vite + React 19 + Tailwind v4 dashboard
+                     #   src/dash/   — new multi-page dashboard (Today,
+                     #                 Episodes, Research, Admin) + tweaks panel
+                     #   src/vod/    — VOD Studio (Beat picker, Pipeline,
+                     #                 Session control, Episode review)
+                     #   src/{App,components,hooks}/  — legacy single-page UI
+                     #                 (still mounted at #legacy)
 stream/              # Tauri 2 broadcast app (1920x1080 multi-scene rotator
                      #   for OBS Window Capture, with Web Audio cues)
 tests/               # pytest — virtual book, journal, ranks, retrieval,

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Dashboard · tradefarm</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0c0d10; color: #e7e8ec; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; min-height: 100%; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2e38; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3e48; }
+
+  @keyframes pulse-dot { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.5); opacity: 0.4; } }
+  .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+
+  @keyframes cursor-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+  .cursor-blink { animation: cursor-blink 1s step-end infinite; }
+
+  a { text-decoration: none; color: inherit; }
+
+  /* density-scoped tweaks (applied via data attribute on body) */
+  body[data-density="compact"] { font-size: 12px; }
+  body[data-density="cozy"] { font-size: 13px; }
+  body[data-density="roomy"] { font-size: 14px; }
+
+  /* CRT scanlines for amber theme */
+  body[data-theme="amber-crt"]::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(255, 179, 71, 0.06) 0 1px, transparent 1px 3px);
+    z-index: 1000;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="vod-data.jsx"></script>
+<script type="text/babel" src="dash-data.jsx"></script>
+<script type="text/babel" src="dash-shell.jsx"></script>
+<script type="text/babel" src="dash-today.jsx"></script>
+<script type="text/babel" src="dash-episodes.jsx"></script>
+<script type="text/babel" src="dash-research.jsx"></script>
+<script type="text/babel" src="dash-admin.jsx"></script>
+
+<script type="text/babel">
+  function App() {
+    const vod = useToday();
+    const [route, go] = useHashRoute('today');
+    const [tweaks, setTweak] = useDashTweaks();
+    const [tweaksOpen, setTweaksOpen] = React.useState(false);
+
+    // Apply theme/density to body so CRT scanlines + density css work
+    React.useEffect(() => {
+      document.body.setAttribute('data-theme', tweaks.theme);
+      document.body.setAttribute('data-density', tweaks.density);
+      document.body.style.background = TOKENS[tweaks.theme].bg;
+    }, [tweaks.theme, tweaks.density]);
+
+    const ctxValue = React.useMemo(() => ({
+      T: TOKENS[tweaks.theme],
+      D: DENSITY[tweaks.density] || DENSITY.comfortable,
+    }), [tweaks.theme, tweaks.density]);
+
+    const page = (() => {
+      switch (route) {
+        case 'episodes': return <EpisodesPage />;
+        case 'research': return <ResearchPage vod={vod} />;
+        case 'admin': return <AdminPage vod={vod} />;
+        case 'today':
+        default: return <TodayPage vod={vod} tweaks={tweaks} />;
+      }
+    })();
+
+    return (
+      <ThemeCtx.Provider value={ctxValue}>
+        <div data-screen-label={`Dashboard · ${route}`} style={{ minHeight: '100vh', background: ctxValue.T.bg, color: ctxValue.T.text }}>
+          <DashNav vod={vod} route={route} go={go} />
+          <div style={{ maxWidth: 1600, margin: '0 auto' }}>
+            {page}
+          </div>
+          <TweaksButton onClick={() => setTweaksOpen(o => !o)} />
+          <TweaksPanel tweaks={tweaks} setTweak={setTweak} open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
+        </div>
+      </ThemeCtx.Provider>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
