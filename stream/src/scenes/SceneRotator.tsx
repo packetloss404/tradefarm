@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { REPLAY } from "../shared/replayMode";
 import { TopTicker } from "../components/TopTicker";
 import { BottomTicker } from "../components/BottomTicker";
 import { CommentaryCaption } from "../components/CommentaryCaption";
@@ -146,12 +147,33 @@ export function SceneRotator({
     }
   }, [cycle, chapter.sceneWeights, currentScene]);
 
+  // `sceneReady` flips on the first animation frame after the scene
+  // mounts so the headless renderer's `waitForSelector` returns the
+  // moment Framer Motion has put the layout on screen — not before.
+  // Resets on scene change.
+  const [sceneReady, setSceneReady] = useState(false);
+
+  // Replay override: ?scene= in the URL pins the active scene without
+  // touching dashboard state. The headless renderer leans on this to
+  // capture a specific scene per beat. Other overrides (operator's
+  // forceSceneId, then the cadence-disabled "hero" default) still apply.
   const id: SceneId =
-    forceSceneId && (ORDER as readonly string[]).includes(forceSceneId)
-      ? (forceSceneId as SceneId)
-      : effectiveCadenceSec <= 0
-        ? "hero"
-        : currentScene;
+    REPLAY.scene && (ORDER as readonly string[]).includes(REPLAY.scene)
+      ? (REPLAY.scene as SceneId)
+      : forceSceneId && (ORDER as readonly string[]).includes(forceSceneId)
+        ? (forceSceneId as SceneId)
+        : effectiveCadenceSec <= 0
+          ? "hero"
+          : currentScene;
+
+  useEffect(() => {
+    setSceneReady(false);
+    const raf = requestAnimationFrame(() => {
+      // double rAF so layout + first paint have both settled.
+      requestAnimationFrame(() => setSceneReady(true));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [id]);
 
   const commentaryFeed = useCommentary({
     agents: snapshot.agents,
@@ -178,6 +200,11 @@ export function SceneRotator({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.5 }}
             className="absolute inset-0"
+            // Signals to the headless renderer that this scene is the
+            // one to capture. `data-scene-ready` flips to true after
+            // first paint via the effect below.
+            data-scene-active={id}
+            data-scene-ready={sceneReady ? "true" : "false"}
           >
             {id === "hero" && <HeroBody snapshot={snapshot} pinAgentId={pinAgentId} />}
             {id === "leaderboard" && <LeaderboardScene snapshot={snapshot} />}

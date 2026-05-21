@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountSummary, PromotionEventPayload, TickResult } from "./api";
+import { REPLAY } from "./replayMode";
 
 // Streaming-app copy of web/src/hooks/useLiveEvents.ts. The two have
 // diverged: this version's LiveEvent union also includes the broadcast-control
@@ -41,6 +42,27 @@ export type StreamMacroFiredPayload = {
   label: string;
   color?: "profit" | "loss" | "neutral";
   subtitle?: string;
+};
+export type BroadcastMomentPayload = {
+  id: string;
+  kind:
+    | "agent_pnl"
+    | "market_move"
+    | "rank_change"
+    | "streak"
+    | "day_leader"
+    | "activity"
+    | "commentary";
+  title: string;
+  subtitle?: string;
+  priority: number;
+  color: "profit" | "loss" | "neutral";
+  outputs: Array<"macro_burst" | "lower_third" | "ticker" | "recap_log" | "audio">;
+  ttl_sec: number;
+  created_at: string;
+  agent_id?: number;
+  trigger?: string;
+  metadata: Record<string, unknown>;
 };
 export type StreamCommentaryPayload = {
   id: string;
@@ -141,6 +163,7 @@ export type LiveEvent =
   | { type: "stream_cadence"; ts: string; payload: { sec: number } }
   | { type: "stream_fullscreen"; ts: string; payload: { enabled: boolean } }
   | { type: "stream_macro_fired"; ts: string; payload: StreamMacroFiredPayload }
+  | { type: "broadcast_moment"; ts: string; payload: BroadcastMomentPayload }
   | { type: "stream_commentary"; ts: string; payload: StreamCommentaryPayload }
   | { type: "chat_message"; ts: string; payload: ChatMessagePayload }
   | { type: "audience_sentiment"; ts: string; payload: AudienceSentimentPayload }
@@ -197,6 +220,24 @@ export function useLiveEvents(onEvent: LiveEventHandler, urlOverride?: string): 
       ws.onopen = () => {
         backoff = BACKOFF_START_MS;
         setStatus("open");
+        // In replay mode the backend waits for an opening frame. Send
+        // it eagerly so the manifest pump can start; the live path
+        // ignores the absence of this frame after a short timeout.
+        if (REPLAY.active && REPLAY.sessionId) {
+          try {
+            ws?.send(
+              JSON.stringify({
+                type: "replay",
+                session_id: REPLAY.sessionId,
+                at: REPLAY.at,
+                until: REPLAY.until,
+                speed: REPLAY.speed,
+              }),
+            );
+          } catch {
+            /* WS may have closed between onopen and this send — let onerror / onclose handle it */
+          }
+        }
       };
 
       ws.onmessage = (m) => {
@@ -211,6 +252,10 @@ export function useLiveEvents(onEvent: LiveEventHandler, urlOverride?: string): 
       const scheduleReconnect = () => {
         if (disposed) return;
         setStatus("closed");
+        // Don't auto-reconnect in replay mode — the backend will close
+        // the socket cleanly once it finishes pumping the manifest
+        // window, and reopening would just start the replay over.
+        if (REPLAY.active) return;
         retryTimer = setTimeout(connect, backoff);
         backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
       };

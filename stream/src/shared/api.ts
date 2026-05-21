@@ -2,6 +2,8 @@
 // REST + WS contract is shared. If types drift between the dashboard and the
 // stream app, promote this to a workspace package — see SPEC §10.
 
+import { withReplayParams } from "./replayMode";
+
 export type LstmSnapshot = {
   direction: "up" | "flat" | "down";
   probs: [number, number, number];
@@ -146,7 +148,9 @@ export function apiUrl(path: string): string {
 }
 
 const fetcher = async <T,>(url: string): Promise<T> => {
-  const target = rewrite(url);
+  // Replay mode appends `?at=&session_id=` to every /api/* call so the
+  // backend returns historical state from the named session manifest.
+  const target = rewrite(withReplayParams(url));
   const r = await fetch(target);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   // Sanity guard: if a misconfigured webview swallowed the rewrite and the

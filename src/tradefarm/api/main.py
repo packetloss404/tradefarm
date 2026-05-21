@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
@@ -23,9 +23,53 @@ from tradefarm.api.ws import router as ws_router
 from tradefarm.config import settings
 from tradefarm.orchestrator.scheduler import Orchestrator
 from tradefarm.risk.manager import BASE_MAX_POSITION_NOTIONAL_PCT
+from tradefarm.session import replay_query
 from tradefarm.storage import journal, repo
 from tradefarm.storage.db import SessionLocal, init_db
 from tradefarm.storage.models import PnlSnapshot
+
+
+def _parse_replay_at(at: str | None) -> datetime | None:
+    """Common parsing for the ?at= query param. Accepts ISO 8601 with
+    timezone or trailing Z; raises 400 on anything else."""
+    if at is None:
+        return None
+    try:
+        return replay_query.parse_iso(at)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid `at`: {exc}") from exc
+
+
+def _replay_static_meta(orch: Orchestrator) -> tuple[dict[int, dict], list[dict]]:
+    """Pull static per-agent metadata (strategy, rank, symbol pin) off
+    the orchestrator so replay endpoints can populate fields the
+    manifest doesn't carry. Returns (by_id_map, silent_roster_list) —
+    the latter so the diorama still shows 100 dots for agents that
+    didn't trade in this session."""
+    meta_by_id: dict[int, dict] = {}
+    roster: list[dict] = []
+    for a in orch.agents:
+        meta = {
+            "id": a.state.id,
+            "name": a.state.name,
+            "strategy": a.state.strategy,
+            "rank": getattr(a.risk, "rank", "intern"),
+            "symbol": getattr(a, "symbol", None),
+            "starting_capital": getattr(a.state, "starting_capital", 1000.0),
+        }
+        meta_by_id[a.state.id] = meta
+        roster.append(meta)
+    return meta_by_id, roster
+
+
+def _load_replay_manifest(session_id: str) -> dict:
+    """Read the on-disk manifest for `session_id`; raise 404 if absent."""
+    try:
+        return replay_query.load_manifest(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"no manifest for session {session_id!r}"
+        ) from exc
 
 
 @asynccontextmanager
@@ -100,8 +144,25 @@ async def llm_stats() -> dict:
 
 
 @app.get("/agents")
-async def list_agents() -> list[dict]:
+async def list_agents(
+    at: str | None = Query(None, description="ISO timestamp for historical state (replay mode)."),
+    session_id: str | None = Query(None, description="Session manifest to read from (replay mode)."),
+) -> list[dict]:
     orch: Orchestrator = app.state.orchestrator
+    # Replay path: fold the manifest's events up to `at` and shape the
+    # response so the static-meta (strategy/rank) comes from the live
+    # orchestrator and the dynamic state (positions/cash/PnL) comes from
+    # the manifest.
+    if session_id is not None:
+        at_dt = _parse_replay_at(at)
+        manifest = _load_replay_manifest(session_id)
+        if at_dt is None:
+            at_dt = replay_query.parse_iso(manifest.get("ended_at") or manifest["started_at"])
+        snaps, marks = replay_query.fold_to(manifest, at_dt)
+        meta_by_id, roster = _replay_static_meta(orch)
+        return replay_query.agents_payload(
+            snaps, marks, static_meta_by_id=meta_by_id, include_silent=roster,
+        )
     marks = orch.last_marks
     out = []
     for a in orch.agents:
@@ -253,8 +314,25 @@ async def agent_promotions(agent_id: int, hours: int = 24 * 30) -> list[dict]:
 
 
 @app.get("/account")
-async def account() -> dict:
+async def account(
+    at: str | None = Query(None, description="ISO timestamp for historical state (replay mode)."),
+    session_id: str | None = Query(None, description="Session manifest to read from (replay mode)."),
+) -> dict:
     orch: Orchestrator = app.state.orchestrator
+    if session_id is not None:
+        at_dt = _parse_replay_at(at)
+        manifest = _load_replay_manifest(session_id)
+        if at_dt is None:
+            at_dt = replay_query.parse_iso(manifest.get("ended_at") or manifest["started_at"])
+        snaps, marks = replay_query.fold_to(manifest, at_dt)
+        silent = max(0, len(orch.agents) - len(snaps))
+        return replay_query.account_payload(
+            snaps,
+            marks,
+            silent_agent_count=silent,
+            last_tick_at=at_dt.isoformat(),
+            starting_capital=float(getattr(settings, "agent_starting_capital", 1000.0)),
+        )
     marks = orch.last_marks
     profit = sum(1 for a in orch.agents if a.state.status == "profit")
     loss = sum(1 for a in orch.agents if a.state.status == "loss")
@@ -328,7 +406,18 @@ async def pnl_by_strategy_timeseries(days: int = 7) -> list[dict]:
 
 
 @app.get("/agents/{agent_id}/trades")
-async def agent_trades(agent_id: int, limit: int = 20) -> list[dict]:
+async def agent_trades(
+    agent_id: int,
+    limit: int = 20,
+    at: str | None = Query(None, description="ISO timestamp for historical trades (replay mode)."),
+    session_id: str | None = Query(None, description="Session manifest to read from (replay mode)."),
+) -> list[dict]:
+    if session_id is not None:
+        at_dt = _parse_replay_at(at)
+        manifest = _load_replay_manifest(session_id)
+        if at_dt is None:
+            at_dt = replay_query.parse_iso(manifest.get("ended_at") or manifest["started_at"])
+        return replay_query.trades_for_agent(manifest, agent_id, at_dt, limit=limit)
     from tradefarm.storage.models import Trade
     async with SessionLocal() as session:
         rows = (await session.execute(
