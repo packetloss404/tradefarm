@@ -27,8 +27,14 @@ def is_market_open(dt: datetime | None = None) -> bool:
 
 
 def next_open(dt: datetime | None = None) -> datetime:
+    # Earlier version did `dt.date().replace(day=min(dt.day + 10, 28))`,
+    # which moves *backward* at month-end (e.g. Sept 30 → Sept 28) and
+    # raised "No market open found" after a long weekend. timedelta
+    # never wraps months and always advances.
+    from datetime import timedelta
     dt = dt or now_et()
-    schedule = NYSE.schedule(start_date=dt.date(), end_date=dt.date().replace(day=min(dt.day + 10, 28)))
+    end_date = dt.date() + timedelta(days=10)
+    schedule = NYSE.schedule(start_date=dt.date(), end_date=end_date)
     future = schedule[schedule["market_open"] > dt]
     if future.empty:
         raise RuntimeError("No market open found in next 10 days")

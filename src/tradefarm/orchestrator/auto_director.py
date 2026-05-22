@@ -1,9 +1,10 @@
-"""Auto-director — auto-fires broadcast macros based on agent / market state.
+"""Auto-director — auto-fires broadcast moments based on agent / market state.
 
 Polls the Orchestrator every ``POLL_INTERVAL_SEC`` seconds and emits the same
-``stream_macro_fired`` events the dashboard's BroadcastPanel produces when an
-operator clicks a macro. Each macro id has a 30-minute cooldown so the same
-trigger can't spam the stream.
+stream macro bursts the dashboard's BroadcastPanel produces when an operator
+clicks a macro, plus a canonical ``broadcast_moment`` event for the Broadcast
+OS. Each macro id has a 30-minute cooldown so the same trigger can't spam the
+stream.
 
 Triggers:
 - big-win:        agent equity >= +5% vs. starting capital
@@ -27,6 +28,10 @@ import structlog
 from tradefarm.academy.ranks import RANK_ORDER
 from tradefarm.api.events import publish_event
 from tradefarm.config import settings
+from tradefarm.orchestrator.broadcast_os import (
+    moment_from_macro,
+    publish_broadcast_moment,
+)
 
 if TYPE_CHECKING:
     from tradefarm.orchestrator.scheduler import Orchestrator
@@ -43,12 +48,18 @@ MARKET_SYMBOL: str = "SPY"
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    # Use the injectable clock so replay sessions get the replayed
+    # timestamp. Cooldowns then track replay-clock seconds, not
+    # wall-clock — important when the operator replays a Tuesday on a
+    # Friday and wants the director to fire moments at the right
+    # replayed times.
+    from tradefarm.runtime.clock import now_utc
+    return now_utc()
 
 
 @dataclass
 class AutoDirector:
-    """Polls Orchestrator state and publishes ``stream_macro_fired`` events."""
+    """Polls Orchestrator state and publishes broadcast moments."""
 
     orch: "Orchestrator"
     poll_interval_sec: float = POLL_INTERVAL_SEC
@@ -220,15 +231,8 @@ class AutoDirector:
         if last is not None and (now - last) < self.cooldown:
             return False
         self._last_fired_at[macro_id] = now
-        payload: dict = {
-            "id": macro_id,
-            "label": macro["label"],
-        }
-        if macro.get("color") is not None:
-            payload["color"] = macro["color"]
-        if macro.get("subtitle") is not None:
-            payload["subtitle"] = macro["subtitle"]
-        await publish_event("stream_macro_fired", payload)
+        moment = moment_from_macro(macro)
+        await publish_broadcast_moment(moment, publish=publish_event)
         log.info(
             "auto_director_fire",
             macro_id=macro_id,

@@ -5,12 +5,24 @@
 // allowlist (academy retrieval, VOD pipeline) stay local-state until
 // the backend exposes them.
 
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import useSWR from "swr";
 import { api, type AdminConfig as LiveConfig } from "../api";
 import { useTheme } from "./ThemeContext";
 import { DEFAULT_ADMIN_CONFIG, type DashAdminConfig } from "./mockData";
 import { fmtMoney } from "../vod/widgets";
+
+// Recognise the backend's masked-secret sentinel so we never POST it
+// back as a literal value (which would persist the dots into .env and
+// destroy the real key). The masked form looks like "••••GH8X".
+const MASKED_SENTINEL = "•";
+
+// Bullet sentinel that survives transport without unicode shenanigans.
+function looksMasked(v: unknown): boolean {
+  return typeof v === "string" && v.includes(MASKED_SENTINEL);
+}
+
+const PATCH_DEBOUNCE_MS = 600;
 
 function mergeFromLive(local: DashAdminConfig, live: LiveConfig): DashAdminConfig {
   return {
@@ -82,23 +94,66 @@ function useDashAdminConfig() {
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [statusMsg, setStatusMsg] = useState<string>("");
 
+  // One debounce timer per key so rapid edits coalesce into a single
+  // POST. Without this, every keystroke into the API key field fires
+  // a patch — and if the user accidentally focuses the masked field
+  // the very first keystroke POSTs back the dots sentinel and clobbers
+  // the real key in `.env`.
+  const debouncedTimers = useRef<Record<string, number>>({});
+  const errorTimer = useRef<number | null>(null);
+
+  // Auto-clear the error banner after 5s so a transient failure doesn't
+  // leave a stale red row long after the user fixed the underlying issue.
+  function setStatusWithClear(s: typeof status, msg: string) {
+    setStatus(s);
+    setStatusMsg(msg);
+    if (errorTimer.current !== null) {
+      window.clearTimeout(errorTimer.current);
+      errorTimer.current = null;
+    }
+    if (s === "saved") {
+      errorTimer.current = window.setTimeout(() => setStatus("idle"), 1500);
+    } else if (s === "error") {
+      errorTimer.current = window.setTimeout(() => setStatus("idle"), 5000);
+    }
+  }
+
   function update<K extends keyof DashAdminConfig>(key: K, value: DashAdminConfig[K]) {
     setLocal((prev) => ({ ...prev, [key]: value }));
     if (!LIVE_KEYS.has(key) || !liveCfg) return;
-    setStatus("saving");
-    api
-      .adminPatch(toPatch(key, value))
-      .then(() => {
-        setStatus("saved");
-        setStatusMsg(`saved ${String(key)}`);
-        refresh();
-        window.setTimeout(() => setStatus("idle"), 1500);
-      })
-      .catch((e: Error) => {
-        setStatus("error");
-        setStatusMsg(e.message);
-      });
+    // Refuse to POST the masked sentinel — it would otherwise overwrite
+    // the real key in .env. The user has to actually type a fresh value.
+    if (looksMasked(value)) return;
+
+    const k = String(key);
+    if (debouncedTimers.current[k]) {
+      window.clearTimeout(debouncedTimers.current[k]);
+    }
+    setStatusWithClear("saving", `…${k}`);
+    debouncedTimers.current[k] = window.setTimeout(() => {
+      api
+        .adminPatch(toPatch(key, value))
+        .then(() => {
+          setStatusWithClear("saved", `saved ${k}`);
+          refresh();
+        })
+        .catch((e: Error) => {
+          setStatusWithClear("error", e.message);
+        });
+    }, PATCH_DEBOUNCE_MS);
   }
+
+  // Cleanup pending debounced patches + the error timer on unmount.
+  useEffect(() => {
+    return () => {
+      Object.values(debouncedTimers.current).forEach((t) =>
+        window.clearTimeout(t),
+      );
+      if (errorTimer.current !== null) {
+        window.clearTimeout(errorTimer.current);
+      }
+    };
+  }, []);
 
   return { config: local, update, liveReachable: !error, status, statusMsg };
 }

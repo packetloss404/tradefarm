@@ -206,10 +206,19 @@ class YouTubeChatPoller:
         }
         r = await client.post(OAUTH_TOKEN_URL, data=body)
         if r.status_code != 200:
+            # Google's OAuth error responses occasionally echo back
+            # fragments of the request (including the client_secret
+            # query for some error classes). Surface only the canonical
+            # error code, never the raw body.
+            error_code = "unknown"
+            try:
+                error_code = str(r.json().get("error", "unknown"))[:64]
+            except (ValueError, KeyError):
+                pass
             log.error(
                 "youtube_chat_token_refresh_failed",
                 status=r.status_code,
-                body=r.text[:300],
+                error_code=error_code,
             )
             r.raise_for_status()
         data = r.json()

@@ -24,7 +24,11 @@ _DIR_FROM_INDEX = ("down", "flat", "up")
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    # Use the injectable clock so decision events emitted during a
+    # replay carry the replayed timestamp (matches the rest of the
+    # manifest), not wall-clock today.
+    from tradefarm.runtime.clock import now_utc
+    return now_utc().isoformat()
 
 
 def _lstm_snapshot(agent: Agent) -> dict[str, Any] | None:

@@ -1,4 +1,4 @@
-"""Streak watcher — auto-fires broadcast macros based on patterns in agent
+"""Streak watcher — auto-fires broadcast moments based on patterns in agent
 closed-trade history.
 
 Sister to :mod:`tradefarm.orchestrator.auto_director`. Where the auto-director
@@ -11,9 +11,10 @@ flips), this watcher detects *patterns* over the closed-outcome journal:
 - ``streak-bigloss-day``      — biggest realized loss of the current day
 - ``streak-awake-{agent_id}`` — first close after a >=60 min quiet stretch
 
-Both watchers publish ``stream_macro_fired`` envelopes (the same wire contract
-the dashboard's BroadcastPanel uses for manual macros) and share a 30 min
-per-trigger-id cooldown so the same id can't spam the stream.
+Both watchers publish canonical ``broadcast_moment`` envelopes and legacy
+``stream_macro_fired`` bursts (the wire contract the dashboard's BroadcastPanel
+uses for manual macros). They share a 30 min per-trigger-id cooldown so the
+same id can't spam the stream.
 
 Semantics note for the win/loss streak detectors: we look at *just* the most
 recent N outcomes and require their tail to all be of one sign. We don't
@@ -31,6 +32,10 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from tradefarm.api.events import publish_event
+from tradefarm.orchestrator.broadcast_os import (
+    moment_from_macro,
+    publish_broadcast_moment,
+)
 from tradefarm.storage import journal
 
 if TYPE_CHECKING:
@@ -57,7 +62,11 @@ FRESH_WINDOW: timedelta = timedelta(seconds=60)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    # Use the injectable clock so replay sessions get the replayed
+    # timestamp — the "awake" / "quiet" gaps then measure session time,
+    # not wall-clock real time.
+    from tradefarm.runtime.clock import now_utc
+    return now_utc()
 
 
 def _parse_dt(raw: str | None) -> datetime | None:
@@ -94,7 +103,7 @@ def _closed_outcomes(notes: list[dict]) -> list[dict]:
 @dataclass
 class StreakWatcher:
     """Polls each agent's closed-outcome journal and publishes
-    ``stream_macro_fired`` envelopes when streak / day-leader patterns appear.
+    broadcast moments when streak / day-leader patterns appear.
     """
 
     orch: "Orchestrator"
@@ -341,15 +350,8 @@ class StreakWatcher:
         if last is not None and (now - last) < self.cooldown:
             return False
         self._last_fired_at[macro_id] = now
-        payload: dict = {
-            "id": macro_id,
-            "label": macro["label"],
-        }
-        if macro.get("color") is not None:
-            payload["color"] = macro["color"]
-        if macro.get("subtitle") is not None:
-            payload["subtitle"] = macro["subtitle"]
-        await publish_event("stream_macro_fired", payload)
+        moment = moment_from_macro(macro)
+        await publish_broadcast_moment(moment, publish=publish_event)
         log.info(
             "streak_fire",
             macro_id=macro_id,

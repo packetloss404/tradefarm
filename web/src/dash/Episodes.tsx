@@ -384,7 +384,14 @@ function FeaturedEpisode({ ep }: { ep: Episode }) {
 function CalendarHeatmap({ episodes }: { episodes: Episode[] }) {
   const { T } = useTheme();
   const byDate: Record<string, Episode> = Object.fromEntries(episodes.map((e) => [e.date, e]));
-  const today = new Date("2026-05-19");
+  // Date used to be hardcoded `new Date("2026-05-19")` from when the
+  // dashboard shipped — the heatmap then drifted off the real "today"
+  // a day at a time. Use the freshest episode as the anchor instead,
+  // so the heatmap stays aligned with whatever fixture the mock layer
+  // emits.
+  const today = episodes.length > 0
+    ? new Date(episodes[0]!.date)
+    : new Date();
   const cells: { date: string; ep: Episode | undefined }[] = [];
   for (let w = 5; w >= 0; w--) {
     for (let d = 0; d < 5; d++) {
@@ -488,7 +495,10 @@ function CalendarHeatmap({ episodes }: { episodes: Episode[] }) {
                   opacity: 0.3 + intensity * 0.7,
                   borderRadius: 3,
                   cursor: "pointer",
-                  border: c.date === "2026-05-19" ? `2px solid ${T.text}` : "none",
+                  border:
+                    c.date === today.toISOString().slice(0, 10)
+                      ? `2px solid ${T.text}`
+                      : "none",
                   position: "relative",
                 }}
               />

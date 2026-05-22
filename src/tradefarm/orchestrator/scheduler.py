@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 import pandas as pd
@@ -15,6 +16,7 @@ from tradefarm.agents.lstm_model import model_path
 from tradefarm.agents.momentum import MomentumAgent
 from tradefarm.agents.names import agent_display_name
 from tradefarm.config import settings
+from tradefarm.runtime.clock import now_utc as _runtime_clock_now_utc
 from tradefarm.data.eodhd import EodhdClient
 from tradefarm.data.universe import default_universe
 from tradefarm.execution.broker import Broker, SimulatedBroker
@@ -25,6 +27,7 @@ from tradefarm.api.events import publish_event
 from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
 from tradefarm.orchestrator.audience import AudienceCoordinator
 from tradefarm.orchestrator.auto_director import AutoDirector
+from tradefarm.orchestrator.broadcast_os import BroadcastMoment, publish_broadcast_moment
 from tradefarm.orchestrator.commentary_loop import CommentaryLoop
 from tradefarm.orchestrator.decision_feed import build_decisions_batch
 from tradefarm.orchestrator.predictions import PredictionsBoard
@@ -39,6 +42,22 @@ RECONCILE_INTERVAL_SEC = 10
 # In-memory counters for the dashboard. Reset at the start of each tick so
 # the UI can display "notes this tick" alongside the existing LLM_SKIPS.
 JOURNAL_COUNTERS: dict[str, int] = {"notes_this_tick": 0, "outcomes_this_tick": 0}
+FILL_OF_TICK_MIN_NOTIONAL: float = 50.0
+
+
+@dataclass(frozen=True)
+class _FillMomentCandidate:
+    agent_id: int
+    agent_name: str
+    symbol: str
+    side: str
+    qty: float
+    price: float
+    reason: str
+
+    @property
+    def notional(self) -> float:
+        return abs(self.qty * self.price)
 
 
 def _note_for_signal(agent: Agent, sig, px: float) -> tuple[str, dict]:
@@ -190,6 +209,7 @@ class Orchestrator:
             self._tick_in_progress = False
 
     async def _tick_once_inner(self) -> dict:
+        tick_id = uuid.uuid4().hex[:12]
         symbols = sorted({getattr(a, "symbol", None) for a in self.agents if hasattr(a, "symbol")})
         symbols = [s for s in symbols if s]
         bars = await self._load_bars(symbols)
@@ -198,7 +218,11 @@ class Orchestrator:
             for s, df in bars.items() if not df.empty
         }
         self.last_marks = marks
-        self.last_tick_at = pd.Timestamp.now(tz="UTC")
+        # Use the injectable clock so replay sessions stamp last_tick_at
+        # with the replayed timestamp, not wall-clock today. Otherwise
+        # any consumer that diffs (now - last_tick_at) sees a delta of
+        # however-long-ago the replayed day was.
+        self.last_tick_at = pd.Timestamp(_runtime_clock_now_utc())
 
         # Collect signals from all agents in parallel (LLM calls dominate).
         sem = asyncio.Semaphore(20)
@@ -222,7 +246,7 @@ class Orchestrator:
         # risk-driven exits because risk exits aren't part of the agent's
         # own thinking — they're forced overrides we apply on top.
         try:
-            batch = build_decisions_batch(results, marks, tick_id=uuid.uuid4().hex[:12])
+            batch = build_decisions_batch(results, marks, tick_id=tick_id)
             await publish_event("agent_decisions_batch", batch)
         except Exception as e:  # pragma: no cover — never let surfacing break a tick
             log.warning("agent_decisions_batch_failed", error=str(e))
@@ -237,8 +261,11 @@ class Orchestrator:
         # agent's brain entirely. If the brain also emitted a sell for the
         # same symbol, the risk reason replaces it (so the journal records the
         # true exit trigger).
-        from datetime import datetime, timezone as _tz
-        now_utc = datetime.now(_tz.utc)
+        # Use the injectable clock so replay sessions see the replayed
+        # close as "now". Wall-clock here would make every position look
+        # held for however-long-ago the replayed day was, instantly
+        # triggering time-stop exits.
+        now_utc = _runtime_clock_now_utc()
         risk_exits_added = 0
         results_by_id = {a.state.id: (a, sigs) for a, sigs in results}
         for agent in self.agents:
@@ -265,6 +292,7 @@ class Orchestrator:
 
         fills = 0
         blocked = 0
+        fill_moment_candidates: list[_FillMomentCandidate] = []
         for agent, signals in results:
             for sig in signals:
                 px = marks.get(sig.symbol)
@@ -330,6 +358,19 @@ class Orchestrator:
                     "price": fill.price,
                     "reason": sig.reason,
                 })
+                fill_moment_candidates.append(
+                    _FillMomentCandidate(
+                        agent_id=agent.state.id,
+                        agent_name=agent.state.name,
+                        symbol=fill.symbol,
+                        side=fill.side,
+                        qty=float(fill.qty),
+                        price=float(fill.price),
+                        reason=sig.reason,
+                    )
+                )
+
+        await self._publish_fill_of_tick(tick_id, fill_moment_candidates)
 
         # Snapshot + status update happens after all agents have processed signals.
         for agent in self.agents:
@@ -363,6 +404,44 @@ class Orchestrator:
         })
 
         return {"fills": fills, "blocked": blocked, "symbols": len(marks)}
+
+    async def _publish_fill_of_tick(
+        self,
+        tick_id: str,
+        candidates: list[_FillMomentCandidate],
+    ) -> None:
+        """Emit a text-first broadcast moment for the largest meaningful fill."""
+        if not candidates:
+            return
+        fill = max(candidates, key=lambda c: c.notional)
+        if fill.notional < FILL_OF_TICK_MIN_NOTIONAL:
+            return
+        verb = "bought" if fill.side == "buy" else "sold"
+        subtitle = (
+            f"{fill.agent_name} {verb} {fill.qty:g} {fill.symbol} @ "
+            f"${fill.price:.2f} (${fill.notional:,.0f})"
+        )
+        moment = BroadcastMoment(
+            id=f"fill-of-tick-{tick_id}",
+            kind="activity",
+            title="Fill of the tick",
+            subtitle=subtitle,
+            priority=62,
+            color="neutral",
+            agent_id=fill.agent_id,
+            trigger="fill_of_tick",
+            outputs=("lower_third", "ticker", "recap_log"),
+            ttl_sec=7,
+            metadata={
+                "symbol": fill.symbol,
+                "side": fill.side,
+                "qty": fill.qty,
+                "price": fill.price,
+                "notional": fill.notional,
+                "reason": fill.reason,
+            },
+        )
+        await publish_broadcast_moment(moment, publish=publish_event)
 
     async def run_scheduled(self) -> None:
         """Background loop. Sleeps outside RTH (unless tick_outside_rth=True).

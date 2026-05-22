@@ -22,9 +22,14 @@ class Settings(BaseSettings):
     # "simulated" fills locally at last close; "alpaca_paper" routes to Alpaca
     execution_mode: Literal["simulated", "alpaca_paper"] = "simulated"
 
-    # Background scheduler: 0 disables auto-tick (manual /tick only).
-    # During RTH it ticks every interval; outside RTH it sleeps unless tick_outside_rth=True.
-    auto_tick_interval_sec: int = Field(default=0, ge=0)
+    # Background scheduler cadence in seconds. Default 300 (5 min) matches
+    # the production cadence documented in CLAUDE.md. 0 disables auto-tick
+    # so /tick is the only entrypoint — useful for backtesting / local
+    # dev, but easy to forget; the previous default of 0 was responsible
+    # for a real "I started the backend and no data collected" incident.
+    # During RTH it ticks every interval; outside RTH it sleeps unless
+    # tick_outside_rth=True.
+    auto_tick_interval_sec: int = Field(default=300, ge=0)
     tick_outside_rth: bool = False
 
     # LLM cost gate: if LSTM max_prob is below this OR predicts flat, the

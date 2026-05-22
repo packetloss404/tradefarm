@@ -422,6 +422,11 @@ async def render_session(
     job sequentially, returns a summary. Skipped beats are recorded
     but don't count as failures."""
 
+    # Reject path-traversal-shaped session_ids at the CLI boundary too —
+    # the REST + WS entrypoints already guard, but the renderer was
+    # creating directories from `out/sessions/<session_id>/clips/` and
+    # would mkdir anywhere a malicious id pointed.
+    replay_query._require_safe_session_id(session_id)
     base = sessions_dir or replay_query.DEFAULT_SESSIONS_DIR
     beats_path = base / session_id / "beats.json"
     if not beats_path.is_file():

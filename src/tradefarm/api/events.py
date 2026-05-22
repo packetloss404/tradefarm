@@ -15,7 +15,12 @@ MAX_QUEUE = 100
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    # Event envelopes carry `ts` — use the injectable clock so events
+    # published during a replay session are tagged with the replayed
+    # timestamp. Consumers that compare (now - ts) for "age" would
+    # otherwise see all replayed events as decades old.
+    from tradefarm.runtime.clock import now_utc
+    return now_utc().isoformat()
 
 
 class EventBus:
