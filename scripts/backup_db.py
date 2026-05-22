@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> None:
 
     backup(args.db, dst)
     size_mb = dst.stat().st_size / (1024 * 1024)
-    print(f"backed up {args.db} → {dst} ({size_mb:.1f} MB)")
+    print(f"backed up {args.db} -> {dst} ({size_mb:.1f} MB)")
 
     if args.retain > 0:
         n = prune(dst.parent, args.retain)

@@ -132,6 +132,17 @@ async def get_config(request: Request) -> dict[str, Any]:
         for a in orch.agents:
             counts[a.state.strategy] = counts.get(a.state.strategy, 0) + 1
 
+    # Preflight 5/26: surface read-only operational fields that
+    # operators want to see but shouldn't mutate via the panel.
+    # execution_mode was removed from EDITABLE (round-4 HIGH-3 —
+    # mid-run flip leaves the reconciler in the wrong state);
+    # llm_daily_budget_usd is shown so the operator can monitor
+    # without editing .env.
+    out["_runtime"] = {
+        "execution_mode": settings.execution_mode,
+        "llm_daily_budget_usd": settings.llm_daily_budget_usd,
+    }
+
     out["_meta"] = {
         "secret_keys": sorted(SECRET_KEYS),
         "valid_providers": sorted(VALID_PROVIDERS),
