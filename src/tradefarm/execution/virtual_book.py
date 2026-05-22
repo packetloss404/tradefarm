@@ -98,30 +98,130 @@ class VirtualBook:
         Idempotent on ``broker_order_id`` — duplicate calls are silent
         no-ops. Returns True when applied, False when skipped.
 
-        Implementation: reverses the optimistic fill (a synthetic
-        opposite-side fill at ``mark_price``), then applies the actual
-        fill at ``actual_price``. This correctly handles every case the
-        previous ``apply_fill_delta`` got wrong:
+        Net effect of the correction:
+          - cash adjusted by ``-delta * qty`` for buys (paid more/less
+            than recorded), ``+delta * qty`` for sells.
+          - For the *opening* portion of the fill: avg_price's
+            contribution from this fill is corrected from mark to actual.
+          - For the *closing* portion of the fill: realized_pnl's
+            contribution from this fill is corrected from
+            ``closing_qty * (mark - prev_avg)`` to
+            ``closing_qty * (actual - prev_avg)``.
 
-          * Opening a short (was no-op for the buy branch; now reverses
-            then re-opens at actual)
-          * Long→short flip in one fill (was assuming entire qty closed)
-          * Buy-to-cover that closes a short (was missing realized
-            adjustment on the closing portion)
+        The earlier reverse-then-reapply approach was wrong: by the
+        time the reverse runs, the post-fill ``avg_price`` already
+        reflects the optimistic mark, so the synthetic opposite-side
+        fill closed against the new avg (not the pre-fill avg) and
+        booked phantom realized PnL on adds-to-existing-position.
 
-        ``mark_price`` is derivable from ``actual_price - delta`` in the
-        reconciler's data structure.
+        This implementation works directly from the delta + the
+        ``opening_qty / closing_qty`` split derived from the pre-fill
+        position state. We don't have that state at reconcile time;
+        the closest we have is the post-fill state. Recover the
+        pre-fill state by reversing the fill in math (not in record):
+        from (post_qty, post_avg) and the known fill (side, qty,
+        mark_price), the pre-fill (prev_qty, prev_avg) is the unique
+        solution that ``apply_fill`` would have stepped from.
         """
         if broker_order_id in self._reconciled_ids:
             return False
         self._reconciled_ids.add(broker_order_id)
         if abs(mark_price - actual_price) < 1e-9:
             return True  # nothing to correct, but still consume the id
-        opposite = "sell" if side == "buy" else "buy"
-        # Reverse the optimistic fill at the mark price.
-        self.record_fill(symbol, opposite, qty, mark_price, at=at)
-        # Apply the actual fill at the true price.
-        self.record_fill(symbol, side, qty, actual_price, at=at)
+        delta = actual_price - mark_price  # signed
+        pos = self.positions.get(symbol)
+        if pos is None:
+            # No position to correct against; just adjust cash.
+            cash_delta = -delta * qty if side == "buy" else delta * qty
+            self.cash += cash_delta
+            return True
+
+        # Reverse `apply_fill` arithmetic to recover pre-fill state.
+        signed = qty if side == "buy" else -qty
+        post_qty = pos.qty
+        post_avg = pos.avg_price
+        prev_qty = post_qty - signed
+        if abs(prev_qty) < 1e-9:
+            # Position was opened by this fill from flat.
+            prev_qty = 0.0
+            prev_avg = 0.0
+        elif (prev_qty > 0) == (signed > 0):
+            # Same-side as the fill: an add-to-position. Recover prev_avg
+            # from the weighted-mean update:
+            #     post_avg = (prev_avg * prev_qty + mark * signed) / post_qty
+            prev_avg = (post_avg * post_qty - mark_price * signed) / prev_qty
+        else:
+            # Opposite-side: a (partial) close or flip. apply_fill keeps
+            # avg_price unchanged on partial closes; on a flip the new
+            # avg is the fill price. Either way, prev_avg == post_avg
+            # only for the partial-close case. For a flip,
+            # `abs(signed) > abs(prev_qty)`, so we detect via sign-flip
+            # of (prev_qty, post_qty).
+            if (post_qty > 0) != (prev_qty > 0) and post_qty != 0:
+                # Flip happened: post_avg was set to mark_price.
+                # Pre-fill avg is whatever it was before this fill; we
+                # can't recover it from post-state alone, but the only
+                # consumer that cares about prev_avg here is the
+                # realized-PnL correction for the closing portion,
+                # which uses prev_avg directly. Best-effort fall-back:
+                # treat avg as post_avg (= mark) so the closing portion's
+                # realized was originally `closing_qty * (mark - mark) = 0`,
+                # which matches the fact that on a flip apply_fill
+                # books realized = closing_qty * (mark - prev_avg)
+                # using the actual prev_avg. We don't have it.
+                # Apply only the cash + remaining-opening-portion
+                # correction.
+                prev_avg = post_avg
+            else:
+                # Pure partial close: avg unchanged.
+                prev_avg = post_avg
+
+        # Now split the qty into closing vs opening portions relative
+        # to the pre-fill position.
+        if prev_qty == 0:
+            closing_qty, opening_qty = 0.0, qty
+        elif (prev_qty > 0) == (signed > 0):
+            closing_qty, opening_qty = 0.0, qty
+        else:
+            closing_qty = min(qty, abs(prev_qty))
+            opening_qty = qty - closing_qty
+
+        # 1. Cash adjustment for the full qty.
+        cash_delta = -delta * qty if side == "buy" else delta * qty
+        self.cash += cash_delta
+
+        # 2. Realized-PnL correction for the closing portion. The
+        #    closing direction is the SIGN OF prev_qty (closing a long
+        #    is a sell, closing a short is a buy). On a sell that
+        #    closes a long, realized was originally
+        #        closing_qty * (mark - prev_avg)
+        #    and should be
+        #        closing_qty * (actual - prev_avg).
+        #    Difference: closing_qty * delta with the right sign.
+        if closing_qty > 0:
+            direction = 1.0 if prev_qty > 0 else -1.0
+            self.realized_pnl += closing_qty * delta * direction
+
+        # 3. avg_price correction for the opening portion. avg's
+        #    contribution from this fill is the price × opening_qty
+        #    blended into the post-fill total. Recompute post_avg from
+        #    the actual price for the opening_qty.
+        if opening_qty > 0 and post_qty != 0:
+            # Closing reduces |prev_qty| toward zero, regardless of
+            # which side opened the prior position.
+            if closing_qty > 0:
+                prev_sign = 1.0 if prev_qty > 0 else -1.0
+                mid_qty = prev_qty - prev_sign * closing_qty
+            else:
+                mid_qty = prev_qty
+            # Apply the opening portion at actual price.
+            opening_signed = opening_qty if signed > 0 else -opening_qty
+            final_qty = mid_qty + opening_signed
+            if abs(final_qty) > 1e-9:
+                mid_avg = prev_avg if abs(mid_qty) > 1e-9 else 0.0
+                pos.avg_price = (
+                    mid_avg * mid_qty + actual_price * opening_signed
+                ) / final_qty
         return True
 
     # Kept for backwards compatibility — used by older call sites. New

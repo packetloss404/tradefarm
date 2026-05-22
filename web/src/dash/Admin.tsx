@@ -5,7 +5,7 @@
 // allowlist (academy retrieval, VOD pipeline) stay local-state until
 // the backend exposes them.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import useSWR from "swr";
 import { api, type AdminConfig as LiveConfig } from "../api";
 import { useTheme } from "./ThemeContext";

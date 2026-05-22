@@ -174,24 +174,26 @@ export default function App() {
 
   return (
     <>
-      {/* Audit fix (H10): every layout (rotator OR v1-broadcast OR
-          pre-roll) needs to signal `data-scene-ready` for the headless
-          renderer's wait-for-selector to resolve. SceneRotator publishes
-          the attribute on its own wrapper; v1-broadcast and PreRoll
-          previously didn't, so headless captures would hang forever
-          under those modes. App-level wrapper carries the attribute
-          for all three. */}
-      <div data-scene-ready="true" style={{ display: "contents" }}>
+      {/* Audit fix (H10 + round-2 fix): only PreRoll + V1Broadcast
+          needed `data-scene-ready` because SceneRotator publishes
+          its own (per-scene, post-paint). The earlier outer wrapper
+          was too aggressive — it resolved immediately, defeating
+          SceneRotator's inner handshake. Scope to just the two
+          layouts that don't own their own readiness signal. */}
       <AnimatePresence mode="wait">
         {showPreroll ? (
-          <PreRollScene
-            key="preroll"
-            snapshot={snapshot}
-            durationSec={settings.prerollDurationSec}
-            onComplete={handlePrerollComplete}
-          />
+          <div data-scene-ready="true" style={{ display: "contents" }}>
+            <PreRollScene
+              key="preroll"
+              snapshot={snapshot}
+              durationSec={settings.prerollDurationSec}
+              onComplete={handlePrerollComplete}
+            />
+          </div>
         ) : broadcastMode ? (
-          <V1Broadcast key="v1-broadcast" snapshot={snapshot} />
+          <div data-scene-ready="true" style={{ display: "contents" }}>
+            <V1Broadcast key="v1-broadcast" snapshot={snapshot} />
+          </div>
         ) : (
           <SceneRotator
             key="rotator"
@@ -211,7 +213,6 @@ export default function App() {
           />
         )}
       </AnimatePresence>
-      </div>
 
       {/* Audience overlays sit at the App level so they render across ALL
           layouts — V1 broadcast, scene rotator, and even the pre-roll splash

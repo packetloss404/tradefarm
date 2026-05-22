@@ -121,13 +121,9 @@ async def close_outcome(
     """
     try:
         async with SessionLocal() as session:
-            # Scope to the same session_id as the close. Live closes only
-            # see live entries (session_id IS NULL); replay closes only
-            # see replay entries from the same session. Without this, a
-            # live closing fill could stamp a replay's entry note and
-            # vice versa — the race the audit flagged.
-            from tradefarm.runtime.session_context import current_session_id
-            sid = current_session_id()
+            # Scope to the same session_id as the close (same helper as
+            # recent_outcomes/find_similar). Live closes only see live
+            # entries; replay closes only see same-session entries.
             stmt = (
                 select(AgentNote)
                 .where(
@@ -135,8 +131,7 @@ async def close_outcome(
                     AgentNote.symbol == symbol,
                     AgentNote.kind == "entry",
                     AgentNote.outcome_closed_at.is_(None),
-                    AgentNote.session_id.is_(None) if sid is None
-                    else AgentNote.session_id == sid,
+                    _session_id_predicate(),
                 )
                 .order_by(AgentNote.created_at.asc(), AgentNote.id.asc())
                 .limit(1)
@@ -159,15 +154,36 @@ async def close_outcome(
         return None
 
 
+def _session_id_predicate():
+    """Build a SQLAlchemy WHERE clause scoping to the current ContextVar
+    session_id. Live calls (sid is None) → session_id IS NULL; replay
+    calls → session_id == sid. Closes the cross-session leak between
+    StreakWatcher reading live agent history vs a parallel replay
+    contaminating outcomes/ranks/curriculum."""
+    from tradefarm.runtime.session_context import current_session_id
+    sid = current_session_id()
+    if sid is None:
+        return AgentNote.session_id.is_(None)
+    return AgentNote.session_id == sid
+
+
 async def recent_outcomes(agent_id: int, n: int = 20) -> list[dict]:
     """Return the newest ``n`` notes for ``agent_id`` (newest first), with
     outcome fields populated where present.
-    """
+
+    Audit fix (N): scoped to the current session_id ContextVar — live
+    callers (StreakWatcher, ranks, curriculum, /agents/{id}/notes) see
+    only live notes; replay callers see only their session's notes.
+    Without this, every replay run would permanently contaminate the
+    live agent's streak/rank state."""
     try:
         async with SessionLocal() as session:
             rows = (await session.execute(
                 select(AgentNote)
-                .where(AgentNote.agent_id == agent_id)
+                .where(
+                    AgentNote.agent_id == agent_id,
+                    _session_id_predicate(),
+                )
                 .order_by(AgentNote.created_at.desc(), AgentNote.id.desc())
                 .limit(n)
             )).scalars().all()
@@ -187,7 +203,10 @@ async def find_similar(
 
     Phase 3 may extend this with embeddings; the contract is: return a list of
     note dicts (same shape as :func:`recent_outcomes`). No embeddings here.
-    """
+
+    Audit fix (N): scoped to current session_id like recent_outcomes —
+    a live LSTM+LLM agent's retrieval prompt no longer pulls examples
+    from replay sessions."""
     try:
         async with SessionLocal() as session:
             rows = (await session.execute(
@@ -196,6 +215,7 @@ async def find_similar(
                     AgentNote.agent_id == agent_id,
                     AgentNote.symbol == symbol,
                     AgentNote.outcome_closed_at.is_not(None),
+                    _session_id_predicate(),
                 )
                 .order_by(AgentNote.outcome_closed_at.desc(), AgentNote.id.desc())
                 .limit(limit)

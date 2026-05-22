@@ -406,14 +406,19 @@ async def pnl_daily(days: int = 30) -> list[dict]:
     expressed as % return vs starting capital."""
     cutoff = date.today() - timedelta(days=days)
     async with SessionLocal() as session:
-        # Latest snapshot per (agent, day)
+        # Latest snapshot per (agent, day). Audit fix: live-only —
+        # exclude replay-tagged snapshots so a session.run doesn't
+        # double-stack that day's totals on the dashboard chart.
         sub = (
             select(
                 PnlSnapshot.agent_id,
                 func.date(PnlSnapshot.taken_at).label("d"),
                 func.max(PnlSnapshot.taken_at).label("ts"),
             )
-            .where(func.date(PnlSnapshot.taken_at) >= cutoff)
+            .where(
+                func.date(PnlSnapshot.taken_at) >= cutoff,
+                PnlSnapshot.session_id.is_(None),
+            )
             .group_by(PnlSnapshot.agent_id, func.date(PnlSnapshot.taken_at))
             .subquery()
         )
@@ -468,7 +473,13 @@ async def agent_trades(
     async with SessionLocal() as session:
         rows = (await session.execute(
             select(Trade)
-            .where(Trade.agent_id == agent_id)
+            .where(
+                Trade.agent_id == agent_id,
+                # Audit fix: live trade-list excludes replay-tagged rows
+                # so the dashboard doesn't mix today's live fills with
+                # any prior `session.run`.
+                Trade.session_id.is_(None),
+            )
             .order_by(Trade.executed_at.desc())
             .limit(limit)
         )).scalars().all()

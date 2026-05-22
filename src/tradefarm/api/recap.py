@@ -122,11 +122,13 @@ async def _biggest_fill_and_count(
     start_naive = _strip_naive(start_utc)
     end_naive = _strip_naive(end_utc)
     async with session_factory() as session:
-        # Total fills today.
+        # Total fills today. Audit fix: live recap excludes replay-tagged
+        # rows so a session.run doesn't appear in the "today" recap.
         total = (await session.execute(
             select(func.count(Trade.id)).where(
                 Trade.executed_at >= start_naive,
                 Trade.executed_at <= end_naive,
+                Trade.session_id.is_(None),
             )
         )).scalar_one()
         # Biggest by |qty * price|.
@@ -136,6 +138,7 @@ async def _biggest_fill_and_count(
             .where(
                 Trade.executed_at >= start_naive,
                 Trade.executed_at <= end_naive,
+                Trade.session_id.is_(None),
             )
             .order_by(notional_expr.desc(), Trade.id.desc())
             .limit(1)
@@ -178,6 +181,8 @@ async def _winners_and_loss(
                 AgentNote.outcome_realized_pnl > 0,
                 AgentNote.outcome_closed_at >= start_naive,
                 AgentNote.outcome_closed_at <= end_naive,
+                # Audit fix: live winners exclude replay outcomes.
+                AgentNote.session_id.is_(None),
             )
             .order_by(AgentNote.outcome_realized_pnl.desc(), AgentNote.id.desc())
             .limit(3)
@@ -190,6 +195,7 @@ async def _winners_and_loss(
                 AgentNote.outcome_realized_pnl.is_not(None),
                 AgentNote.outcome_closed_at >= start_naive,
                 AgentNote.outcome_closed_at <= end_naive,
+                AgentNote.session_id.is_(None),
             )
             .order_by(AgentNote.outcome_realized_pnl.asc(), AgentNote.id.asc())
             .limit(1)

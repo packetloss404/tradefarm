@@ -206,7 +206,24 @@ async def _put_video_bytes(
                             continue
                         except (ValueError, IndexError):
                             pass
-                    offset = end + 1
+                    # Audit fix (P): 308 with no/unparseable Range means
+                    # the server has UNKNOWN bytes — DO NOT optimistically
+                    # advance the cursor; that would skip unwritten bytes
+                    # silently and produce a corrupted upload. Re-PUT the
+                    # same chunk after a brief backoff. If this loops more
+                    # than a few times, bail with a clear error so the
+                    # operator can investigate (the resumable session is
+                    # still valid for 24h).
+                    await asyncio.sleep(1.0)
+                    fh.seek(offset)
+                    # Cap consecutive same-offset retries.
+                    _same_offset_retries = locals().get("_same_offset_retries", 0) + 1
+                    if _same_offset_retries > 5:
+                        raise RuntimeError(
+                            "PUT video stalled at offset "
+                            f"{offset} — server returned 308 without Range "
+                            "for 5 consecutive retries"
+                        )
                     continue
                 if r.status_code == 401 and refresh_creds is not None:
                     # Token expired mid-upload. The location URL itself

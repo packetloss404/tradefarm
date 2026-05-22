@@ -12,6 +12,38 @@ def _book() -> VirtualBook:
     return VirtualBook(agent_id=1, cash=10000.0)
 
 
+def test_apply_reconciled_add_to_position_does_not_book_phantom_pnl():
+    """REGRESSION: an earlier reverse-then-reapply implementation booked
+    phantom realized PnL when reconciling an add-to-existing-position
+    fill because the reverse step closed against the *post-fill*
+    avg_price (which already contained the optimistic price).
+
+    Setup: 5 shares @ avg 90. Optimistic buy 10 @ mark 100 → 15 @
+    96.67, no realized. Reconcile to actual 99: net effect is the
+    agent paid $1 less per share on the 10 added → cash up by $10,
+    avg should reflect the actual price for the opening portion, and
+    realized_pnl MUST stay at 0 (no shares were closed)."""
+    b = _book()
+    b.record_fill("AAA", "buy", 5, 90.0)  # initial: qty=5, avg=90
+    b.record_fill("AAA", "buy", 10, 100.0)  # optimistic add
+    realized_before = b.realized_pnl
+    cash_before = b.cash
+    assert b.positions["AAA"].qty == 15
+    assert b.positions["AAA"].avg_price == pytest.approx(96.6666666, rel=1e-4)
+
+    applied = b.apply_reconciled_fill(
+        "AAA", "buy", 10, mark_price=100.0, actual_price=99.0,
+        broker_order_id="o1",
+    )
+    assert applied
+    # Cash: paid $10 less than recorded → cash up by $10.
+    assert b.cash == pytest.approx(cash_before + 10.0)
+    # Realized PnL: still zero — no shares closed.
+    assert b.realized_pnl == pytest.approx(realized_before)
+    # avg_price: now reflects (90*5 + 99*10) / 15 = 96.0.
+    assert b.positions["AAA"].avg_price == pytest.approx(96.0, rel=1e-4)
+
+
 def test_apply_reconciled_buy_open_corrects_cash_and_avg_price():
     b = _book()
     # Optimistic fill at mark 100, actual at 100.10.

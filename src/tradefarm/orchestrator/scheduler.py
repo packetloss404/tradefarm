@@ -143,17 +143,15 @@ class Orchestrator:
         # PENDING_EXIT_TTL_SEC.
         self._pending_exits: dict[tuple[int, str], float] = {}
         self._curriculum_task: asyncio.Task | None = None
-        # Audit fix (C15): wire the broadcast ledger + slot scheduler so
-        # every producer goes through the same arbiter. publish_broadcast_moment
-        # picks them up via the module-level install_broadcast_arbiter call.
+        # Audit fix (C15): broadcast ledger + slot scheduler are
+        # constructed here but only INSTALLED as module globals when
+        # start_background() runs. Installing in __init__ caused test
+        # pollution (every Orchestrator(...) silently overwrote the
+        # globals, and stop_background never uninstalled them).
         from tradefarm.orchestrator.broadcast_recap import BroadcastRecapLedger
         from tradefarm.orchestrator.broadcast_scheduler import BroadcastScheduler
-        from tradefarm.orchestrator import broadcast_os as _bos
         self._broadcast_ledger = BroadcastRecapLedger()
         self._broadcast_scheduler = BroadcastScheduler()
-        _bos.install_broadcast_arbiter(
-            self._broadcast_ledger, self._broadcast_scheduler,
-        )
         # Auto-director — broadcasts macros based on agent/market state.
         self._auto_director: AutoDirector | None = None
         # Streak watcher — broadcasts macros based on trade-history patterns.
@@ -388,6 +386,17 @@ class Orchestrator:
                     self._optimistic_marks.pop(f"agent{agent.state.id}-{client_tag}", None)
                     continue
                 realized = agent.on_fill(fill.symbol, fill.side, fill.qty, fill.price)
+                # Audit fix (O): clear the pending-exit guard on every
+                # in-tick sell fill — in simulated mode the reconciler
+                # never runs, so without this clear the guard would
+                # block re-entries on the same symbol for the full
+                # PENDING_EXIT_TTL_SEC window. Also clear the trailing
+                # peak if the fill flattened the position.
+                if sig.side == "sell":
+                    self._pending_exits.pop((agent.state.id, fill.symbol), None)
+                    pos = agent.state.book.positions.get(fill.symbol)
+                    if pos is None or abs(pos.qty) < 1e-9:
+                        agent.risk.clear_peak(fill.symbol)
                 await repo.record_trade(
                     agent.state.id, fill.symbol, fill.side, fill.qty, fill.price, sig.reason,
                 )
@@ -533,11 +542,25 @@ class Orchestrator:
         for a in self.agents:
             if isinstance(a, LstmLlmAgent):
                 a._overlay = new  # type: ignore[attr-defined]
+        # Audit fix: also invalidate the CommentaryLoop's cached overlay
+        # so the next 45s tick rebuilds it against the new provider/key.
+        # Without this, the audit's H6 fix (overlay caching) ironically
+        # made the admin's reload promise less effective for commentary.
+        if self._commentary_loop is not None:
+            self._commentary_loop.invalidate_overlay()
         if new is None:
             return {"provider": None, "model": None}
         return dict(new.info)
 
     def start_background(self) -> None:
+        # Audit fix (Q): install the broadcast arbiter here (not in
+        # __init__) so unit tests that build a bare Orchestrator
+        # don't silently pollute the module-global state.
+        from tradefarm.orchestrator import broadcast_os as _bos
+        _bos.install_broadcast_arbiter(
+            self._broadcast_ledger, self._broadcast_scheduler,
+        )
+
         if settings.auto_tick_interval_sec > 0 and self._task is None:
             self._task = asyncio.create_task(self.run_scheduled(), name="orch_scheduler")
 
@@ -702,6 +725,13 @@ class Orchestrator:
         return applied
 
     async def stop_background(self) -> None:
+        # Audit fix (Q): symmetric to start_background — uninstall the
+        # broadcast arbiter so publish_broadcast_moment falls back to
+        # the legacy direct-publish path on subsequent calls (relevant
+        # for FastAPI reload + tests that reuse the process).
+        from tradefarm.orchestrator import broadcast_os as _bos
+        _bos.install_broadcast_arbiter(None, None)
+
         for t in (self._task, self._recon_task):
             if t is None:
                 continue

@@ -185,10 +185,15 @@ _broadcast_ledger: "Any | None" = None
 _broadcast_scheduler: "Any | None" = None
 
 
-def install_broadcast_arbiter(ledger: Any, scheduler: Any) -> None:
-    """Called by Orchestrator.__init__ to register the ledger + slot
-    scheduler. Subsequent publish_broadcast_moment calls route through
-    them, recording recap history + multiplexing onto UI output slots."""
+def install_broadcast_arbiter(ledger: Any | None, scheduler: Any | None) -> None:
+    """Called by Orchestrator.start_background to register the ledger
+    + slot scheduler. Pass None for both to uninstall (Orchestrator.
+    stop_background does this so the next publish_broadcast_moment
+    falls back to the legacy direct-publish path).
+
+    Subsequent publish_broadcast_moment calls route through the
+    installed arbiter, recording recap history + multiplexing onto
+    UI output slots."""
     global _broadcast_ledger, _broadcast_scheduler
     _broadcast_ledger = ledger
     _broadcast_scheduler = scheduler

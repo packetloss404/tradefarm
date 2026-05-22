@@ -292,6 +292,15 @@ class PredictionsBoard:
         if not self._predictions:
             self._seed_session(now_et_dt)
 
+        # Audit fix (R): if the session_date is in the future (i.e.
+        # we just reset to "tomorrow" because wall-time is past 17:00
+        # ET today), skip the lifecycle loop entirely. Otherwise the
+        # wall-clock time-of-day comparison instantly walks the brand-
+        # new "open" predictions through locked → revealed because
+        # the wall hour is already past REVEAL_TIME.
+        if self._session_date is not None and self._session_date > now_et_dt.date():
+            return
+
         now_t = now_et_dt.time()
         for pred in self._predictions.values():
             # open → locked at 9:30 ET
