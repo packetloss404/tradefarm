@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import structlog
 
 from tradefarm.execution.alpaca_broker import AlpacaBroker
+
+# Round-5 audit fix (Z): bound the seen-orders dedup set.
+SEEN_ORDERS_LRU_CAP = 10_000
 
 log = structlog.get_logger()
 
@@ -69,15 +73,25 @@ class OrderReconciler:
         self._last_poll_ts: datetime = datetime.now(timezone.utc) - timedelta(
             seconds=startup_lookback_sec
         )
-        self._seen_order_ids: set[str] = set()
+        # Round-5 audit fix (Z): bound the dedup set. Without a cap, a
+        # long-running broadcast (24+ hrs) would accumulate every Alpaca
+        # order_id forever. OrderedDict + .move_to_end gives LRU
+        # semantics: most-recently-seen ids stay, oldest evicted at
+        # the cap. 10k is generous (~250 fills/day × 30 days).
+        self._seen_order_ids: OrderedDict[str, None] = OrderedDict()
         self._task: asyncio.Task | None = None
 
-    def poll_once(self) -> list[ReconciledFill]:
-        """One reconciliation pass. Returns new ReconciledFill records."""
+    async def poll_once(self) -> list[ReconciledFill]:
+        """One reconciliation pass. Returns new ReconciledFill records.
+
+        Round-5 audit fix (Y): now async because ``broker.get_orders``
+        is async (offloads the Alpaca SDK round-trip via to_thread).
+        Scheduler's ``_reconcile_loop`` awaits this.
+        """
         poll_started_at = datetime.now(timezone.utc)
         since_iso = self._last_poll_ts.isoformat()
         try:
-            orders = self.broker.get_orders(since_iso)
+            orders = await self.broker.get_orders(since_iso)
         except Exception as e:
             log.warning("reconcile_fetch_failed", error=str(e))
             return []
@@ -112,7 +126,10 @@ class OrderReconciler:
             agent_id = self.broker.parse_agent_id(coid)
             if agent_id is None:
                 # Not one of ours (external order, or manual trade).
-                self._seen_order_ids.add(broker_oid)
+                self._seen_order_ids[broker_oid] = None
+                # LRU eviction: keep the most recent SEEN_ORDERS_LRU_CAP ids.
+                while len(self._seen_order_ids) > SEEN_ORDERS_LRU_CAP:
+                    self._seen_order_ids.popitem(last=False)
                 continue
 
             actual = o["filled_avg_price"]
@@ -122,7 +139,10 @@ class OrderReconciler:
             if mark is None:
                 # Scheduler didn't register a mark for this coid (restart gap,
                 # or order placed out-of-band). Skip silently — nothing to delta.
-                self._seen_order_ids.add(broker_oid)
+                self._seen_order_ids[broker_oid] = None
+                # LRU eviction: keep the most recent SEEN_ORDERS_LRU_CAP ids.
+                while len(self._seen_order_ids) > SEEN_ORDERS_LRU_CAP:
+                    self._seen_order_ids.popitem(last=False)
                 continue
 
             out.append(
@@ -138,7 +158,9 @@ class OrderReconciler:
                     filled_at=o.get("filled_at") or "",
                 )
             )
-            self._seen_order_ids.add(broker_oid)
+            self._seen_order_ids[broker_oid] = None
+            while len(self._seen_order_ids) > SEEN_ORDERS_LRU_CAP:
+                self._seen_order_ids.popitem(last=False)
 
         self._last_poll_ts = newest_seen
         return out

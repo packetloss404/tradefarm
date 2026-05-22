@@ -130,6 +130,29 @@ class LstmLlmAgent(Agent):
             retrieved_examples=retrieved_examples,
         )
 
+        # Round-5 audit fix (BB): hard daily-budget gate. If the
+        # operator set llm_daily_budget_usd > 0 and we've crossed it,
+        # skip the LLM call entirely and fall back to LSTM-only.
+        # Counts as a "blocked" event so /llm/stats reports the
+        # cause; agent stays on its previous decision shape.
+        from tradefarm.runtime.llm_budget import (
+            is_over_budget,
+            register_blocked,
+            register_call,
+        )
+
+        if is_over_budget():
+            register_blocked()
+            LLM_SKIPS["count"] += 1
+            self.last_decision = LlmDecision(
+                bias="flat",
+                predictive=DIR_NAMES[pred.direction],  # type: ignore[arg-type]
+                stance="wait",
+                size_pct=0.0,
+                reason=("llm budget exhausted: skipped (LSTM-only fallback)"),
+            )
+            return []
+
         try:
             LLM_SKIPS["called"] += 1
             decision = await self._overlay.decide(ctx)
@@ -166,6 +189,13 @@ class LstmLlmAgent(Agent):
             return []
 
         self.last_decision = decision
+        # Round-5 audit fix (BB): bookkeep the call against the daily
+        # ceiling. The LlmDecision doesn't currently carry per-call
+        # usage; we estimate from the typical TradeFarm prompt shape
+        # (~1k input + 200 output for the LSTM+LLM overlay). Operators
+        # who care about exactness can wire real usage through the
+        # LlmDecision dataclass later.
+        register_call(input_tokens=1000, output_tokens=200)
 
         if decision.stance == "wait" or decision.size_pct <= 0:
             return []

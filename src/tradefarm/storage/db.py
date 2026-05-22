@@ -52,10 +52,32 @@ _INDEX_MIGRATIONS: tuple[tuple[str, str], ...] = (
 async def _table_columns(conn, table: str) -> set[str]:
     """Return {column_name,...} for `table`, or empty set if the table is missing.
 
-    SQLite-only (PRAGMA). If the project ever adds Postgres support, swap this
-    for ``inspect(conn).get_columns(table)`` and gate the ALTER syntax per
-    dialect; the rest of the migration loop is already idempotent.
+    Round-5 audit fix (DD): dialect-dispatch. SQLite uses PRAGMA
+    table_info; Postgres uses information_schema.columns. The rest
+    of the migration loop is already idempotent across dialects.
     """
+    dialect = conn.engine.dialect.name if hasattr(conn, "engine") else "sqlite"
+    # `conn.engine` is on async connections too via the underlying
+    # SyncConnection; fall through to sqlite if introspection fails.
+    try:
+        dialect = conn.sync_engine.dialect.name  # type: ignore[attr-defined]
+    except AttributeError:
+        try:
+            dialect = conn.engine.dialect.name  # type: ignore[attr-defined]
+        except AttributeError:
+            dialect = "sqlite"
+
+    if dialect == "postgresql":
+        rows = (
+            await conn.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+                {"t": table},
+            )
+        ).all()
+        return {r[0] for r in rows}
+    # SQLite (and unknown dialects — PRAGMA is a no-op on Postgres
+    # anyway, so a wrong dispatch is at worst an empty set and a
+    # full re-add of every column, which the ALTER guards make safe).
     rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).all()
     return {r[1] for r in rows}
 

@@ -385,7 +385,7 @@ class Orchestrator:
                 if settings.execution_mode == "alpaca_paper":
                     # Key: the exact client_order_id the broker will send to Alpaca.
                     self._optimistic_marks[f"agent{agent.state.id}-{client_tag}"] = px
-                fill = self.broker.submit_market(
+                fill = await self.broker.submit_market(
                     symbol=sig.symbol,
                     side=sig.side,
                     qty=sig.qty,
@@ -736,7 +736,7 @@ class Orchestrator:
         log.info("reconcile_loop_started", interval_sec=RECONCILE_INTERVAL_SEC)
         while True:
             try:
-                fills = self._reconciler.poll_once()
+                fills = await self._reconciler.poll_once()
                 if fills:
                     applied = await self._apply_reconciled(fills)
                     log.info("reconciled", n=len(fills), applied=applied)
@@ -840,3 +840,10 @@ class Orchestrator:
         from tradefarm.orchestrator import broadcast_os as _bos
 
         _bos.install_broadcast_arbiter(None, None)
+
+        # Round-5 audit fix (AA): close the shared httpx client so the
+        # event-loop doesn't carry an unclosed-connection warning into
+        # the next process. Idempotent + best-effort.
+        from tradefarm.runtime.http import aclose_shared_client
+
+        await aclose_shared_client()

@@ -65,12 +65,18 @@ class EodhdClient:
         # 4xx (other than 429) raise immediately — they're caller errors.
         # Empty 200 responses are now logged so "API healthy, no data"
         # is distinguishable from "API broken" in operator logs.
+        # Round-5 audit fix (AA): reuse the process-wide httpx client
+        # instead of creating a fresh one per call. With 100 agents
+        # ticking every 5 minutes, the previous code paid TLS + pool-
+        # init cost ~3k times an hour.
+        from tradefarm.runtime.http import get_shared_client
+
+        client = await get_shared_client()
         rows: list = []
         last_exc: Exception | None = None
         for attempt in range(EOD_MAX_RETRIES + 1):
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.get(url, params=params)
+                resp = await client.get(url, params=params, timeout=30.0)
                 if resp.status_code == 429 or resp.status_code >= 500:
                     last_exc = httpx.HTTPStatusError(
                         f"EODHD {resp.status_code}",
@@ -126,7 +132,10 @@ class EodhdClient:
             raise RuntimeError("EODHD_API_KEY not configured")
         url = f"{BASE_URL}/real-time/{symbol}.{exchange}"
         params = {"api_token": self.api_key, "fmt": "json"}
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json()
+        # Round-5 audit fix (AA): reuse the shared httpx client.
+        from tradefarm.runtime.http import get_shared_client
+
+        client = await get_shared_client()
+        resp = await client.get(url, params=params, timeout=15.0)
+        resp.raise_for_status()
+        return resp.json()

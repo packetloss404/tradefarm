@@ -63,6 +63,18 @@ class _FakeClient:
         return self._responses.pop(0)
 
 
+@pytest.fixture(autouse=True)
+def _reset_shared_http_client(monkeypatch):
+    """Round-5 (AA) — EodhdClient now reuses a process-wide httpx
+    client. Tests that monkeypatch httpx.AsyncClient need the
+    singleton reset so each test gets its own fake."""
+    from tradefarm.runtime import http as runtime_http
+
+    monkeypatch.setattr(runtime_http, "_client", None)
+    yield
+    monkeypatch.setattr(runtime_http, "_client", None)
+
+
 async def test_eodhd_retries_on_429_and_succeeds_with_increasing_backoff(monkeypatch, tmp_path):
     # Disable the bar cache so the retry path is exercised (cache hit
     # would short-circuit). Point the cache dir at a fresh tmp_path so a

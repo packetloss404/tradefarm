@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime
 
@@ -45,7 +46,19 @@ class AlpacaBroker:
         # for market orders and is the documented opt-in.
         self.allow_extended_hours = allow_extended_hours
 
-    def submit_market(
+    # Round-5 audit fix (Y): every public method now offloads the
+    # synchronous Alpaca SDK call to a worker thread via
+    # ``asyncio.to_thread``. The SDK uses blocking ``requests``; calling
+    # ``self.client.submit_order(req)`` from the scheduler's tick coroutine
+    # would otherwise pause the entire event loop for the round-trip
+    # (50-500ms × 100 agents = pinned loop). Wrapping is one line per
+    # method and changes the public signature from sync to async.
+    #
+    # Callers must ``await`` these methods. The scheduler already does
+    # via ``await self.broker.submit_market(...)``; SimulatedBroker is
+    # also async for parity.
+
+    async def submit_market(
         self,
         symbol: str,
         side: str,
@@ -74,7 +87,7 @@ class AlpacaBroker:
             client_order_id=f"agent{agent_id}-{client_tag}",
             extended_hours=self.allow_extended_hours,
         )
-        order = self.client.submit_order(req)
+        order = await asyncio.to_thread(self.client.submit_order, req)
         return Fill(
             symbol=symbol,
             side=side,
@@ -83,11 +96,11 @@ class AlpacaBroker:
             broker_order_id=str(order.id),
         )
 
-    def cancel_all(self) -> None:
-        self.client.cancel_orders()
+    async def cancel_all(self) -> None:
+        await asyncio.to_thread(self.client.cancel_orders)
 
-    def account(self) -> dict:
-        a = self.client.get_account()
+    async def account(self) -> dict:
+        a = await asyncio.to_thread(self.client.get_account)
         return {
             "equity": float(a.equity),
             "cash": float(a.cash),
@@ -95,7 +108,7 @@ class AlpacaBroker:
             "status": str(a.status),
         }
 
-    def get_orders(self, since_iso: str) -> list[dict]:
+    async def get_orders(self, since_iso: str) -> list[dict]:
         """Return recent orders submitted after `since_iso` (ISO-8601 string).
 
         Used by the reconciler to walk newly-filled Alpaca orders and
@@ -107,7 +120,7 @@ class AlpacaBroker:
             after=after_dt,
             limit=500,
         )
-        orders = self.client.get_orders(filter=req)
+        orders = await asyncio.to_thread(self.client.get_orders, filter=req)
         out: list[dict] = []
         for o in orders:
             out.append(

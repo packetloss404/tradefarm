@@ -31,7 +31,8 @@ class _StubBroker:
         self.orders = orders or []
         self.calls: list[str] = []
 
-    def get_orders(self, since_iso: str) -> list[dict]:
+    async def get_orders(self, since_iso: str) -> list[dict]:
+        # Round-5 audit (Y): broker.get_orders is async now.
         self.calls.append(since_iso)
         return list(self.orders)
 
@@ -53,7 +54,7 @@ def _recon(broker: _StubBroker, marks: dict[str, float] | None = None) -> OrderR
     )
 
 
-def test_empty_poll_advances_cursor_to_now():
+async def test_empty_poll_advances_cursor_to_now():
     """REGRESSION: idle polls used to leave _last_poll_ts pinned at the
     original startup_lookback_sec floor, so each subsequent get_orders
     call scanned a wider and wider window. With the fix, an empty
@@ -64,7 +65,7 @@ def test_empty_poll_advances_cursor_to_now():
     initial_cursor = recon._last_poll_ts
 
     before = datetime.now(timezone.utc)
-    fills = recon.poll_once()
+    fills = await recon.poll_once()
     after = datetime.now(timezone.utc)
 
     assert fills == []
@@ -73,7 +74,7 @@ def test_empty_poll_advances_cursor_to_now():
     assert before <= recon._last_poll_ts <= after
 
 
-def test_non_empty_poll_does_not_skip_inflight_orders():
+async def test_non_empty_poll_does_not_skip_inflight_orders():
     """The cursor must not jump past an order that came back in the
     batch — otherwise the next poll wouldn't see it again and we'd
     miss its eventual fill. The in-batch update path takes the
@@ -101,7 +102,7 @@ def test_non_empty_poll_does_not_skip_inflight_orders():
     recon = _recon(broker, marks={"agent1-xx": 100.0})
     initial_cursor = recon._last_poll_ts
 
-    fills = recon.poll_once()
+    fills = await recon.poll_once()
     assert fills == []
     # Cursor must NOT have skipped past the pending order's submitted_at.
     # The current logic only moves forward when ts > cursor, so a
@@ -110,7 +111,7 @@ def test_non_empty_poll_does_not_skip_inflight_orders():
     assert recon._last_poll_ts >= initial_cursor
 
 
-def test_filled_order_produces_reconciled_fill_with_delta():
+async def test_filled_order_produces_reconciled_fill_with_delta():
     """End-to-end: filled order + matching optimistic mark → ReconciledFill."""
     now = datetime.now(timezone.utc)
     broker = _StubBroker(
@@ -131,7 +132,7 @@ def test_filled_order_produces_reconciled_fill_with_delta():
     )
     recon = _recon(broker, marks={"agent7-tag1": 100.0})
 
-    fills = recon.poll_once()
+    fills = await recon.poll_once()
     assert len(fills) == 1
     rf = fills[0]
     assert rf.agent_id == 7
@@ -145,7 +146,7 @@ def test_filled_order_produces_reconciled_fill_with_delta():
     assert "ord-1" in recon._seen_order_ids
 
 
-def test_extended_hours_flag_flows_to_market_order_request():
+async def test_extended_hours_flag_flows_to_market_order_request():
     """REGRESSION: allow_extended_hours used to be a documented-but-dead
     flag that only short-circuited the is_market_open() gate. The
     MarketOrderRequest now receives it, so Alpaca actually accepts the
@@ -167,7 +168,7 @@ def test_extended_hours_flag_flows_to_market_order_request():
         from tradefarm.execution.alpaca_broker import AlpacaBroker
 
         broker = AlpacaBroker(allow_extended_hours=True)
-        broker.submit_market(
+        await broker.submit_market(
             symbol="SPY",
             side="buy",
             qty=1,
@@ -180,7 +181,7 @@ def test_extended_hours_flag_flows_to_market_order_request():
         assert kwargs["extended_hours"] is True
 
 
-def test_extended_hours_default_false():
+async def test_extended_hours_default_false():
     from tradefarm.config import settings
 
     with (
@@ -197,7 +198,7 @@ def test_extended_hours_default_false():
         from tradefarm.execution.alpaca_broker import AlpacaBroker
 
         broker = AlpacaBroker()  # default
-        broker.submit_market(
+        await broker.submit_market(
             symbol="SPY",
             side="buy",
             qty=1,

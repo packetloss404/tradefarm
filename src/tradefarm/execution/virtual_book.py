@@ -6,10 +6,16 @@ and P&L computed locally. Fills from the real broker get attributed back to
 the agent that placed the parent order.
 """
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from tradefarm.runtime.clock import now_utc
+
+# Round-5 audit fix (Z): bound the per-book reconciliation dedup set.
+# 100 agents × 10k fills each = 1M ids max, but each is small (string).
+# Acceptable; the cap is per-book so a single book never exceeds 10k.
+_RECONCILED_IDS_LRU_CAP = 10_000
 
 
 def _utcnow() -> datetime:
@@ -60,8 +66,16 @@ class VirtualBook:
     # all positions through `record_fill` / `_get_or_create` instead.
     positions: dict[str, VirtualPosition] = field(default_factory=dict)
     # Broker order ids already reconciled — prevents double-counting on
-    # reconciler restart or retry.
-    _reconciled_ids: set[str] = field(default_factory=set)
+    # reconciler restart or retry. Round-5 audit fix (Z): bounded LRU
+    # so a long-running broadcast can't accumulate every order_id
+    # forever. Replaces the unbounded set.
+    _reconciled_ids: OrderedDict[str, None] = field(default_factory=OrderedDict)
+
+    def _add_reconciled_id(self, broker_order_id: str) -> None:
+        """LRU-bounded insert into the dedup set."""
+        self._reconciled_ids[broker_order_id] = None
+        while len(self._reconciled_ids) > _RECONCILED_IDS_LRU_CAP:
+            self._reconciled_ids.popitem(last=False)
 
     def _get_or_create(self, symbol: str) -> VirtualPosition:
         pos = self.positions.get(symbol)
@@ -128,7 +142,7 @@ class VirtualBook:
         """
         if broker_order_id in self._reconciled_ids:
             return False
-        self._reconciled_ids.add(broker_order_id)
+        self._add_reconciled_id(broker_order_id)
         if abs(mark_price - actual_price) < 1e-9:
             return True  # nothing to correct, but still consume the id
         delta = actual_price - mark_price  # signed
@@ -243,14 +257,14 @@ class VirtualBook:
         # delta is exactly 0 (no-op) without breaking the test suite.
         if abs(delta) < 1e-9:
             return broker_order_id not in self._reconciled_ids and bool(
-                self._reconciled_ids.add(broker_order_id) or True
+                self._add_reconciled_id(broker_order_id) or True
             )
         # Best-effort for non-zero delta callers that haven't migrated:
         # treat delta as a cash-only correction (the old buggy behavior).
         # Real callers should switch to apply_reconciled_fill.
         if broker_order_id in self._reconciled_ids:
             return False
-        self._reconciled_ids.add(broker_order_id)
+        self._add_reconciled_id(broker_order_id)
         if side == "buy":
             self.cash -= delta * qty
             pos = self.positions.get(symbol)

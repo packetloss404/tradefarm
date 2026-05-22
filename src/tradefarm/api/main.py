@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
 
 from tradefarm.academy import (
@@ -182,6 +183,52 @@ app.include_router(market_clock_router)
 app.include_router(stream_control_router)
 app.include_router(audience_router)
 app.include_router(recap_router)
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics(request: Request) -> str:
+    """Prometheus-compatible text exposition of the counters the
+    operator most often wants to graph: tick rate, LLM cost, error
+    rate, broker activity.
+
+    Round-5 audit fix (CC): observability beyond log scraping. Wire
+    a Prometheus scraper at this URL with a 30s interval. No labels
+    yet — flat counters and gauges. Add labels as use cases appear.
+    """
+    from tradefarm.agents.lstm_llm_agent import LLM_SKIPS
+    from tradefarm.orchestrator.scheduler import JOURNAL_COUNTERS
+    from tradefarm.runtime.llm_budget import snapshot as llm_snapshot
+
+    orch = getattr(request.app.state, "orchestrator", None)
+    last_tick_ts = 0.0
+    if orch is not None and orch.last_tick_at is not None:
+        last_tick_ts = orch.last_tick_at.to_pydatetime().timestamp()
+
+    llm = llm_snapshot()
+    lines: list[str] = [
+        "# HELP tradefarm_last_tick_timestamp_seconds Unix epoch of last completed tick",
+        "# TYPE tradefarm_last_tick_timestamp_seconds gauge",
+        f"tradefarm_last_tick_timestamp_seconds {last_tick_ts}",
+        "# HELP tradefarm_llm_calls_total LLM calls actually made (across all agents)",
+        "# TYPE tradefarm_llm_calls_total counter",
+        f"tradefarm_llm_calls_total {LLM_SKIPS.get('called', 0)}",
+        "# HELP tradefarm_llm_skips_total LLM calls skipped by confidence/budget gate",
+        "# TYPE tradefarm_llm_skips_total counter",
+        f"tradefarm_llm_skips_total {LLM_SKIPS.get('count', 0)}",
+        "# HELP tradefarm_llm_budget_spent_usd Today's LLM spend (USD, UTC day)",
+        "# TYPE tradefarm_llm_budget_spent_usd gauge",
+        f"tradefarm_llm_budget_spent_usd {llm['usd']}",
+        "# HELP tradefarm_llm_budget_blocked_total Calls refused because daily budget exhausted",
+        "# TYPE tradefarm_llm_budget_blocked_total counter",
+        f"tradefarm_llm_budget_blocked_total {llm['blocked']}",
+        "# HELP tradefarm_notes_this_tick Journal notes written in the most recent tick",
+        "# TYPE tradefarm_notes_this_tick gauge",
+        f"tradefarm_notes_this_tick {JOURNAL_COUNTERS.get('notes_this_tick', 0)}",
+        "# HELP tradefarm_outcomes_this_tick Stamped outcomes in the most recent tick",
+        "# TYPE tradefarm_outcomes_this_tick gauge",
+        f"tradefarm_outcomes_this_tick {JOURNAL_COUNTERS.get('outcomes_this_tick', 0)}",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 @app.get("/health")
@@ -652,7 +699,10 @@ async def list_orders(limit: int = 25) -> list[dict]:
     # Pull last 24h of orders; trim to `limit`.
     since = (date.today() - timedelta(days=1)).isoformat() + "T00:00:00+00:00"
     try:
-        orders = broker.get_orders(since)
+        # Round-5: broker.get_orders is async post-Y migration.
+        # SimulatedBroker doesn't have get_orders; the hasattr guard
+        # above already filters it out.
+        orders = await broker.get_orders(since)
     except Exception:
         return []
     orders.sort(key=lambda o: o.get("submitted_at") or "", reverse=True)

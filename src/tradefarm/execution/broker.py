@@ -14,7 +14,10 @@ class Fill:
 
 
 class Broker(Protocol):
-    def submit_market(
+    # Round-5 audit fix (Y): broker contract is async to match Alpaca's
+    # asyncio.to_thread wrapping. SimulatedBroker is trivially async
+    # for parity; tests can `await` either.
+    async def submit_market(
         self,
         symbol: str,
         side: str,
@@ -30,7 +33,7 @@ class SimulatedBroker:
 
     Used for offline strategy iteration and tests."""
 
-    def submit_market(
+    async def submit_market(
         self,
         symbol: str,
         side: str,

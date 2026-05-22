@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     # "simulated" fills locally at last close; "alpaca_paper" routes to Alpaca
     execution_mode: Literal["simulated", "alpaca_paper"] = "simulated"
 
+    # Round-5 audit fix (BB): daily LLM spend ceiling (USD). When
+    # set to a positive value, agents stop calling the LLM once the
+    # day's tally crosses this number — the LSTM-only fallback path
+    # keeps running. 0 (default) disables the ceiling, preserving
+    # historical behavior. Pricing assumed Haiku 4.5; operators using
+    # a different model should override the per-million-token rates
+    # below.
+    llm_daily_budget_usd: float = Field(default=0.0, ge=0)
+    llm_input_per_million: float = Field(default=0.80, ge=0)
+    llm_output_per_million: float = Field(default=4.00, ge=0)
+    llm_cache_read_per_million: float = Field(default=0.08, ge=0)
+
     # Audit fix (H28): optional shared-secret for state-mutating endpoints.
     # When non-empty, every POST/PUT/PATCH/DELETE requires the header
     # X-TradeFarm-Token: <value>. Empty (default) = open, preserves
