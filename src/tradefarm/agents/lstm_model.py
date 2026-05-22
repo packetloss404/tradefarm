@@ -75,6 +75,11 @@ def model_path(symbol: str) -> Path:
 
 
 def save(symbol: str, fitted: FittedModel) -> Path:
+    """Persist the model with the feature-name tuple embedded so a
+    silent FEATURE_NAMES drift between training and inference is
+    caught at load time. Closes the CLAUDE.md gotcha #6 footgun.
+    """
+    from tradefarm.agents.features import FEATURE_NAMES
     MODELS_DIR.mkdir(exist_ok=True)
     path = model_path(symbol)
     torch.save(
@@ -83,6 +88,7 @@ def save(symbol: str, fitted: FittedModel) -> Path:
             "state_dict": fitted.model.state_dict(),
             "feature_mean": fitted.feature_mean,
             "feature_std": fitted.feature_std,
+            "feature_names": tuple(FEATURE_NAMES),
         },
         path,
     )
@@ -90,11 +96,37 @@ def save(symbol: str, fitted: FittedModel) -> Path:
 
 
 def load(symbol: str) -> FittedModel | None:
+    """Load a fitted model and assert its FEATURE_NAMES match the
+    current features.py tuple. Older artifacts (pre-audit) lack the
+    field; we accept them with a structured warning rather than a hard
+    fail so existing universes don't need an immediate retrain — but
+    the warning is loud enough to act on."""
     path = model_path(symbol)
     if not path.exists():
         return None
     blob = torch.load(path, map_location="cpu", weights_only=False)
     cfg = ModelConfig(**blob["cfg"])
+
+    from tradefarm.agents.features import FEATURE_NAMES
+    saved_names = blob.get("feature_names")
+    if saved_names is None:
+        # Pre-audit artifact — emit a one-liner so the operator sees it
+        # and re-trains at their leisure. Length-equality already
+        # caught the obvious case (cfg.n_features matches features.py),
+        # but we can't detect a reorder/rename without the names.
+        import structlog
+        structlog.get_logger().warning(
+            "lstm_model_load_legacy_no_feature_names",
+            symbol=symbol, n_features=cfg.n_features,
+            note="re-train to embed feature names",
+        )
+    elif tuple(saved_names) != tuple(FEATURE_NAMES):
+        raise RuntimeError(
+            f"lstm_model for {symbol!r} was trained on a different "
+            f"FEATURE_NAMES — saved={saved_names!r} current={FEATURE_NAMES!r}. "
+            f"Re-train via `uv run python -m tradefarm.agents.lstm_train --universe`."
+        )
+
     model = LstmDirectionModel(cfg)
     model.load_state_dict(blob["state_dict"])
     return FittedModel(model=model, feature_mean=blob["feature_mean"], feature_std=blob["feature_std"])

@@ -96,6 +96,45 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="TradeFarm", lifespan=lifespan)
+
+
+# Audit fix (H28): optional shared-secret middleware. When
+# settings.api_shared_secret is set, every state-mutating endpoint
+# (POST, PUT, PATCH, DELETE) requires the `X-TradeFarm-Token` header.
+# Read-only GETs stay open so the dashboard's polling doesn't require
+# threading the secret through every fetch (it can in Phase 2; this
+# round is "lock the destructive surface"). /health and /market/clock
+# are also exempted. When the secret isn't set, behavior is unchanged
+# (open, as before).
+from fastapi import Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+
+_AUTH_EXEMPT_PREFIXES = ("/health", "/market/clock", "/openapi", "/docs", "/redoc")
+
+
+@app.middleware("http")
+async def _shared_secret_guard(request: Request, call_next):
+    secret = getattr(settings, "api_shared_secret", "")
+    if not secret:
+        return await call_next(request)
+    path = request.url.path
+    # Always-open: read-only + introspection paths.
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return await call_next(request)
+    if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
+        return await call_next(request)
+    presented = request.headers.get("x-tradefarm-token", "")
+    # Constant-time compare so a timing attack can't probe the secret.
+    import hmac
+    if not hmac.compare_digest(presented.encode("utf-8"), secret.encode("utf-8")):
+        return _JSONResponse(
+            status_code=401,
+            content={"detail": "invalid or missing X-TradeFarm-Token"},
+        )
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     # Web dashboard runs on 5179, stream-app dev on 5180, packaged Tauri

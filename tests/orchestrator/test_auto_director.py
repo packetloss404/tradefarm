@@ -11,8 +11,6 @@ from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from tradefarm.config import settings
 from tradefarm.orchestrator.auto_director import AutoDirector
 
@@ -69,17 +67,19 @@ def _make_agent(
     )
 
 
-def _captured_payloads(mock: AsyncMock) -> list[dict[str, Any]]:
-    """Pull the payload dict from each publish_event call."""
+def _captured_payloads(
+    mock: AsyncMock,
+    event_type: str = "stream_macro_fired",
+) -> list[dict[str, Any]]:
+    """Pull payloads for one publish_event type."""
     out: list[dict[str, Any]] = []
     for call in mock.await_args_list:
         args = call.args
         kwargs = call.kwargs
         if len(args) >= 2:
-            assert args[0] == "stream_macro_fired"
-            out.append(args[1])
-        else:
-            assert kwargs.get("type") == "stream_macro_fired"
+            if args[0] == event_type:
+                out.append(args[1])
+        elif kwargs.get("type") == event_type:
             out.append(kwargs["payload"])
     return out
 
@@ -111,6 +111,13 @@ async def test_big_win_fires_once_and_respects_cooldown(monkeypatch):
     assert payload["color"] == "profit"
     assert payload["subtitle"].startswith("AAPL +")
     assert "6.0" in payload["subtitle"]
+
+    moment = _captured_payloads(fake_publish, "broadcast_moment")[0]
+    assert moment["id"] == "auto-big-win-42"
+    assert moment["kind"] == "agent_pnl"
+    assert moment["title"] == "Big win: agent-042"
+    assert moment["priority"] == 78
+    assert moment["outputs"] == ["macro_burst", "ticker", "recap_log"]
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +253,7 @@ async def test_cooldown_suppresses_second_fire(monkeypatch):
 
     assert first == ["auto-big-win-11"]
     assert second == []
-    assert fake_publish.await_count == 1
+    assert len(_captured_payloads(fake_publish)) == 1
 
 
 async def test_cooldown_expires_after_window(monkeypatch):
@@ -263,7 +270,7 @@ async def test_cooldown_expires_after_window(monkeypatch):
 
     assert first == ["auto-big-win-11"]
     assert second == ["auto-big-win-11"]
-    assert fake_publish.await_count == 2
+    assert len(_captured_payloads(fake_publish)) == 2
 
 
 # ---------------------------------------------------------------------------

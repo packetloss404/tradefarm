@@ -41,8 +41,11 @@ async def fetch_history(symbol: str) -> np.ndarray | None:
     return df
 
 
-def _make_loaders(X: np.ndarray, y: np.ndarray) -> tuple[DataLoader, DataLoader, np.ndarray, np.ndarray]:
-    split = int(len(X) * 0.8)
+def _make_loaders(
+    X: np.ndarray, y: np.ndarray, *, split: int | None = None,
+) -> tuple[DataLoader, DataLoader, np.ndarray, np.ndarray]:
+    if split is None:
+        split = int(len(X) * 0.8)
     X_tr, X_va = X[:split], X[split:]
     y_tr, y_va = y[:split], y[split:]
     feature_mean = X_tr.reshape(-1, X_tr.shape[-1]).mean(axis=0)
@@ -82,14 +85,43 @@ async def train_one(symbol: str) -> bool:
         return False
 
     X_flat, y_flat = featurize(df)
-    X, y = make_windows(X_flat, y_flat, seq_len=SEQ_LEN)
-    if len(X) < 100:
-        log.warning("not_enough_windows", symbol=symbol, n=len(X))
+
+    # Audit fix (H24): split BARS, not windows. The previous code made
+    # windows first then sliced 80/20 — but windows of length SEQ_LEN
+    # share rows across the split (the last 29 train windows overlap
+    # the first 29 val windows). Validation loss was optimistic.
+    #
+    # Now: hold out the last 20% of bars + a SEQ_LEN embargo gap. Each
+    # side gets its own make_windows pass, so no source bar feeds both.
+    n_bars = len(X_flat)
+    if n_bars < 200:
+        log.warning("not_enough_bars", symbol=symbol, n=n_bars)
+        return False
+    val_size = int(n_bars * 0.2)
+    train_end = n_bars - val_size - SEQ_LEN  # embargo gap = SEQ_LEN
+    if train_end < SEQ_LEN + 50:
+        log.warning("not_enough_train_bars", symbol=symbol, n=train_end)
+        return False
+    X_tr_flat, y_tr_flat = X_flat[:train_end], y_flat[:train_end]
+    X_va_flat, y_va_flat = X_flat[train_end + SEQ_LEN:], y_flat[train_end + SEQ_LEN:]
+    X_tr, y_tr_w = make_windows(X_tr_flat, y_tr_flat, seq_len=SEQ_LEN)
+    X_va, y_va_w = make_windows(X_va_flat, y_va_flat, seq_len=SEQ_LEN)
+    if len(X_tr) < 100 or len(X_va) < 20:
+        log.warning("not_enough_windows", symbol=symbol,
+                    tr=len(X_tr), va=len(X_va))
         return False
 
-    tr_loader, va_loader, mean, std_ = _make_loaders(X, y)
+    # Concatenate into the legacy layout the loader expects, then split
+    # at the train boundary inside _make_loaders (now a clean split).
+    X = np.concatenate([X_tr, X_va], axis=0)
+    y = np.concatenate([y_tr_w, y_va_w], axis=0)
+    split = len(X_tr)  # used by _make_loaders implicitly via 80/20
 
-    split = int(len(X) * 0.8)
+    tr_loader, va_loader, mean, std_ = _make_loaders(X, y, split=split)
+
+    # Use the same audit-fixed split for class-weight stats (was
+    # recomputing 0.8 fraction here, which after H24 doesn't match the
+    # actual train boundary).
     y_tr = y[:split]
     counts = np.bincount(y_tr, minlength=3).astype(int)
     total = int(counts.sum()) or 1

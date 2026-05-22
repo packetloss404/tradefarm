@@ -104,6 +104,12 @@ class YouTubeChatPoller:
     # First page is used to seed the pagination cursor only — historical chat
     # is NOT replayed. Flipped to True after the first successful poll.
     _seeded: bool = field(default=False, init=False, repr=False)
+    # Audit fix (H9): circuit-breaker for permanently-revoked refresh
+    # tokens. After N consecutive refresh failures, sleep MUCH longer
+    # before retrying so we don't hammer Google's OAuth endpoint
+    # indefinitely. Reset on a successful refresh.
+    _refresh_failures: int = field(default=0, init=False, repr=False)
+    _refresh_circuit_open_until: datetime | None = field(default=None, init=False, repr=False)
 
     async def start(self) -> None:
         """Spin up the background poll task. Idempotent.
@@ -195,6 +201,17 @@ class YouTubeChatPoller:
             and (self._access_token_expires_at - now) > TOKEN_REFRESH_LEAD
         ):
             return
+        # Audit fix (H9): if the circuit breaker is open (too many
+        # consecutive refresh failures, e.g. revoked refresh token),
+        # skip the refresh entirely until the cool-down expires.
+        if (
+            self._refresh_circuit_open_until is not None
+            and now < self._refresh_circuit_open_until
+        ):
+            raise RuntimeError(
+                "youtube_chat refresh circuit open — token likely revoked; "
+                f"retry after {self._refresh_circuit_open_until.isoformat()}"
+            )
         await self._refresh_access_token(client)
 
     async def _refresh_access_token(self, client: httpx.AsyncClient) -> None:
@@ -215,12 +232,31 @@ class YouTubeChatPoller:
                 error_code = str(r.json().get("error", "unknown"))[:64]
             except (ValueError, KeyError):
                 pass
-            log.error(
-                "youtube_chat_token_refresh_failed",
-                status=r.status_code,
-                error_code=error_code,
-            )
+            # Audit fix (H9): consecutive-failure circuit breaker. After
+            # 5 consecutive failures, open the circuit for 1 hour so
+            # we don't hammer Google's OAuth endpoint when the refresh
+            # token has been revoked.
+            self._refresh_failures += 1
+            if self._refresh_failures >= 5:
+                self._refresh_circuit_open_until = _utcnow() + timedelta(hours=1)
+                log.error(
+                    "youtube_chat_refresh_circuit_open",
+                    status=r.status_code,
+                    error_code=error_code,
+                    consecutive_failures=self._refresh_failures,
+                    retry_after=self._refresh_circuit_open_until.isoformat(),
+                )
+            else:
+                log.error(
+                    "youtube_chat_token_refresh_failed",
+                    status=r.status_code,
+                    error_code=error_code,
+                    consecutive_failures=self._refresh_failures,
+                )
             r.raise_for_status()
+        # Successful refresh — reset failure counter + close circuit.
+        self._refresh_failures = 0
+        self._refresh_circuit_open_until = None
         data = r.json()
         token = data.get("access_token")
         if not token:

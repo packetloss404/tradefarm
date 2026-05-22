@@ -146,7 +146,7 @@ async def test_upload_episode_runs_state_machine_with_mocks(
         assert video_bytes == 1024
         return "https://upload.googleapis.com/resumable/abc123"
 
-    async def fake_put(*, location_url, video_path):
+    async def fake_put(*, location_url, video_path, refresh_creds=None):
         calls.append("put")
         assert location_url.endswith("abc123")
         assert video_path.is_file()
@@ -165,7 +165,9 @@ async def test_upload_episode_runs_state_machine_with_mocks(
     assert result.ok, result.error
     assert result.video_id == "dQw4w9WgXcQ"
     assert result.video_url == "https://youtu.be/dQw4w9WgXcQ"
-    assert calls == ["refresh", "init", "put"]
+    # Audit fix: a second refresh fires before the thumbnail call
+    # (the long PUT could have left the original token expired).
+    assert calls == ["refresh", "init", "put", "refresh"]
     assert thumb_calls == ["dQw4w9WgXcQ"]
 
 

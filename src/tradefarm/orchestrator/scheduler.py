@@ -219,11 +219,16 @@ class Orchestrator:
         return out
 
     async def tick_once(self) -> dict:
-        self._tick_in_progress = True
-        try:
-            return await self._tick_once_inner()
-        finally:
-            self._tick_in_progress = False
+        # Audit fix (C9): real asyncio.Lock instead of poll-on-flag, so
+        # the curriculum loop can't swap agent.risk mid-tick AND so two
+        # concurrent /tick calls (e.g. dashboard click while
+        # run_scheduled is mid-tick) serialize rather than interleave.
+        async with self._tick_lock:
+            self._tick_in_progress = True
+            try:
+                return await self._tick_once_inner()
+            finally:
+                self._tick_in_progress = False
 
     async def _tick_once_inner(self) -> dict:
         tick_id = uuid.uuid4().hex[:12]
@@ -604,8 +609,13 @@ class Orchestrator:
 
     async def run_curriculum_loop(self) -> None:
         """Background loop: run the curriculum every N seconds, but never during
-        a tick. We poll the ``_tick_in_progress`` flag before calling
-        ``evaluate_all`` so rank changes never race with a running tick.
+        a tick.
+
+        Audit fix (C9): acquires the same ``_tick_lock`` ``tick_once``
+        uses. Replaces the prior poll-on-flag pattern, which had a TOCTOU
+        race where a new tick could start between the flag check and the
+        ``await curriculum.evaluate_all`` call — letting curriculum swap
+        ``agent.risk`` mid-tick.
         """
         interval = settings.academy_eval_interval_sec
         if interval <= 0:
@@ -615,10 +625,8 @@ class Orchestrator:
         log.info("curriculum_loop_started", interval_sec=interval)
         while True:
             try:
-                # Wait for any in-progress tick to finish — brief polling.
-                while self._tick_in_progress:
-                    await asyncio.sleep(0.05)
-                await curriculum.evaluate_all(self)
+                async with self._tick_lock:
+                    await curriculum.evaluate_all(self)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

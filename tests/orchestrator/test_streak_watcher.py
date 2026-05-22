@@ -62,17 +62,19 @@ def _outcome(pnl: float, closed_at: datetime, symbol: str = "AAPL") -> dict:
     }
 
 
-def _captured_payloads(mock: AsyncMock) -> list[dict[str, Any]]:
-    """Pull the payload dict from each publish_event call (positional or kw)."""
+def _captured_payloads(
+    mock: AsyncMock,
+    event_type: str = "stream_macro_fired",
+) -> list[dict[str, Any]]:
+    """Pull payloads for one publish_event type (positional or kw)."""
     out: list[dict[str, Any]] = []
     for call in mock.await_args_list:
         args = call.args
         kwargs = call.kwargs
         if len(args) >= 2:
-            assert args[0] == "stream_macro_fired"
-            out.append(args[1])
-        else:
-            assert kwargs.get("type") == "stream_macro_fired"
+            if args[0] == event_type:
+                out.append(args[1])
+        elif kwargs.get("type") == event_type:
             out.append(kwargs["payload"])
     return out
 
@@ -119,6 +121,12 @@ async def test_win_streak_fires_then_cooldown_suppresses():
     assert win["label"] == "agent-001 on a heater"
     assert win["color"] == "profit"
     assert win["subtitle"] == "3 wins straight"
+
+    moment = _captured_payloads(fake_publish, "broadcast_moment")[0]
+    assert moment["id"] == "streak-win3-1"
+    assert moment["kind"] == "streak"
+    assert moment["title"] == "agent-001 on a heater"
+    assert moment["priority"] == 64
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tradefarm.agents.backtest import _backtest_async
 from tradefarm.data.universe import default_universe
@@ -23,17 +23,61 @@ router = APIRouter(prefix="/backtest", tags=["backtest"])
 # job_id → state
 _JOBS: dict[str, dict[str, Any]] = {}
 
+# Audit fix (H27): unbounded concurrent jobs were a DoS. Cap total
+# inflight + cap per-request symbol count + evict completed jobs older
+# than _JOB_TTL_SEC so _JOBS doesn't grow forever.
+_MAX_INFLIGHT_JOBS = 4
+_MAX_SYMBOLS_PER_REQUEST = 500
+_JOB_TTL_SEC = 3600  # 1 hour
+
+
+def _evict_stale_jobs() -> None:
+    """Drop completed jobs whose finished_at is older than TTL."""
+    now = datetime.now(timezone.utc)
+    stale = []
+    for jid, job in _JOBS.items():
+        finished = job.get("finished_at")
+        if not finished:
+            continue
+        try:
+            ts = datetime.fromisoformat(finished)
+        except (TypeError, ValueError):
+            continue
+        if (now - ts).total_seconds() > _JOB_TTL_SEC:
+            stale.append(jid)
+    for jid in stale:
+        _JOBS.pop(jid, None)
+
+
+def _inflight_count() -> int:
+    return sum(1 for j in _JOBS.values() if j.get("status") == "running")
+
 
 class RunRequest(BaseModel):
     # Empty / omitted → run the default universe.
-    symbols: list[str] | None = None
+    symbols: list[str] | None = Field(
+        default=None,
+        max_length=_MAX_SYMBOLS_PER_REQUEST,
+        description=f"Max {_MAX_SYMBOLS_PER_REQUEST} symbols per request.",
+    )
 
 
 @router.post("/run")
 async def run(req: RunRequest) -> dict[str, Any]:
+    _evict_stale_jobs()
+    if _inflight_count() >= _MAX_INFLIGHT_JOBS:
+        raise HTTPException(
+            429,
+            f"too many inflight backtests (cap {_MAX_INFLIGHT_JOBS}); "
+            "wait for one to finish",
+        )
     symbols = [s.strip().upper() for s in (req.symbols or default_universe()) if s.strip()]
     if not symbols:
         raise HTTPException(400, "no symbols to backtest")
+    if len(symbols) > _MAX_SYMBOLS_PER_REQUEST:
+        raise HTTPException(
+            400, f"too many symbols: {len(symbols)} > {_MAX_SYMBOLS_PER_REQUEST}",
+        )
     job_id = uuid4().hex[:12]
     _JOBS[job_id] = {
         "job_id": job_id,

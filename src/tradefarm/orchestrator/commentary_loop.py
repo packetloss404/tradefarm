@@ -130,12 +130,23 @@ class CommentaryLoop:
     _counter: int = field(default=0, init=False, repr=False)
     _spy_baseline: float | None = field(default=None, init=False, repr=False)
     _last_fill_keys: tuple[str, ...] = field(default=(), init=False, repr=False)
+    # Audit fix (H6): cache the overlay so we don't rebuild the
+    # AnthropicProvider's underlying httpx client (and discard
+    # connection-pool keepalive + prompt-cache warmup) every 45s.
+    # invalidate_overlay() is called by the admin path when keys flip.
+    _overlay_cache: Any = field(default=None, init=False, repr=False)
 
     async def start(self) -> None:
         if self._task is not None:
             return
         self._task = asyncio.create_task(self._run(), name="orch_commentary_loop")
         log.info("commentary_loop_started", interval_sec=self.poll_interval_sec)
+
+    def invalidate_overlay(self) -> None:
+        """Force the next tick to rebuild the LLM overlay.
+        Called by the admin path after settings.llm_provider / keys
+        change so the cached client picks up the new credentials."""
+        self._overlay_cache = None
 
     async def stop(self) -> None:
         self._stopped = True
@@ -295,7 +306,14 @@ class CommentaryLoop:
         appears to hallucinate a position magnitude (e.g., claims "$200K"
         when the farm's largest position is $200).
         """
-        overlay = LlmOverlay.from_settings()
+        # Audit fix (H6): cache the overlay across ticks. The previous
+        # code rebuilt the LlmOverlay (and its underlying client) every
+        # 45s, throwing away connection pool keepalive and the ephemeral
+        # prompt-cache warmup. invalidate_overlay() resets the cache
+        # when the admin path flips provider/keys.
+        if self._overlay_cache is None:
+            self._overlay_cache = LlmOverlay.from_settings()
+        overlay = self._overlay_cache
         provider = overlay.provider
         user = self._user_message(snap)
         # 20s hard cap so a hung provider can't stall the 45s loop indefinitely.

@@ -186,16 +186,18 @@ class OpenAiTtsProvider:
         client = AsyncOpenAI(api_key=self.api_key)
         mapped = self.VOICE_MAP.get(voice, voice)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # OpenAI's API streams audio; .wav response format keeps us out
-        # of the ffmpeg dependency for this provider.
-        resp = await client.audio.speech.create(
+        # Audit fix (H15): use the documented stable streaming API
+        # instead of `resp.content` / `resp.read()`, which return a
+        # coroutine in some SDK versions (would have silently written
+        # `b"<coroutine object …>"` to the wav). stream_to_file
+        # handles the binary correctly across SDK versions.
+        async with client.audio.speech.with_streaming_response.create(
             model=self.model_id,
             voice=mapped,
             input=text,
             response_format="wav",
-        )
-        # SDK returns a response object; .content is the raw bytes.
-        out_path.write_bytes(resp.content if hasattr(resp, "content") else resp.read())
+        ) as response:
+            await response.stream_to_file(out_path)
         return _wav_duration_sec(out_path)
 
 

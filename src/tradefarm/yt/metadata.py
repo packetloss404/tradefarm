@@ -180,17 +180,21 @@ def build_description(
 
 def default_publish_at(*, now: datetime | None = None) -> str:
     """Match the dashboard's "auto-publish 16:30 ET" default: next
-    occurrence of 16:30 America/New_York, expressed as UTC ISO-8601."""
+    occurrence of 16:30 America/New_York, expressed as UTC ISO-8601.
+
+    Audit fix (H29): use zoneinfo.ZoneInfo("America/New_York") so DST
+    transitions don't shift the publish time by an hour twice a year.
+    The previous hardcoded -5h offset was right for EST but an hour
+    early during EDT (the majority of the year).
+    """
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
     now = now or datetime.now(timezone.utc)
-    # Apply a fixed -5h offset to approximate ET → UTC. (Real ET is
-    # EDT/EST aware; the operator can override --publish-at when DST
-    # matters for the actual upload.)
-    target_et = now.astimezone(timezone.utc).replace(
-        hour=20, minute=30, second=0, microsecond=0,
-    )  # 16:30 ET ≈ 20:30 UTC (EST). Drift is bounded; operator overrides.
-    if target_et <= now:
+    now_et = now.astimezone(et)
+    target_et = now_et.replace(hour=16, minute=30, second=0, microsecond=0)
+    if target_et <= now_et:
         target_et = target_et + timedelta(days=1)
-    return target_et.isoformat()
+    return target_et.astimezone(timezone.utc).isoformat()
 
 
 # ----- top-level builder ------------------------------------------------

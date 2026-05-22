@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # "simulated" fills locally at last close; "alpaca_paper" routes to Alpaca
     execution_mode: Literal["simulated", "alpaca_paper"] = "simulated"
 
+    # Audit fix (H28): optional shared-secret for state-mutating endpoints.
+    # When non-empty, every POST/PUT/PATCH/DELETE requires the header
+    # X-TradeFarm-Token: <value>. Empty (default) = open, preserves
+    # current behaviour. Lets the operator lock the broadcast VM's
+    # 0.0.0.0:8000 bind without breaking the read-only dashboard polling.
+    api_shared_secret: str = ""
+
     # Background scheduler cadence in seconds. Default 300 (5 min) matches
     # the production cadence documented in CLAUDE.md. 0 disables auto-tick
     # so /tick is the only entrypoint — useful for backtesting / local

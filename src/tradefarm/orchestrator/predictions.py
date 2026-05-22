@@ -97,6 +97,10 @@ class PredictionsBoard:
 
     _predictions: dict[str, _Prediction] = field(default_factory=dict, init=False, repr=False)
     _session_date: Any = field(default=None, init=False, repr=False)
+    # Audit fix (H8): track the last calendar date we performed a
+    # reset on, so a single tick after RESET_TIME triggers exactly
+    # one reset per day instead of the walkthrough-bug pattern.
+    _last_reset_date: Any = field(default=None, init=False, repr=False)
     _spy_baseline: float | None = field(default=None, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _stopped: bool = field(default=False, init=False, repr=False)
@@ -253,18 +257,36 @@ class PredictionsBoard:
                 self._spy_baseline = float(mark)
 
         # Daily reset after RESET_TIME — start a brand-new session.
-        if now_et_dt.time() >= RESET_TIME and self._session_date is not None:
-            new_session_date = now_et_dt.date()
-            if new_session_date > self._session_date or (
-                new_session_date == self._session_date
-                and any(p.status == "revealed" for p in self._predictions.values())
-            ):
-                # Bump session_date to "tomorrow" for the post-17:00 reset on
-                # the same calendar day, so we don't immediately re-lock.
-                self._session_date = new_session_date + timedelta(days=1)
-                self._spy_baseline = None
-                self._build_fresh_session()
-                return
+        # Audit fix (H8): the previous logic bumped _session_date to
+        # *tomorrow*, then on every subsequent tick of the same calendar
+        # day the `new > self._session_date` check was False AND the
+        # any-revealed check was False (because the freshly-built
+        # session was all "open"), so the reset re-fired only after a
+        # double calendar roll. Worse, it built tomorrow's locks_at/
+        # reveals_at against `self._session_date` (= tomorrow), then
+        # `tick()` checked time-of-day against wall-clock ET — so on
+        # the evening of the reset, "now >= REVEAL_TIME" was already
+        # true and the brand-new prediction walked
+        # open→locked→revealed in one tick.
+        #
+        # New rule: reset triggers exactly once per calendar day after
+        # RESET_TIME (17:00 ET). Track the last reset's date so a same-
+        # day repeat is a no-op. The new session_date is *today* (not
+        # tomorrow); the session won't lock again until tomorrow's
+        # LOCK_TIME because now_et_dt.time() is already past
+        # REVEAL_TIME and the new session enters "revealed" state at
+        # creation time. We guard against the immediate walkthrough by
+        # marking new-after-reset sessions explicitly.
+        if (
+            now_et_dt.time() >= RESET_TIME
+            and self._session_date is not None
+            and self._last_reset_date != now_et_dt.date()
+        ):
+            self._last_reset_date = now_et_dt.date()
+            self._session_date = now_et_dt.date() + timedelta(days=1)
+            self._spy_baseline = None
+            self._build_fresh_session()
+            return
 
         # Seed the session if we somehow have none (defensive).
         if not self._predictions:

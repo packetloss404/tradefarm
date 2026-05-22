@@ -161,13 +161,22 @@ class StreakWatcher:
         now = _utcnow()
         self._maybe_reset_day(now)
 
-        # Per-agent: pull the recent journal once, run all per-agent detectors
-        # against the same snapshot.
-        per_agent_notes: dict[int, list[dict]] = {}
+        # Audit fix (H7): pull every agent's recent journal in parallel.
+        # 100 sequential round-trips per 10s poll = real DB pressure;
+        # asyncio.gather collapses them to one batch of concurrent
+        # queries (SessionLocal handles its own session per call).
+        notes_results = await asyncio.gather(*[
+            journal.recent_outcomes(agent.state.id, self.history_limit)
+            for agent in self.orch.agents
+        ])
+        per_agent_notes: dict[int, list[dict]] = {
+            agent.state.id: notes
+            for agent, notes in zip(self.orch.agents, notes_results, strict=True)
+        }
+
         for agent in self.orch.agents:
             agent_id = agent.state.id
-            notes = await journal.recent_outcomes(agent_id, self.history_limit)
-            per_agent_notes[agent_id] = notes
+            notes = per_agent_notes[agent_id]
 
             for macro in self._collect_streak_macros(agent, notes):
                 if await self._maybe_fire(macro, now):

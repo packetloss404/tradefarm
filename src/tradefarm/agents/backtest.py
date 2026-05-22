@@ -68,33 +68,38 @@ def _simulate(df: pd.DataFrame, idx: np.ndarray, preds: np.ndarray, max_probs: n
     entry_px = 0.0
     n_trades = 0
 
-    # Decide at idx[k] using the prediction made with data ≤ idx[k]; realize return
-    # between close[idx[k]] and close[idx[k]+1]. Skip the last bar (no next close).
+    # Decision is made AT bar t using features from bars ≤ t (i.e. with
+    # close[t] visible). Audit fix (H23): the prior code also FILLED at
+    # close[t] and earned close[t+1]/close[t] — that double-counts bar t
+    # because the close was already used to make the decision. The
+    # honest model is "see close[t], fill at the next available print
+    # (close[t+1])", and earn close[t+2]/close[t+1] over the next bar.
+    # Net effect: shifts every entry/exit by one bar; Sharpe drops a
+    # bit; numbers now match what a live system can actually achieve.
     for k, t in enumerate(idx):
-        if t + 1 >= len(close):
+        if t + 2 >= len(close):
             break
         pred = int(preds[k])
         mp = float(max_probs[k])
 
-        # Decision rule (matches LstmAgent, full-notional):
-        # go long when predicted class = up and max_prob >= 0.40;
-        # flatten when predicted class = down and has_long; otherwise hold.
+        # Apply entry/exit AT the next bar's open (we approximate with
+        # close[t+1] because we only have daily bars in the cache).
         if pred == 2 and mp >= ENTER_CONF and not has_long:
             has_long = True
-            entry_px = close[t]
+            entry_px = close[t + 1]
             n_trades += 1
         elif pred == 0 and has_long:
-            trade_returns.append(close[t] / entry_px - 1.0)
+            trade_returns.append(close[t + 1] / entry_px - 1.0)
             has_long = False
 
-        bar_ret = (close[t + 1] / close[t] - 1.0) if has_long else 0.0
+        bar_ret = (close[t + 2] / close[t + 1] - 1.0) if has_long else 0.0
         equity *= 1.0 + bar_ret
         equity_curve.append(equity)
 
     # Close any still-open position at the final close we advanced to.
     if has_long and len(idx) > 0:
         last_t = int(idx[-1])
-        final_t = min(last_t + 1, len(close) - 1)
+        final_t = min(last_t + 2, len(close) - 1)
         trade_returns.append(close[final_t] / entry_px - 1.0)
 
     eq = np.array(equity_curve, dtype=float)

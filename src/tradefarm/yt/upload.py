@@ -152,29 +152,84 @@ async def _initiate_resumable_upload(
     return loc
 
 
-async def _put_video_bytes(*, location_url: str, video_path: Path) -> dict[str, Any]:
-    """Step 2 — single-shot PUT of the mp4 bytes."""
+# Audit fix (C14): chunked resumable PUT. 8 MB chunks per Google's
+# guidance (must be a multiple of 256 KB). Streams the file in chunks
+# so we don't hold the entire reel in RAM (5 GB reels would otherwise
+# peak the process's memory).
+RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024  # 8 MiB
+
+
+async def _put_video_bytes(
+    *, location_url: str, video_path: Path,
+    refresh_creds: "YtCredentials | None" = None,
+) -> dict[str, Any]:
+    """Step 2 — resumable chunked PUT of the mp4 bytes.
+
+    Audit fix (C14): the previous code read the whole video into RAM
+    and fired a single PUT with a 600s timeout, which fails on >1hr
+    uploads (access token expires) and OOMs on large reels. Now
+    streams in 8 MiB chunks; on 308 (incomplete) advances the cursor
+    to what the server has; on 401 (token expired) calls
+    refresh_creds to get a fresh access token and retries the chunk.
+    """
     import httpx
+
     size = video_path.stat().st_size
-    headers = {
-        "Content-Length": str(size),
+    headers_base: dict[str, str] = {
         "Content-Type": "video/mp4",
-        "Content-Range": f"bytes 0-{size - 1}/{size}",
     }
-    with video_path.open("rb") as fh:
-        data = fh.read()
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        r = await client.put(location_url, headers=headers, content=data)
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"PUT video failed {r.status_code}: {r.text[:300]}")
-    return r.json()
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        with video_path.open("rb") as fh:
+            offset = 0
+            while offset < size:
+                chunk = fh.read(RESUMABLE_CHUNK_BYTES)
+                end = offset + len(chunk) - 1
+                headers = {
+                    **headers_base,
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {offset}-{end}/{size}",
+                }
+                r = await client.put(location_url, headers=headers, content=chunk)
+                if r.status_code in (200, 201):
+                    # Final chunk accepted.
+                    return r.json()
+                if r.status_code == 308:
+                    # Incomplete — server reports how far it has via Range.
+                    range_hdr = r.headers.get("Range", "")
+                    if range_hdr.startswith("bytes="):
+                        try:
+                            server_end = int(range_hdr.split("-", 1)[1])
+                            offset = server_end + 1
+                            # Re-seek to where the server actually is.
+                            fh.seek(offset)
+                            continue
+                        except (ValueError, IndexError):
+                            pass
+                    offset = end + 1
+                    continue
+                if r.status_code == 401 and refresh_creds is not None:
+                    # Token expired mid-upload. The location URL itself
+                    # holds the resumable session, so refresh and retry
+                    # the same chunk (re-seek to offset).
+                    await refresh_access_token(refresh_creds)
+                    fh.seek(offset)
+                    continue
+                raise RuntimeError(
+                    f"PUT video failed {r.status_code}: {r.text[:300]}"
+                )
+    raise RuntimeError("resumable upload ended without final response")
 
 
 async def _set_thumbnail(*, access_token: str, video_id: str, thumb_path: Path) -> None:
     """Optional step — upload custom thumbnail. Requires the YT
-    channel to be eligible for custom thumbnails (verified)."""
+    channel to be eligible for custom thumbnails (verified).
+
+    Audit fix (H30): the URL needs `uploadType=media` for the simple-
+    upload protocol (raw image body, not multipart). Without it,
+    YouTube returns 400."""
     import httpx
-    url = f"{THUMBNAILS_SET_URL}?videoId={video_id}"
+    url = f"{THUMBNAILS_SET_URL}?uploadType=media&videoId={video_id}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "image/jpeg",
@@ -232,7 +287,11 @@ async def upload_episode(
             access_token=access_token, body=body,
             video_bytes=video_path.stat().st_size,
         )
-        response = await _put_video_bytes(location_url=location, video_path=video_path)
+        # Pass creds to the chunked PUT so it can refresh the access
+        # token mid-upload if the original expires (audit fix C14).
+        response = await _put_video_bytes(
+            location_url=location, video_path=video_path, refresh_creds=creds,
+        )
     except Exception as exc:  # noqa: BLE001
         return UploadResult(
             ok=False,
@@ -245,6 +304,9 @@ async def upload_episode(
 
     if upload_thumbnail and thumb_path.is_file() and video_id:
         try:
+            # Audit fix: refresh the access token before the thumbnail
+            # call — a long PUT could have left the original expired.
+            access_token = await refresh_access_token(creds)
             await _set_thumbnail(
                 access_token=access_token, video_id=video_id, thumb_path=thumb_path,
             )
