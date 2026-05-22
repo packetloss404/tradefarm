@@ -6,19 +6,26 @@ pipeline. Companion to `docs/vod-pivot.md` (the *why*) and
 
 Read this when picking the project back up.
 
-## Where we are (2026-05-17 EOD)
+## Where we are (2026-05-22)
 
-Shipped: the foundation that lets the pipeline exist.
+**All ten sessions below shipped.** The end-to-end pipeline runs
+manifest → beats → render → stitch → script → TTS → mix → thumb →
+metadata → YouTube upload. See `CHANGELOG.md` / recent commits
+(`feat(session)…`, `feat(render)…`, `feat(tts)…`, `feat(yt)…`) for the
+per-session detail. After first-end-to-end shakeout, the 20-agent
+audit (`dev/audit-findings.md`) hardened the whole stack across four
+fix rounds (2026-05-22).
+
+The section below is preserved as the original build plan / design
+narrative.
 
 ```
 uv run python -m tradefarm.session.run --date-range 2026-05-12:2026-05-16
   ↓
-out/sessions/<id>/manifest.json   ← the only output today
+out/sessions/<id>/manifest.json   ← session 0 (shipped)
+  ↓ beats / render / stitch / script / tts / mix / thumb / metadata / upload
+out/sessions/<id>/reel.mp4 + published YouTube episode
 ```
-
-That manifest is the **input** to every remaining subsystem. From
-here, each step transforms it closer to a watchable video. Nothing
-visible/playable exists yet.
 
 ## The chain to a finished VOD
 

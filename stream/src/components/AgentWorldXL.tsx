@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import type { AgentRow, MarketPhase, PromotionEventPayload, Rank } from "../shared/api";
 import type { FillEvent } from "../hooks/useStreamData";
+import { replayNow } from "../shared/replayMode";
 import { MascotPet } from "./MascotPet";
 
 /* ------------------------------------------------------------------ *
@@ -371,7 +372,7 @@ export function AgentWorldXL({
   const [flows, setFlows] = useState<Transition[]>([]);
 
   useEffect(() => {
-    const now = Date.now();
+    const now = replayNow();
     const fresh: Transition[] = [];
     for (const a of agents) {
       const newZ = zoneFor(a);
@@ -385,7 +386,7 @@ export function AgentWorldXL({
   useEffect(() => {
     const t = window.setInterval(() => {
       setFlows((prev) => {
-        const now = Date.now();
+        const now = replayNow();
         const next = prev.filter((t) => t.expiresAt > now);
         return next.length === prev.length ? prev : next;
       });
@@ -398,7 +399,7 @@ export function AgentWorldXL({
 
   useEffect(() => {
     if (!promotionEvents || promotionEvents.length === 0) return;
-    const now = Date.now();
+    const now = replayNow();
     setHalos((prev) => {
       const next = new Map(prev);
       for (const e of promotionEvents) {
@@ -413,7 +414,7 @@ export function AgentWorldXL({
   useEffect(() => {
     const t = window.setInterval(() => {
       setHalos((prev) => {
-        const now = Date.now();
+        const now = replayNow();
         let changed = false;
         const next = new Map(prev);
         for (const [id, h] of prev) if (h.expiresAt <= now) { next.delete(id); changed = true; }
@@ -743,7 +744,7 @@ export function AgentWorldXL({
 
           const fillAt = lastFillAt.get(a.id);
           const isBouncing =
-            fillAt !== undefined && Date.now() - fillAt < FILL_BOUNCE_MS;
+            fillAt !== undefined && replayNow() - fillAt < FILL_BOUNCE_MS;
           const isSlumping =
             a.status === "loss" && a.unrealized_pnl < SLUMP_PNL_THRESHOLD;
           const isPinned = pinAgentId === a.id;

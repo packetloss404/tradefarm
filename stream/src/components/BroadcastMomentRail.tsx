@@ -4,6 +4,7 @@ import {
   sortBroadcastMomentsByPriority,
   type BroadcastMoment,
 } from "../hooks/useBroadcastMoments";
+import { replayNow } from "../shared/replayMode";
 
 export type BroadcastMomentRailMode = "priority" | "recent";
 
@@ -47,7 +48,7 @@ function sortRecentFirst(moments: readonly BroadcastMoment[]): BroadcastMoment[]
 }
 
 function formatAge(receivedAt: number): string {
-  const ageSec = Math.max(0, Math.floor((Date.now() - receivedAt) / 1_000));
+  const ageSec = Math.max(0, Math.floor((replayNow() - receivedAt) / 1_000));
   if (ageSec < 60) return `${ageSec}s`;
   const ageMin = Math.floor(ageSec / 60);
   if (ageMin < 60) return `${ageMin}m`;
@@ -99,7 +100,7 @@ export function BroadcastMomentRail({
 }
 
 function MomentRow({ moment }: { moment: BroadcastMoment }) {
-  const expired = moment.expiresAt != null && moment.expiresAt <= Date.now();
+  const expired = moment.expiresAt != null && moment.expiresAt <= replayNow();
   const toneClass = COLOR_CLASS[moment.color];
 
   return (

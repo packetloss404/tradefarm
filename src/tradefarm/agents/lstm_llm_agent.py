@@ -133,7 +133,35 @@ class LstmLlmAgent(Agent):
         try:
             LLM_SKIPS["called"] += 1
             decision = await self._overlay.decide(ctx)
-        except Exception:
+        except Exception as e:
+            # Audit fix (round 4): log + publish so the operator can
+            # tell "LLM stopped" from "Claude returned prose". The
+            # previous bare swallow left dashboards green with zero
+            # signal about why LSTM+LLM agents went silent. Re-uses
+            # the module-level `log` (defined at top of file); a local
+            # `log =` here would shadow it and shadow the F823 the
+            # earlier retrieval-failure branch needs.
+            from tradefarm.api.events import publish_event
+
+            log.warning(
+                "llm_call_failed",
+                agent_id=self.state.id,
+                symbol=self.symbol,
+                err_type=type(e).__name__,
+                err=str(e)[:200],
+            )
+            try:
+                await publish_event(
+                    "llm_error",
+                    {
+                        "agent_id": self.state.id,
+                        "symbol": self.symbol,
+                        "err_type": type(e).__name__,
+                        "err": str(e)[:200],
+                    },
+                )
+            except Exception:  # noqa: BLE001 — never let WS errors mask the LLM error
+                pass
             self.last_decision = None
             return []
 

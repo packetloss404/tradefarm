@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -185,7 +186,80 @@ app.include_router(recap_router)
 
 @app.get("/health")
 async def health() -> dict[str, str]:
+    """Liveness check — always 200 if the process is up.
+    The lifespan + uvicorn already give a coarse signal; this exists
+    so an external load balancer can probe a sub-millisecond endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/readiness")
+async def readiness(request: Request) -> dict[str, Any]:
+    """Readiness check — passes only when the system is actually
+    serving correctly: DB reachable, orchestrator started, last tick
+    within the expected window. Use this from supervisors (uptime
+    monitors, k8s readinessProbe, AWS ELB target health).
+
+    Returns 200 with details on success; 503 (Service Unavailable)
+    with a `failed_checks` list on degradation."""
+    checks: dict[str, Any] = {}
+    ok = True
+
+    # 1. DB connectivity.
+    try:
+        from sqlalchemy import text
+
+        async with SessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        checks["db"] = f"error: {type(e).__name__}: {str(e)[:120]}"
+        ok = False
+
+    # 2. Orchestrator wired + alive.
+    orch = getattr(request.app.state, "orchestrator", None)
+    if orch is None:
+        checks["orchestrator"] = "not initialized"
+        ok = False
+    else:
+        # Tick freshness vs configured interval (allow 3× as cushion).
+        last_tick = getattr(orch, "last_tick_at", None)
+        interval = getattr(settings, "auto_tick_interval_sec", 0)
+        if interval <= 0:
+            checks["orchestrator"] = "ok (auto-tick disabled)"
+        elif last_tick is None:
+            checks["orchestrator"] = "no tick yet"
+            # Don't fail readiness on this — first tick can take a minute.
+        else:
+            from datetime import datetime, timezone
+
+            age_sec = (
+                datetime.now(timezone.utc) - last_tick.to_pydatetime().astimezone(timezone.utc)
+            ).total_seconds()
+            checks["orchestrator"] = {
+                "last_tick_sec_ago": round(age_sec, 1),
+                "interval_sec": interval,
+            }
+            if age_sec > interval * 3:
+                checks["orchestrator"] = {
+                    **checks["orchestrator"],
+                    "status": "stale",
+                }
+                ok = False
+
+    # 3. Scheduler task alive (if started).
+    if orch is not None and orch._task is not None:
+        if orch._task.done():
+            checks["scheduler_task"] = "dead"
+            ok = False
+        else:
+            checks["scheduler_task"] = "alive"
+
+    payload: dict[str, Any] = {"ok": ok, "checks": checks}
+    if not ok:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail=payload)
+    return payload
 
 
 @app.get("/llm/stats")

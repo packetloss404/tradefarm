@@ -108,22 +108,39 @@ async def test_runner_single_day_produces_manifest(session_smoke, tmp_path):
     assert "T" in data["ended_at"]
 
 
-async def test_runner_skips_weekend(session_smoke, tmp_path):
-    """Sat–Sun range yields zero trading days; manifest still writes."""
+async def test_runner_refuses_weekend(session_smoke, tmp_path):
+    """Audit fix (round 4 X1): a weekend-only date range used to
+    silently write an empty manifest. Operator saw `session_id=…` +
+    zero fills with no clue why. Runner now refuses with SystemExit
+    so the operator gets a loud "no trading days" message instead."""
+    import pytest
+
     from tradefarm.session.run import run_session
 
     out_dir = tmp_path / "sessions"
     saturday = date(2026, 5, 16)
     sunday = date(2026, 5, 17)
 
-    manifest_path = await run_session(
-        start_date=saturday,
-        end_date=sunday,
-        session_id="s_weekend_test",
-        out_dir=out_dir,
-    )
+    with pytest.raises(SystemExit, match="no NYSE trading days"):
+        await run_session(
+            start_date=saturday,
+            end_date=sunday,
+            session_id="s_weekend_test",
+            out_dir=out_dir,
+        )
 
-    data = json.loads(manifest_path.read_text())
-    assert data["trading_days"] == []
-    assert data["tick_count"] == 0
-    assert data["fill_count"] == 0
+
+async def test_runner_refuses_future_date(session_smoke, tmp_path):
+    """Future dates also fail-loud (round 4 X1)."""
+    import pytest
+
+    from tradefarm.session.run import run_session
+
+    far_future = date(2099, 12, 25)
+    with pytest.raises(SystemExit, match="future date"):
+        await run_session(
+            start_date=far_future,
+            end_date=far_future,
+            session_id="s_future_test",
+            out_dir=tmp_path / "sessions",
+        )

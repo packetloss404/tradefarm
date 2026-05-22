@@ -35,7 +35,13 @@ EDITABLE: dict[str, type] = {
     "llm_min_confidence": float,
     "auto_tick_interval_sec": int,
     "tick_outside_rth": bool,
-    "execution_mode": str,
+    # Audit fix (round 4 HIGH-3): `execution_mode` was operator-mutable
+    # via the admin panel, but flipping `simulated` → `alpaca_paper`
+    # mid-run never starts the reconciler (only `start_background()`
+    # does, gated on the boot-time value). The result was a mode where
+    # fills hit Alpaca with no reconciliation. Removed from EDITABLE;
+    # operator must change `.env` and restart.
+    # "execution_mode": str,    # ← REMOVED — requires restart
     "disabled_strategies": list,  # accepted as list on POST, stored as CSV
     # Phase 2 (Agent Academy) — thresholds are accepted here so the admin
     # panel can tune them in Phase 4. No UI field yet; the shape is enough.
@@ -59,11 +65,43 @@ EDITABLE: dict[str, type] = {
     "risk_trailing_stop_pct": float,
     "risk_max_hold_days": int,
 }
-SECRET_KEYS = {"anthropic_api_key", "minimax_api_key"}
+# Audit fix (round 4 MED-6): derive secret-bearing keys by suffix so
+# any future field added to Settings (alpaca_api_key, api_shared_secret,
+# youtube_refresh_token, …) is masked by default instead of relying on
+# this hardcoded list. The explicit base set covers fields that don't
+# fit the suffix rule but should still be masked on GET.
+_SECRET_SUFFIXES = ("_api_key", "_secret", "_token", "_refresh_token")
+
+
+def _is_secret_key(key: str) -> bool:
+    return any(key.endswith(suf) for suf in _SECRET_SUFFIXES)
+
+
+def _all_secret_keys() -> set[str]:
+    """Cross-reference EDITABLE + Settings fields to build the masked-on-GET set."""
+    from tradefarm.config import Settings
+
+    declared = set(Settings.model_fields.keys())
+    return {k for k in (set(EDITABLE) | declared) if _is_secret_key(k)}
+
+
+SECRET_KEYS = _all_secret_keys()
 VALID_PROVIDERS = {"anthropic", "minimax"}
 VALID_EXECUTION = {"simulated", "alpaca_paper"}
 
 ENV_PATH = Path(".env")
+
+# Characters that corrupt `.env` when written via dotenv.set_key(quote_mode="never").
+# A literal newline lets an operator inject arbitrary KEY=VAL lines (incl.
+# DATABASE_URL, AI_ENABLED, etc.) on the next restart. `\r` and NUL are
+# equally hostile. `#` is benign as a *value* but only when nothing later
+# tries to re-read the file as comments — we reject it defensively.
+_FORBIDDEN_ENV_VALUE_CHARS = ("\n", "\r", "\x00")
+
+
+def _reject_envfile_injection(key: str, val: object) -> None:
+    if isinstance(val, str) and any(c in val for c in _FORBIDDEN_ENV_VALUE_CHARS):
+        raise HTTPException(400, f"{key}: control characters not allowed in value")
 
 
 def _mask(value: str) -> str:
@@ -159,6 +197,8 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
         if key in SECRET_KEYS and isinstance(val, str):
             if val == "" or "…" in val or val == "***":
                 continue
+        # Reject newlines / NULs that would corrupt `.env` on persist.
+        _reject_envfile_injection(key, val)
         # Range / enum checks the pydantic patch didn't already enforce.
         if key == "llm_min_confidence":
             val = float(val)
@@ -201,7 +241,17 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
         overlay_info = orch.reload_llm_overlay()
 
     # Persist to .env for next boot.
+    # Audit fix (round 4 S1): surface per-key persist failures so the
+    # operator can tell which fields will survive restart. Previously
+    # `except Exception: pass` silently dropped persistence — operator
+    # would type a new API key, see "saved", restart, watch it
+    # disappear, and have no breadcrumb.
+    persisted: dict[str, bool] = {}
+    persist_errors: dict[str, str] = {}
     if patch.persist and ENV_PATH.exists():
+        import structlog
+
+        log = structlog.get_logger()
         for key, val in changes.items():
             env_key = key.upper()
             if isinstance(val, bool):
@@ -212,13 +262,22 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
                 env_val = str(val)
             try:
                 set_key(str(ENV_PATH), env_key, env_val, quote_mode="never")
-            except Exception:
-                # Non-fatal — in-memory change still stands.
-                pass
+                persisted[key] = True
+            except Exception as e:  # noqa: BLE001
+                persisted[key] = False
+                persist_errors[key] = f"{type(e).__name__}: {str(e)[:120]}"
+                log.warning(
+                    "env_persist_failed",
+                    key=env_key,
+                    err_type=type(e).__name__,
+                    err=str(e)[:200],
+                )
 
     return {
         "changed": {k: v if k not in SECRET_KEYS else _mask(str(v)) for k, v in changes.items()},
         "overlay": overlay_info,
+        "persisted": persisted,
+        "persist_errors": persist_errors,
     }
 
 

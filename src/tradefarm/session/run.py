@@ -81,8 +81,25 @@ async def run_session(
 
     token = set_session_id(session_id)
     try:
+        # Audit fix (round 4): refuse to replay a future date or a
+        # weekend/holiday-only range. The previous code happily wrote
+        # a manifest with zero events because NYSE.schedule returns
+        # empty for those windows and the loop simply iterated zero
+        # times — operator saw "session_id=…" + no fills with no clue
+        # why. Fail loud at the boundary instead.
+        wall_today = datetime.now(timezone.utc).date()
+        if start_date > wall_today:
+            raise SystemExit(
+                f"refusing to replay future date {start_date.isoformat()} "
+                f"(wall-clock today is {wall_today.isoformat()})"
+            )
         schedule = NYSE.schedule(start_date=start_date, end_date=end_date)
         trading_days: list[date] = [ts.date() for ts in schedule.index.to_pydatetime()]
+        if not trading_days:
+            raise SystemExit(
+                f"refusing to replay {start_date.isoformat()}..{end_date.isoformat()} — "
+                "no NYSE trading days in that range (weekend/holiday)"
+            )
 
         fill_count = 0
         for day in trading_days:

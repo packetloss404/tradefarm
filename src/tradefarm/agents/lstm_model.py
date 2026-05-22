@@ -106,7 +106,37 @@ def load(symbol: str) -> FittedModel | None:
     path = model_path(symbol)
     if not path.exists():
         return None
-    blob = torch.load(path, map_location="cpu", weights_only=False)
+    # Audit fix (round 4 S2): bare `torch.load` raises opaque
+    # UnpicklingError on a corrupt/truncated .pt file (e.g. half-
+    # downloaded model, disk-fail during training). Wrap so the
+    # operator sees the symbol + path + a clear "re-train" hint
+    # instead of a stack trace 40 frames deep.
+    import pickle
+
+    try:
+        blob = torch.load(path, map_location="cpu", weights_only=False)
+    except (pickle.UnpicklingError, EOFError, RuntimeError, OSError) as exc:
+        import structlog
+
+        structlog.get_logger().error(
+            "lstm_model_corrupt",
+            symbol=symbol,
+            path=str(path),
+            err_type=type(exc).__name__,
+            err=str(exc)[:200],
+            hint="re-train via `uv run python -m tradefarm.agents.lstm_train --universe`",
+        )
+        return None
+
+    # Audit fix (round 4 S2): validate the blob has the fields we
+    # require BEFORE constructing ModelConfig, so a missing-cfg shape
+    # produces a useful error not `KeyError: 'cfg'`.
+    for required in ("cfg", "state_dict", "feature_mean", "feature_std"):
+        if required not in blob:
+            raise RuntimeError(
+                f"lstm_model for {symbol!r} at {path}: missing field {required!r}. "
+                "Re-train via `uv run python -m tradefarm.agents.lstm_train --universe`."
+            )
     cfg = ModelConfig(**blob["cfg"])
 
     from tradefarm.agents.features import FEATURE_NAMES

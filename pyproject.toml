@@ -12,11 +12,18 @@ dependencies = [
     "sqlalchemy>=2.0",
     "aiosqlite>=0.20",
     "alpaca-py>=0.33",
-    "anthropic>=0.40",
+    # Upper bounds added in round 4 ship-readiness audit: protect
+    # the project from silent major-version drift on `uv lock --upgrade`.
+    "anthropic>=0.40,<1",
+    # NOTE (round-4 audit): pandas is intentionally LOOSE for now —
+    # the venv is on 3.0.2 (from a prior `uv lock --upgrade`) which
+    # introduces CoW-default + removed APIs. Adding `<3.0` would
+    # force a downgrade we haven't tested. Action item: explicitly
+    # adopt 3.x with audit, OR rebuild the venv with `<3.0`.
     "pandas>=2.2",
     "pyarrow>=17.0",
     "numpy>=2.0",
-    "pandas-market-calendars>=4.4",
+    "pandas-market-calendars>=4.4,<6",
     "python-dotenv>=1.0",
     "structlog>=24.4",
     "websockets>=13.1",
@@ -24,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = [
-    "torch>=2.5",
+    "torch>=2.5,<3",
     "scikit-learn>=1.5",
 ]
 dev = [

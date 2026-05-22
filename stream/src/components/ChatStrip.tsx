@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useSimulatedChat, type ChatMessage as SimChatMessage, type ChatTone } from "../hooks/useSimulatedChat";
 import type { StreamSnapshot } from "../hooks/useStreamData";
 import type { RealtimeChatMessage } from "../hooks/useStreamCommands";
+import { replayNow } from "../shared/replayMode";
 
 // Twitch-style color tokens for the simulated stream's tones — unchanged
 // from the previous SimulatedChatStrip implementation so the demo look stays
@@ -106,9 +107,9 @@ export function ChatStrip({
   // gracefully degrade back to demo chat after the LIVE_RECENCY_MS window
   // passes without a new real message. Without this, a stale `realtimeMessages`
   // tail would keep the strip in live mode indefinitely.
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [nowTick, setNowTick] = useState(() => replayNow());
   useEffect(() => {
-    const t = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    const t = window.setInterval(() => setNowTick(replayNow()), 30_000);
     return () => window.clearInterval(t);
   }, []);
 

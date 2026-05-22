@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FillEvent, PromotionEvent } from "./useStreamData";
 import type { AgentRow } from "../shared/api";
 import type { CommentaryState } from "./useStreamCommands";
+import { replayNow } from "../shared/replayMode";
 
 export type Highlight = {
   id: string;
@@ -52,7 +53,7 @@ export function useCommentary(opts: {
     if (!enabled || fills.length === 0) return;
     const fresh: Highlight[] = [];
     let recentTickFills = 0;
-    const now = Date.now();
+    const now = replayNow();
     for (const f of fills) {
       const key = `${f.ts}-${f.payload.agent_id}-${f.payload.symbol}-${f.payload.qty}-${f.payload.price}`;
       if (seenFillKeys.current.has(key)) continue;
@@ -97,7 +98,7 @@ export function useCommentary(opts: {
         id: `prom-${key}`,
         kind: p.type,
         text: `${p.payload.agent_name} ${verb} ${cap(p.payload.to_rank)}.`,
-        at: Date.now(),
+        at: replayNow(),
       });
     }
     if (fresh.length) setQueue((prev) => [...prev, ...fresh].slice(-QUEUE_MAX));
@@ -127,7 +128,7 @@ export function useCommentary(opts: {
       id: `commentary-${commentary.id}`,
       kind: "commentary",
       text: commentary.text,
-      at: Date.now(),
+      at: replayNow(),
     };
     setCurrent(hl);
     const t = setTimeout(() => setCurrent(null), DWELL_MS);

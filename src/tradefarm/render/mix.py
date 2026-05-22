@@ -332,6 +332,17 @@ def build_mix_command(plan: MixPlan) -> list[str]:
         "aac",
         "-b:a",
         "192k",
+        # Audit fix (round 4): force 48 kHz stereo so the AAC track
+        # isn't trapped at the silence-provider's 22 kHz mono input
+        # (TTS source rate). Without this, the encoder honored the
+        # input rate and shipped AM-radio-grade audio despite the
+        # 192k bitrate target. 48k/stereo matches YouTube's preferred
+        # ingest spec and only costs ~50% more bytes on a mostly-quiet
+        # mix.
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
         "-shortest",
         "-movflags",
         "+faststart",

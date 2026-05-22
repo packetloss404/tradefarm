@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, type Dispatch } from "react";
 import type { BroadcastMomentPayload } from "../shared/useLiveEvents";
+import { replayNow } from "../shared/replayMode";
 
 export const DEFAULT_BROADCAST_MOMENT_LIMIT = 24;
 
@@ -62,7 +63,7 @@ function createBufferedMoment(
   sequence: number,
   receivedAtInput?: number | string,
 ): BroadcastMoment {
-  const receivedAt = toEpochMs(receivedAtInput, toEpochMs(moment.created_at, Date.now()));
+  const receivedAt = toEpochMs(receivedAtInput, toEpochMs(moment.created_at, replayNow()));
   const ttlMs = Number.isFinite(moment.ttl_sec) ? Math.max(0, moment.ttl_sec) * 1_000 : 0;
 
   return {
@@ -111,7 +112,7 @@ export function broadcastMomentReducer(
     case "clear":
       return { moments: [], nextSequence: state.nextSequence };
     case "pruneExpired": {
-      const now = action.now ?? Date.now();
+      const now = action.now ?? replayNow();
       return {
         ...state,
         moments: state.moments.filter(

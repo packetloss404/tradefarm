@@ -5,6 +5,7 @@ import {
   type AgentDecisionPayload,
   type LiveEvent,
 } from "../shared/useLiveEvents";
+import { replayNow } from "../shared/replayMode";
 import { streamAudio } from "../audio/StreamAudio";
 
 // Re-export so consumers (DecisionLabScene, SceneRotator) can import the
@@ -291,7 +292,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
             title: p.title,
             subtitle: p.subtitle ?? "",
             ttl_sec: typeof p.ttl_sec === "number" ? p.ttl_sec : 8,
-            shown_at: Date.now(),
+            shown_at: replayNow(),
           });
           break;
         }
@@ -333,7 +334,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
             label: typeof p.label === "string" ? p.label : "",
             color,
             subtitle: typeof p.subtitle === "string" && p.subtitle.length > 0 ? p.subtitle : undefined,
-            firedAt: Date.now(),
+            firedAt: replayNow(),
           });
           break;
         }
@@ -353,7 +354,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
             text: p.text,
             kind,
             source,
-            receivedAt: Date.now(),
+            receivedAt: replayNow(),
           });
           break;
         }
@@ -387,7 +388,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
             id: p.id,
             status,
             agentId,
-            firedAt: Date.now(),
+            firedAt: replayNow(),
           });
           break;
         }
@@ -451,7 +452,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
             color,
             source: "youtube",
             at: typeof p.at === "string" ? p.at : new Date().toISOString(),
-            receivedAt: Date.now(),
+            receivedAt: replayNow(),
           };
           setRealtimeChat((prev) => {
             const next = [...prev, msg];

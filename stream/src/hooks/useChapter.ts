@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMarketClock } from "./useMarketClock";
+import { replayDate } from "../shared/replayMode";
 
 export type ChapterId =
   | "pre-market"
@@ -141,7 +142,7 @@ function getEtHourMinute(): { hour: number; minute: number } {
     minute: "2-digit",
     hour12: false,
     hourCycle: "h23",
-  }).formatToParts(new Date());
+  }).formatToParts(replayDate());
   const hourStr = parts.find((p) => p.type === "hour")?.value ?? "0";
   const minStr = parts.find((p) => p.type === "minute")?.value ?? "0";
   const hour = Number.parseInt(hourStr, 10);

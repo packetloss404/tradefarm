@@ -90,11 +90,18 @@ control it from the workstation:
 5. **`--reload-dir src` is required.** Without it WatchFiles storms on
    `.venv` churn (torch DLLs, pyc writes) and restarts continuously.
 6. **Trained models are 19-feature.** If you ever change `features.py`'s
-   `FEATURE_NAMES`, retrain the universe or every inference will shape-mismatch.
+   `FEATURE_NAMES`, retrain the universe. Post-audit (2026-05-22) the
+   saved model embeds `feature_names`; `lstm_model.load()` raises a
+   `RuntimeError` on mismatch (pre-audit `.pt` artifacts log a warning
+   and load — retrain to silence).
 7. **Alpaca fills are async.** The scheduler applies an optimistic fill at
    `mark` immediately; the reconciler (in `alpaca_paper` mode) polls every
-   10s and applies the actual-vs-mark delta via
-   `VirtualBook.apply_fill_delta` (idempotent on `broker_order_id`).
+   10s and applies the actual-vs-mark correction via
+   `VirtualBook.apply_reconciled_fill(symbol, side, qty, mark_price,
+   actual_price, broker_order_id, at=…)` (idempotent on
+   `broker_order_id`; the column also has a DB-level UNIQUE constraint
+   so a duplicate write fails at commit). The old `apply_fill_delta`
+   API was replaced in round 2; it had a real bug on long→short flips.
 8. **In-memory agent state is not rehydrated on restart.** DB has trades
    and snapshots but Orchestrator.build_default creates fresh books at boot.
    Expect one redundant entry signal per restart until positions re-establish.
@@ -108,6 +115,32 @@ control it from the workstation:
     leak or mutate them. The poller self-disables when any of them are
     missing; first poll seeds the pagination cursor without publishing so
     a restart doesn't replay chat history.
+12. **`API_SHARED_SECRET` is opt-in auth on mutating endpoints.** When
+    `settings.api_shared_secret` is non-empty, every `POST/PUT/PATCH/DELETE`
+    requires the header `X-TradeFarm-Token: <value>` (`/health`,
+    `/market/clock`, `/openapi`, `/docs`, `/redoc` and all `GET`s stay
+    open). Set this on the broadcast VM before exposing
+    `0.0.0.0:8000` to the LAN — the dashboard's read-only polling
+    keeps working unauthenticated, but `/tick`, `/admin/*`,
+    `/backtest/run` are locked. Middleware is in `api/main.py`.
+13. **Replay clock is everywhere now.** Anything that needs "now" in
+    backend code MUST go through `tradefarm.runtime.clock.now_utc()`
+    (not `datetime.now(timezone.utc)`), and frontend (`stream/`) goes
+    through `replayNow()` / `replayDate()` in `stream/src/shared/replayMode.ts`.
+    The lone exception is `data/bar_cache._wall_today_utc()` — it
+    INTENTIONALLY uses wall-clock so the "don't cache today's
+    provisional EOD bar" rule only fires for the real today, not the
+    replayed today (replayed dates are historical and safe to cache).
+14. **`Orchestrator.tick_once()` is serialised by `self._tick_lock`
+    (asyncio.Lock).** Concurrent `/tick` clicks + the curriculum loop
+    can no longer interleave (audit fix C9). The previous
+    `_tick_in_progress: bool` flag still exists but is informational —
+    don't gate logic on it.
+15. **Broadcast scheduler / recap-ledger are installed on
+    `start_background()`, not in `Orchestrator.__init__`.** Tests
+    constructing bare `Orchestrator(…)` instances used to overwrite
+    process-global arbiter state silently — now they don't.
+    `stop_background()` cleanly uninstalls them.
 
 ## YouTube chat setup
 

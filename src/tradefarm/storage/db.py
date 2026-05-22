@@ -49,41 +49,91 @@ _INDEX_MIGRATIONS: tuple[tuple[str, str], ...] = (
 )
 
 
+async def _table_columns(conn, table: str) -> set[str]:
+    """Return {column_name,...} for `table`, or empty set if the table is missing.
+
+    SQLite-only (PRAGMA). If the project ever adds Postgres support, swap this
+    for ``inspect(conn).get_columns(table)`` and gate the ALTER syntax per
+    dialect; the rest of the migration loop is already idempotent.
+    """
+    rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).all()
+    return {r[1] for r in rows}
+
+
 async def _ensure_columns(conn) -> None:
     for table, column, ddl in _COLUMN_MIGRATIONS:
-        rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).all()
-        existing = {r[1] for r in rows}  # r[1] is the column name in PRAGMA output
+        existing = await _table_columns(conn, table)
+        if not existing:
+            # Table doesn't exist (shouldn't happen after create_all, but be
+            # defensive — don't ALTER a non-existent table).
+            continue
         if column in existing:
             continue
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
 async def _ensure_indexes(conn) -> None:
+    # Guarded helper: only create an index if the referenced column exists,
+    # so a partial / corrupted upgrade can't brick startup. (Prior bug:
+    # `CREATE INDEX IF NOT EXISTS ix_agent_notes_outcome_closed_at` would
+    # raise OperationalError on a DB created before that column landed,
+    # since IF NOT EXISTS guards the INDEX name, not the column reference.)
+    async def _safe_index(
+        ddl: str, table: str, column: str, *, unique_where: str | None = None
+    ) -> None:
+        cols = await _table_columns(conn, table)
+        if column not in cols:
+            return
+        await conn.execute(text(ddl))
+
     for table, column in _INDEX_MIGRATIONS:
         idx_name = f"ix_{table}_{column}"
-        await conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})"))
+        await _safe_index(
+            f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})",
+            table,
+            column,
+        )
     # Audit fix: partial unique index on Trade.broker_order_id for
     # existing DBs (fresh DBs get the constraint via create_all).
     # Partial-WHERE so the multitude of NULL rows (live trades pre-
     # reconciler + simulated fills) don't all collide on UNIQUE.
-    await conn.execute(
-        text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_broker_order_id "
-            "ON trades(broker_order_id) WHERE broker_order_id IS NOT NULL"
-        )
+    await _safe_index(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_broker_order_id "
+        "ON trades(broker_order_id) WHERE broker_order_id IS NOT NULL",
+        "trades",
+        "broker_order_id",
     )
     # Audit fix: hot-path indexes flagged by storage subagent (`/agents/{id}/trades`
     # ordered by executed_at DESC was a full-table scan).
-    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trades_agent_id ON trades(agent_id)"))
-    await conn.execute(
-        text("CREATE INDEX IF NOT EXISTS ix_trades_executed_at ON trades(executed_at)")
+    await _safe_index(
+        "CREATE INDEX IF NOT EXISTS ix_trades_agent_id ON trades(agent_id)",
+        "trades",
+        "agent_id",
     )
-    await conn.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_agent_notes_outcome_closed_at "
-            "ON agent_notes(outcome_closed_at)"
+    await _safe_index(
+        "CREATE INDEX IF NOT EXISTS ix_trades_executed_at ON trades(executed_at)",
+        "trades",
+        "executed_at",
+    )
+    await _safe_index(
+        "CREATE INDEX IF NOT EXISTS ix_agent_notes_outcome_closed_at "
+        "ON agent_notes(outcome_closed_at)",
+        "agent_notes",
+        "outcome_closed_at",
+    )
+    # Round-2 audit fix: AcademyPromotion UNIQUE constraint only fires via
+    # create_all on fresh DBs. Pre-existing DBs (incl. the live broadcast VM
+    # tradefarm.db at the time this landed) never got the constraint, so a
+    # double-evaluate of curriculum could write duplicate promotion rows.
+    # Mirror the model's UniqueConstraint here for after-the-fact application.
+    cols = await _table_columns(conn, "academy_promotions")
+    if {"agent_id", "from_rank", "to_rank", "at"}.issubset(cols):
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_academy_promotions_unique_crossing "
+                "ON academy_promotions(agent_id, from_rank, to_rank, at)"
+            )
         )
-    )
 
 
 async def init_db() -> None:

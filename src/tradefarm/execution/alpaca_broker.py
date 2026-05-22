@@ -37,10 +37,12 @@ class AlpacaBroker:
             secret_key=settings.alpaca_api_secret,
             paper="paper-api" in settings.alpaca_base_url,
         )
-        # RTH-only gate for now. If someone explicitly opts in to extended hours,
-        # we skip the is_market_open() check (the Alpaca order itself still needs
-        # to be constructed with extended_hours=True, which we don't do here —
-        # this flag is currently a placeholder for future wiring).
+        # RTH-only gate for now. If someone explicitly opts in to extended
+        # hours, we skip the is_market_open() check AND construct the
+        # MarketOrderRequest with extended_hours=True so Alpaca accepts the
+        # order outside RTH. Alpaca only honors extended_hours for
+        # LIMIT orders on DAY tif in practice, but the field is harmless
+        # for market orders and is the documented opt-in.
         self.allow_extended_hours = allow_extended_hours
 
     def submit_market(
@@ -70,6 +72,7 @@ class AlpacaBroker:
             side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
             client_order_id=f"agent{agent_id}-{client_tag}",
+            extended_hours=self.allow_extended_hours,
         )
         order = self.client.submit_order(req)
         return Fill(

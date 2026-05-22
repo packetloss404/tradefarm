@@ -74,6 +74,7 @@ class OrderReconciler:
 
     def poll_once(self) -> list[ReconciledFill]:
         """One reconciliation pass. Returns new ReconciledFill records."""
+        poll_started_at = datetime.now(timezone.utc)
         since_iso = self._last_poll_ts.isoformat()
         try:
             orders = self.broker.get_orders(since_iso)
@@ -82,6 +83,14 @@ class OrderReconciler:
             return []
 
         out: list[ReconciledFill] = []
+        # Empty-poll fast path: nothing happened in this window, so advance
+        # the cursor to the poll start time. Without this the cursor only
+        # ever moved when an order was returned, so an idle period would
+        # leave the after= filter widening forever — making each poll
+        # heavier than the last.
+        if not orders:
+            self._last_poll_ts = poll_started_at
+            return out
         newest_seen = self._last_poll_ts
         for o in orders:
             submitted_at = o.get("submitted_at")
