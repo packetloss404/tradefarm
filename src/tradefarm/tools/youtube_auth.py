@@ -26,6 +26,7 @@ storage, etc.) so the script keeps working even when ``.env`` is empty —
 it's meant to be the *bootstrapping* tool that produces the credentials in
 the first place.
 """
+
 from __future__ import annotations
 
 import http.server
@@ -128,9 +129,7 @@ def _exchange_code(
     with httpx.Client(timeout=20.0) as client:
         r = client.post(TOKEN_URL, data=body)
         if r.status_code != 200:
-            raise RuntimeError(
-                f"token exchange failed: HTTP {r.status_code} — {r.text[:500]}"
-            )
+            raise RuntimeError(f"token exchange failed: HTTP {r.status_code} — {r.text[:500]}")
         return r.json()
 
 
@@ -143,8 +142,7 @@ def main() -> int:
         " (APIs & Services -> Library)."
     )
     print(
-        "  2. Create an OAuth 2.0 Client ID of type 'Desktop app'"
-        " (APIs & Services -> Credentials)."
+        "  2. Create an OAuth 2.0 Client ID of type 'Desktop app' (APIs & Services -> Credentials)."
     )
     print(
         "  3. Add your Google account as a 'Test user' under the OAuth"
@@ -181,10 +179,7 @@ def main() -> int:
     print()
     print(f"  {auth_url}")
     print()
-    print(
-        f"Waiting for Google to redirect to {redirect_uri} ..."
-        " (this terminal will block here)"
-    )
+    print(f"Waiting for Google to redirect to {redirect_uri} ... (this terminal will block here)")
 
     captured = _wait_for_code(port)
     if captured.error or not captured.code:

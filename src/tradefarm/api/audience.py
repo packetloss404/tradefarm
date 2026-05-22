@@ -11,6 +11,7 @@ Endpoints:
 - ``POST /audience/pin-requests/{id}/reject``   — operator rejects a pin
 - ``GET  /audience/predictions``                — current state of both predictions
 """
+
 from __future__ import annotations
 
 from typing import Any

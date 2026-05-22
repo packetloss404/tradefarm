@@ -3,6 +3,7 @@
 Byte-identical guarantee: when ``retrieved_examples`` is empty,
 ``user_message(ctx)`` matches the pre-Phase-3 golden string verbatim.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -23,14 +24,19 @@ PRE_PHASE3_PROMPT = (
 
 def _baseline_ctx():
     from tradefarm.agents.llm_overlay_types import LlmContext
+
     return LlmContext(
         symbol="SPY",
         feature_digest=(
             "5d close: [100.0, 101.0, 102.0, 103.0, 104.0] "
             "(+4.00% over window); vol last=1,000,000, range last=1.50"
         ),
-        lstm_direction="up", lstm_probs=(0.10, 0.20, 0.70), lstm_confidence=0.65,
-        has_long=False, held_qty=0.0, day_pnl_pct=0.0,
+        lstm_direction="up",
+        lstm_probs=(0.10, 0.20, 0.70),
+        lstm_confidence=0.65,
+        has_long=False,
+        held_qty=0.0,
+        day_pnl_pct=0.0,
     )
 
 
@@ -50,8 +56,16 @@ async def retrieval_db(monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     async with SL() as s:
-        s.add(Agent(id=1, name="agent-001", strategy="lstm_llm_v1",
-                    starting_capital=1000.0, cash=1000.0, status="waiting"))
+        s.add(
+            Agent(
+                id=1,
+                name="agent-001",
+                strategy="lstm_llm_v1",
+                starting_capital=1000.0,
+                cash=1000.0,
+                status="waiting",
+            )
+        )
         await s.commit()
     yield SL
     await engine.dispose()
@@ -60,6 +74,7 @@ async def retrieval_db(monkeypatch):
 @pytest.fixture
 def retrieval_on(monkeypatch):
     from tradefarm.config import settings
+
     monkeypatch.setattr(settings, "academy_retrieval_enabled", True)
 
 
@@ -68,7 +83,10 @@ async def test_retrieval_ranks_by_symbol_match(retrieval_db, retrieval_on):
     from tradefarm.storage import journal
 
     nid_a = await journal.write_note(
-        agent_id=1, kind="entry", symbol="SPY", content="spy-a",
+        agent_id=1,
+        kind="entry",
+        symbol="SPY",
+        content="spy-a",
         metadata={"lstm_direction": "up"},
     )
     await journal.close_outcome(agent_id=1, symbol="SPY", realized_pnl=1.0)
@@ -85,6 +103,7 @@ async def test_retrieval_ranks_by_symbol_match(retrieval_db, retrieval_on):
 
 def test_user_message_unchanged_when_empty():
     from tradefarm.agents.llm_overlay_types import user_message
+
     ctx = _baseline_ctx()
     assert ctx.retrieved_examples == []
     assert user_message(ctx) == PRE_PHASE3_PROMPT
@@ -92,12 +111,25 @@ def test_user_message_unchanged_when_empty():
 
 def test_user_message_includes_retrieval_block():
     from tradefarm.agents.llm_overlay_types import user_message
+
     ctx = _baseline_ctx()
     ctx.retrieved_examples = [
-        {"symbol": "SPY", "direction_hint": "up", "content": "bought on strong LSTM signal",
-         "realized_pnl": 4.21, "closed_at_iso": "2026-04-18T14:30:00+00:00", "note_id": 11},
-        {"symbol": "SPY", "direction_hint": "", "content": "loser",
-         "realized_pnl": -1.80, "closed_at_iso": "2026-04-10T18:00:00+00:00", "note_id": 9},
+        {
+            "symbol": "SPY",
+            "direction_hint": "up",
+            "content": "bought on strong LSTM signal",
+            "realized_pnl": 4.21,
+            "closed_at_iso": "2026-04-18T14:30:00+00:00",
+            "note_id": 11,
+        },
+        {
+            "symbol": "SPY",
+            "direction_hint": "",
+            "content": "loser",
+            "realized_pnl": -1.80,
+            "closed_at_iso": "2026-04-10T18:00:00+00:00",
+            "note_id": 9,
+        },
     ]
     msg = user_message(ctx)
     assert "Past similar setups (your own history):" in msg
@@ -137,6 +169,7 @@ class _StubFitted:
 
     def predict(self, _window):
         from tradefarm.agents.lstm_model import Prediction
+
         return Prediction(direction=2, direction_probs=(0.05, 0.10, 0.85), confidence=0.80)
 
 
@@ -146,9 +179,11 @@ class _StubOverlay:
 
     async def decide(self, ctx):
         from tradefarm.agents.llm_overlay_types import LlmDecision
+
         self.seen_ctx = ctx
-        return LlmDecision(bias="flat", predictive="flat", stance="wait",
-                           size_pct=0.0, reason="stubbed")
+        return LlmDecision(
+            bias="flat", predictive="flat", stance="wait", size_pct=0.0, reason="stubbed"
+        )
 
 
 def _build_agent(overlay, monkeypatch):
@@ -161,19 +196,38 @@ def _build_agent(overlay, monkeypatch):
     monkeypatch.setattr(agent_mod, "featurize", lambda df: (np.zeros((3, 4)), np.zeros(3)))
     monkeypatch.setattr(agent_mod, "latest_window", lambda X, seq_len=2: np.zeros((seq_len, 4)))
 
-    state = AgentState(id=1, name="agent-001", strategy="lstm_llm_v1",
-                       book=VirtualBook(agent_id=1, cash=1000.0))
-    agent = LstmLlmAgent(state=state, risk=RiskManager(starting_capital=1000.0),
-                         symbol="SPY", overlay=overlay)
+    state = AgentState(
+        id=1, name="agent-001", strategy="lstm_llm_v1", book=VirtualBook(agent_id=1, cash=1000.0)
+    )
+    agent = LstmLlmAgent(
+        state=state, risk=RiskManager(starting_capital=1000.0), symbol="SPY", overlay=overlay
+    )
     agent._fitted = _StubFitted()
     return agent
 
 
-_BARS = {"SPY": pd.DataFrame({
-    "date": pd.to_datetime(["2026-04-17", "2026-04-18", "2026-04-19"]),
-    "adjusted_close": [100.0, 101.0, 102.0], "volume": [1_000_000, 1_100_000, 1_200_000],
-    "high": [101.0, 102.0, 103.0], "low": [99.5, 100.5, 101.5],
-})}
+def _make_bars(n: int = 70) -> dict[str, pd.DataFrame]:
+    """Synth N rows of OHLCV. The featurize/latest_window are stubbed in
+    the agent under test, but the agent's own length guard (must clear
+    WARMUP_BARS + seq_len + 1) runs first on the raw frame, so the
+    fixture has to be longer than the warmup window even for stubbed
+    feature paths."""
+    dates = pd.date_range("2026-01-02", periods=n, freq="B")
+    closes = np.linspace(100.0, 100.0 + n, n)
+    return {
+        "SPY": pd.DataFrame(
+            {
+                "date": dates,
+                "adjusted_close": closes,
+                "volume": np.full(n, 1_000_000, dtype=np.int64),
+                "high": closes + 1.0,
+                "low": closes - 0.5,
+            }
+        )
+    }
+
+
+_BARS = _make_bars()
 
 
 async def test_e2e_lstm_llm_agent_sees_retrieval(retrieval_db, retrieval_on, monkeypatch):
@@ -181,7 +235,10 @@ async def test_e2e_lstm_llm_agent_sees_retrieval(retrieval_db, retrieval_on, mon
     from tradefarm.storage import journal
 
     nid = await journal.write_note(
-        agent_id=1, kind="entry", symbol="SPY", content="bought on up bias",
+        agent_id=1,
+        kind="entry",
+        symbol="SPY",
+        content="bought on up bias",
         metadata={"lstm_direction": "up"},
     )
     await journal.close_outcome(agent_id=1, symbol="SPY", realized_pnl=3.14)

@@ -22,6 +22,7 @@ All writers swallow unknown-agent errors (returns ``None``). This keeps the
 backtest path — which constructs agents without a live DB row — working
 without code changes to ``agents/backtest.py``.
 """
+
 from __future__ import annotations
 
 import json
@@ -87,9 +88,9 @@ async def write_note(
     try:
         async with SessionLocal() as session:
             # Silently skip if the agent doesn't exist in the DB yet (backtest path).
-            exists = (await session.execute(
-                select(Agent.id).where(Agent.id == agent_id)
-            )).scalar_one_or_none()
+            exists = (
+                await session.execute(select(Agent.id).where(Agent.id == agent_id))
+            ).scalar_one_or_none()
             if exists is None:
                 return None
             note = AgentNote(
@@ -144,6 +145,7 @@ async def close_outcome(
             if note is None:
                 return None
             from tradefarm.runtime.clock import now_utc
+
             note.outcome_realized_pnl = float(realized_pnl)
             note.outcome_trade_id = trade_id
             note.outcome_closed_at = now_utc()
@@ -161,6 +163,7 @@ def _session_id_predicate():
     StreakWatcher reading live agent history vs a parallel replay
     contaminating outcomes/ranks/curriculum."""
     from tradefarm.runtime.session_context import current_session_id
+
     sid = current_session_id()
     if sid is None:
         return AgentNote.session_id.is_(None)
@@ -178,15 +181,21 @@ async def recent_outcomes(agent_id: int, n: int = 20) -> list[dict]:
     live agent's streak/rank state."""
     try:
         async with SessionLocal() as session:
-            rows = (await session.execute(
-                select(AgentNote)
-                .where(
-                    AgentNote.agent_id == agent_id,
-                    _session_id_predicate(),
+            rows = (
+                (
+                    await session.execute(
+                        select(AgentNote)
+                        .where(
+                            AgentNote.agent_id == agent_id,
+                            _session_id_predicate(),
+                        )
+                        .order_by(AgentNote.created_at.desc(), AgentNote.id.desc())
+                        .limit(n)
+                    )
                 )
-                .order_by(AgentNote.created_at.desc(), AgentNote.id.desc())
-                .limit(n)
-            )).scalars().all()
+                .scalars()
+                .all()
+            )
         return [_row_to_dict(r) for r in rows]
     except Exception as e:
         log.warning("journal_recent_failed", agent_id=agent_id, error=str(e))
@@ -209,17 +218,23 @@ async def find_similar(
     from replay sessions."""
     try:
         async with SessionLocal() as session:
-            rows = (await session.execute(
-                select(AgentNote)
-                .where(
-                    AgentNote.agent_id == agent_id,
-                    AgentNote.symbol == symbol,
-                    AgentNote.outcome_closed_at.is_not(None),
-                    _session_id_predicate(),
+            rows = (
+                (
+                    await session.execute(
+                        select(AgentNote)
+                        .where(
+                            AgentNote.agent_id == agent_id,
+                            AgentNote.symbol == symbol,
+                            AgentNote.outcome_closed_at.is_not(None),
+                            _session_id_predicate(),
+                        )
+                        .order_by(AgentNote.outcome_closed_at.desc(), AgentNote.id.desc())
+                        .limit(limit)
+                    )
                 )
-                .order_by(AgentNote.outcome_closed_at.desc(), AgentNote.id.desc())
-                .limit(limit)
-            )).scalars().all()
+                .scalars()
+                .all()
+            )
         return [_row_to_dict(r) for r in rows]
     except Exception as e:
         log.warning("journal_similar_failed", agent_id=agent_id, symbol=symbol, error=str(e))

@@ -3,6 +3,7 @@
 Uses light-weight stand-ins for the Agent / AgentState / LlmDecision shapes
 so the tests don't depend on the broker, DB, or LSTM model files.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

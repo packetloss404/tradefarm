@@ -8,6 +8,7 @@ doesn't run in plain `uv run pytest`. To run the integration test:
 …with a stream/ dev server running on :5180 and Chromium installed
 (`uv run playwright install chromium`).
 """
+
 from __future__ import annotations
 
 import json
@@ -17,9 +18,6 @@ from pathlib import Path
 import pytest
 
 from tradefarm.render.headless import (
-    DEFAULT_REPLAY_SPEED,
-    DEFAULT_STREAM_BASE,
-    RenderJob,
     build_url,
     plan_jobs,
     render_job_as_dict,
@@ -143,7 +141,9 @@ def test_plan_jobs_honours_scene_override(tmp_path: Path):
 
 def test_plan_jobs_falls_back_to_kind_default_when_scene_hint_missing(tmp_path: Path):
     """If a beat is missing scene_hint, the kind→scene default map fills in."""
-    beats = [{"id": "b1", "t": "2026-05-19T14:00:00+00:00", "kind": "divergence", "duration_sec": 28}]
+    beats = [
+        {"id": "b1", "t": "2026-05-19T14:00:00+00:00", "kind": "divergence", "duration_sec": 28}
+    ]
     jobs, _ = plan_jobs(session_id="s_x", beats=beats, clips_dir=tmp_path / "clips")
     assert jobs[0].scene == "brain"
 
@@ -185,6 +185,7 @@ def test_plan_jobs_allow_scenes_lets_recap_through_when_requested(tmp_path: Path
     """--include-recap path: caller widens allow_scenes AND empties
     skip_kinds; both have to be honoured for the recap beat to plan."""
     from tradefarm.render.headless import SCENES_WITH_REPLAY_SUPPORT
+
     beats = [_beat(id="b_recap", kind="recap", scene="recap")]
     jobs, skipped = plan_jobs(
         session_id="s_x",
@@ -199,7 +200,12 @@ def test_plan_jobs_allow_scenes_lets_recap_through_when_requested(tmp_path: Path
 
 def test_plan_jobs_drops_beat_with_missing_id(tmp_path: Path):
     beats = [
-        {"t": "2026-05-19T14:00:00+00:00", "kind": "big_fill", "scene_hint": "hero", "duration_sec": 10},
+        {
+            "t": "2026-05-19T14:00:00+00:00",
+            "kind": "big_fill",
+            "scene_hint": "hero",
+            "duration_sec": 10,
+        },
         _beat(id="b_ok"),
     ]
     jobs, _ = plan_jobs(session_id="s_x", beats=beats, clips_dir=tmp_path / "clips")
@@ -213,6 +219,7 @@ def test_plan_jobs_empty_returns_empty(tmp_path: Path):
 
 async def test_render_session_missing_beats_raises(tmp_path: Path):
     from tradefarm.render.headless import render_session
+
     with pytest.raises(FileNotFoundError):
         await render_session("never_existed", sessions_dir=tmp_path)
 
@@ -221,6 +228,7 @@ async def test_render_session_only_recap_short_circuits(tmp_path: Path):
     """No browser launch when every beat is skipped — exit 0 with
     no failures + a non-zero skipped count."""
     from tradefarm.render.headless import render_session
+
     sdir = tmp_path / "all_recap"
     sdir.mkdir()
     (sdir / "beats.json").write_text(json.dumps([_beat(id="b_r", kind="recap", scene="recap")]))
@@ -236,6 +244,7 @@ async def test_render_session_purges_stale_clips(tmp_path: Path):
     """Files from a prior run whose beat ids aren't in the current
     plan must be removed, so the stitcher doesn't pick them up."""
     from tradefarm.render.headless import render_session
+
     sdir = tmp_path / "purge_test"
     sdir.mkdir()
     (sdir / "beats.json").write_text(json.dumps([_beat(id="b_recap", kind="recap")]))
@@ -255,6 +264,7 @@ async def test_render_session_purges_stale_clips(tmp_path: Path):
 
 async def test_render_session_keep_stale_keeps_files(tmp_path: Path):
     from tradefarm.render.headless import render_session
+
     sdir = tmp_path / "keep_test"
     sdir.mkdir()
     (sdir / "beats.json").write_text(json.dumps([_beat(id="b_recap", kind="recap")]))
@@ -285,26 +295,40 @@ async def test_integration_render_one_beat(tmp_path: Path):
     session_id = "it_smoke"
     sdir = sessions / session_id
     sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "manifest.json").write_text(json.dumps({
-        "session_id": session_id,
-        "date_range": ["2026-05-19", "2026-05-19"],
-        "started_at": "2026-05-19T13:30:00+00:00",
-        "ended_at": "2026-05-19T20:00:00+00:00",
-        "trading_days": ["2026-05-19"],
-        "tick_count": 1, "fill_count": 0, "agents_active": 0,
-        "events": [],
-    }))
-    (sdir / "beats.json").write_text(json.dumps([{
-        "id": "b_open",
-        "t": "2026-05-19T13:30:00+00:00",
-        "kind": "open",
-        "scene_hint": "hero",
-        "duration_sec": 5,
-        "score": 0.5,
-        "headline": "smoke",
-        "sub": "smoke",
-        "event_refs": [], "agent_ids": [], "metadata": {},
-    }]))
+    (sdir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "date_range": ["2026-05-19", "2026-05-19"],
+                "started_at": "2026-05-19T13:30:00+00:00",
+                "ended_at": "2026-05-19T20:00:00+00:00",
+                "trading_days": ["2026-05-19"],
+                "tick_count": 1,
+                "fill_count": 0,
+                "agents_active": 0,
+                "events": [],
+            }
+        )
+    )
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "b_open",
+                    "t": "2026-05-19T13:30:00+00:00",
+                    "kind": "open",
+                    "scene_hint": "hero",
+                    "duration_sec": 5,
+                    "score": 0.5,
+                    "headline": "smoke",
+                    "sub": "smoke",
+                    "event_refs": [],
+                    "agent_ids": [],
+                    "metadata": {},
+                }
+            ]
+        )
+    )
     summary = await render_session(session_id, sessions_dir=sessions, speed=120.0)
     assert summary.succeeded == 1, [r.error for r in summary.results]
     clip = sdir / "clips" / "b_open.webm"

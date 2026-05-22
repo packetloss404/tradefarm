@@ -1,4 +1,5 @@
 """LSTM + LLM hybrid agent. The LSTM proposes; the LLM disposes."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -6,7 +7,7 @@ import structlog
 
 from tradefarm.agents import retrieval
 from tradefarm.agents.base import Agent, Signal
-from tradefarm.agents.features import featurize, latest_window
+from tradefarm.agents.features import WARMUP_BARS, featurize, latest_window
 from tradefarm.agents.llm_overlay import LlmContext, LlmDecision, LlmOverlay
 from tradefarm.agents.lstm_model import FittedModel, load
 from tradefarm.config import settings
@@ -58,7 +59,7 @@ class LstmLlmAgent(Agent):
         if self._fitted is None or self._overlay is None:
             return []
         df = bars.get(self.symbol)
-        if df is None or len(df) < self._fitted.model.cfg.seq_len + 1:
+        if df is None or len(df) < WARMUP_BARS + self._fitted.model.cfg.seq_len + 1:
             return []
         X, _ = featurize(df)
         window = latest_window(X, seq_len=self._fitted.model.cfg.seq_len)
@@ -97,7 +98,9 @@ class LstmLlmAgent(Agent):
             return []
 
         equity = self.state.book.equity(marks)
-        day_pnl_pct = (equity - settings.agent_starting_capital) / settings.agent_starting_capital * 100
+        day_pnl_pct = (
+            (equity - settings.agent_starting_capital) / settings.agent_starting_capital * 100
+        )
 
         # Phase 3: pull the agent's own most-similar past stamped setups
         # after the cost gate (so a skipped LLM call also skips the DB hit)
@@ -144,5 +147,7 @@ class LstmLlmAgent(Agent):
                 return []
             return [Signal(self.symbol, "buy", qty, reason=f"llm:{decision.reason[:60]}")]
         if decision.predictive in ("short", "flat") and has_long:
-            return [Signal(self.symbol, "sell", round(pos.qty, 4), reason=f"llm:{decision.reason[:60]}")]
+            return [
+                Signal(self.symbol, "sell", round(pos.qty, 4), reason=f"llm:{decision.reason[:60]}")
+            ]
         return []

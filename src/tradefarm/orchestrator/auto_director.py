@@ -16,11 +16,12 @@ Triggers:
 The "session" baseline is the first SPY mark observed after start(); it lives
 in memory only and resets on restart.
 """
+
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
@@ -54,6 +55,7 @@ def _utcnow() -> datetime:
     # Friday and wants the director to fire moments at the right
     # replayed times.
     from tradefarm.runtime.clock import now_utc
+
     return now_utc()
 
 
@@ -145,29 +147,29 @@ class AutoDirector:
             pct = (equity - starting) / starting
             symbol = getattr(agent, "symbol", None)
             if pct >= BIG_WIN_PCT:
-                subtitle = (
-                    f"{symbol} +{pct * 100:.1f}%" if symbol else f"+{pct * 100:.1f}%"
+                subtitle = f"{symbol} +{pct * 100:.1f}%" if symbol else f"+{pct * 100:.1f}%"
+                out.append(
+                    {
+                        "id": f"auto-big-win-{agent.state.id}",
+                        "label": f"Big win: {agent.state.name}",
+                        "color": "profit",
+                        "subtitle": subtitle,
+                        "agent_id": agent.state.id,
+                        "trigger": "big_win",
+                    }
                 )
-                out.append({
-                    "id": f"auto-big-win-{agent.state.id}",
-                    "label": f"Big win: {agent.state.name}",
-                    "color": "profit",
-                    "subtitle": subtitle,
-                    "agent_id": agent.state.id,
-                    "trigger": "big_win",
-                })
             elif pct <= CRASH_PCT:
-                subtitle = (
-                    f"{symbol} {pct * 100:.1f}%" if symbol else f"{pct * 100:.1f}%"
+                subtitle = f"{symbol} {pct * 100:.1f}%" if symbol else f"{pct * 100:.1f}%"
+                out.append(
+                    {
+                        "id": f"auto-crash-{agent.state.id}",
+                        "label": f"Crash: {agent.state.name}",
+                        "color": "loss",
+                        "subtitle": subtitle,
+                        "agent_id": agent.state.id,
+                        "trigger": "crash",
+                    }
                 )
-                out.append({
-                    "id": f"auto-crash-{agent.state.id}",
-                    "label": f"Crash: {agent.state.name}",
-                    "color": "loss",
-                    "subtitle": subtitle,
-                    "agent_id": agent.state.id,
-                    "trigger": "crash",
-                })
         return out
 
     def _collect_market_macro(self) -> dict | None:
@@ -215,14 +217,16 @@ class AutoDirector:
                 continue
             if RANK_ORDER.index(rank) <= RANK_ORDER.index(prev):
                 continue  # demotion or sideways — skip
-            out.append({
-                "id": f"auto-rank-{agent.state.id}",
-                "label": f"Promotion: {agent.state.name}",
-                "color": "profit",
-                "subtitle": f"{prev} → {rank}",
-                "agent_id": agent.state.id,
-                "trigger": "promotion",
-            })
+            out.append(
+                {
+                    "id": f"auto-rank-{agent.state.id}",
+                    "label": f"Promotion: {agent.state.name}",
+                    "color": "profit",
+                    "subtitle": f"{prev} → {rank}",
+                    "agent_id": agent.state.id,
+                    "trigger": "promotion",
+                }
+            )
         return out
 
     async def _maybe_fire(self, macro: dict, now: datetime) -> bool:

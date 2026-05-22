@@ -5,6 +5,7 @@ since CI may not have ffmpeg on PATH. The integration test synthesises
 two solid-colour clips on the fly so it doesn't depend on the headless
 renderer.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,7 +17,6 @@ from pathlib import Path
 import pytest
 
 from tradefarm.render.stitch import (
-    DEFAULT_XFADE_SEC,
     ClipPlan,
     StitchPlan,
     build_normalize_command,
@@ -51,20 +51,32 @@ def _write_session(
 
 def _beat(beat_id: str, t: str, headline: str = "hl", duration: int = 10) -> dict:
     return {
-        "id": beat_id, "t": t, "kind": "big_fill", "scene_hint": "hero",
-        "duration_sec": duration, "score": 0.7,
-        "headline": headline, "sub": "sub", "event_refs": [], "agent_ids": [], "metadata": {},
+        "id": beat_id,
+        "t": t,
+        "kind": "big_fill",
+        "scene_hint": "hero",
+        "duration_sec": duration,
+        "score": 0.7,
+        "headline": headline,
+        "sub": "sub",
+        "event_refs": [],
+        "agent_ids": [],
+        "metadata": {},
     }
 
 
 def _sidecar(beat_id: str, *, scene_ready_at_ms: int = 1200, duration_ms: int = 10_000) -> dict:
     return {
-        "beat_id": beat_id, "kind": "big_fill", "scene": "hero",
-        "at": "2026-05-21T14:00:00+00:00", "until": "2026-05-21T14:00:10+00:00",
+        "beat_id": beat_id,
+        "kind": "big_fill",
+        "scene": "hero",
+        "at": "2026-05-21T14:00:00+00:00",
+        "until": "2026-05-21T14:00:10+00:00",
         "duration_ms": duration_ms,
         "scene_ready_at_ms": scene_ready_at_ms,
         "elapsed_ms": duration_ms + scene_ready_at_ms,
-        "viewport": [1920, 1080], "url": "http://x/",
+        "viewport": [1920, 1080],
+        "url": "http://x/",
         "clip": f"{beat_id}.webm",
         "captured_at": "2026-05-21T14:00:30+00:00",
     }
@@ -102,7 +114,8 @@ def test_plan_trims_preroll_with_pad(tmp_path: Path):
     ready time → trim ~1050ms."""
     base = tmp_path / "out"
     sdir = _write_session(
-        base, "s_trim",
+        base,
+        "s_trim",
         beats=[_beat("b1", "2026-05-21T14:00:00+00:00")],
         clips=[("b1", _sidecar("b1", scene_ready_at_ms=1200))],
     )
@@ -156,20 +169,29 @@ def test_plan_falls_back_to_sidecar_when_beats_json_absent(tmp_path: Path):
 # ----- command builders ----------------------------------------------------
 
 
-def _make_plan(clips: list[ClipPlan], *, captions: bool = True, font: str | None = "/x.ttf") -> StitchPlan:
+def _make_plan(
+    clips: list[ClipPlan], *, captions: bool = True, font: str | None = "/x.ttf"
+) -> StitchPlan:
     return StitchPlan(
-        session_id="s_x", clips=clips,
+        session_id="s_x",
+        clips=clips,
         out_path=Path("out.mp4"),
         intermediates_dir=Path("intermediates"),
-        captions=captions, font_path=font,
+        captions=captions,
+        font_path=font,
     )
 
 
 def test_normalize_command_carries_trim_and_filters():
     clip = ClipPlan(
-        beat_id="b1", src=Path("clips/b1.webm"), sidecar=Path("clips/b1.json"),
-        trim_start_sec=1.0, duration_sec=15.0,
-        headline="hl", sub="sub", kind="big_fill",
+        beat_id="b1",
+        src=Path("clips/b1.webm"),
+        sidecar=Path("clips/b1.json"),
+        trim_start_sec=1.0,
+        duration_sec=15.0,
+        headline="hl",
+        sub="sub",
+        kind="big_fill",
     )
     plan = _make_plan([clip])
     cmd = build_normalize_command(clip, plan=plan, out_path=Path("interm.mp4"))
@@ -187,12 +209,22 @@ def test_xfade_command_chains_offsets_correctly():
     """For 3 clips of 10s each with 0.4s xfade, offsets should be
     9.6 (first fade ends just before clip 0's tail) and 19.2."""
     clips = [
-        ClipPlan(beat_id=f"b{i}", src=Path("x"), sidecar=Path("y"),
-                 trim_start_sec=0, duration_sec=10, headline="", sub="", kind="")
+        ClipPlan(
+            beat_id=f"b{i}",
+            src=Path("x"),
+            sidecar=Path("y"),
+            trim_start_sec=0,
+            duration_sec=10,
+            headline="",
+            sub="",
+            kind="",
+        )
         for i in range(3)
     ]
     plan = _make_plan(clips, captions=False)
-    cmd = build_xfade_command([Path(f"i{i}.mp4") for i in range(3)], plan=plan, out_path=Path("o.mp4"))
+    cmd = build_xfade_command(
+        [Path(f"i{i}.mp4") for i in range(3)], plan=plan, out_path=Path("o.mp4")
+    )
     fc_idx = cmd.index("-filter_complex") + 1
     fc = cmd[fc_idx]
     assert "duration=0.400:offset=9.600" in fc
@@ -204,8 +236,16 @@ def test_xfade_command_chains_offsets_correctly():
 
 
 def test_xfade_command_single_clip_no_chain():
-    clip = ClipPlan(beat_id="b1", src=Path("x"), sidecar=Path("y"),
-                    trim_start_sec=0, duration_sec=10, headline="hl", sub="", kind="")
+    clip = ClipPlan(
+        beat_id="b1",
+        src=Path("x"),
+        sidecar=Path("y"),
+        trim_start_sec=0,
+        duration_sec=10,
+        headline="hl",
+        sub="",
+        kind="",
+    )
     plan = _make_plan([clip], captions=False)
     cmd = build_xfade_command([Path("i.mp4")], plan=plan, out_path=Path("o.mp4"))
     # single clip → -vf, not -filter_complex
@@ -220,14 +260,23 @@ def test_xfade_command_includes_captions_when_font_present(tmp_path: Path):
     plan.intermediates_dir/captions/ as a side effect of building the
     command, so we use tmp_path to keep the test sandboxed."""
     clips = [
-        ClipPlan(beat_id=f"b{i}", src=Path("x"), sidecar=Path("y"),
-                 trim_start_sec=0, duration_sec=10,
-                 headline=f"Headline {i}", sub=f"sub {i}", kind="big_fill")
+        ClipPlan(
+            beat_id=f"b{i}",
+            src=Path("x"),
+            sidecar=Path("y"),
+            trim_start_sec=0,
+            duration_sec=10,
+            headline=f"Headline {i}",
+            sub=f"sub {i}",
+            kind="big_fill",
+        )
         for i in range(2)
     ]
-    plan = MixPlanLike = _make_plan(clips, captions=True, font="/path/to/font.ttf")
+    plan = _make_plan(clips, captions=True, font="/path/to/font.ttf")
     object.__setattr__(plan, "intermediates_dir", tmp_path / "ints")
-    cmd = build_xfade_command([Path(f"i{i}.mp4") for i in range(2)], plan=plan, out_path=Path("o.mp4"))
+    cmd = build_xfade_command(
+        [Path(f"i{i}.mp4") for i in range(2)], plan=plan, out_path=Path("o.mp4")
+    )
     fc = cmd[cmd.index("-filter_complex") + 1]
     assert "drawtext" in fc
     assert "textfile=" in fc
@@ -241,14 +290,24 @@ def test_xfade_command_includes_captions_when_font_present(tmp_path: Path):
 
 def test_pairwise_commands_step_count():
     clips = [
-        ClipPlan(beat_id=f"b{i}", src=Path("x"), sidecar=Path("y"),
-                 trim_start_sec=0, duration_sec=8, headline="", sub="", kind="")
+        ClipPlan(
+            beat_id=f"b{i}",
+            src=Path("x"),
+            sidecar=Path("y"),
+            trim_start_sec=0,
+            duration_sec=8,
+            headline="",
+            sub="",
+            kind="",
+        )
         for i in range(4)
     ]
     plan = _make_plan(clips, captions=False)
     steps = build_pairwise_commands(
         [Path(f"i{i}.mp4") for i in range(4)],
-        plan=plan, work_dir=Path("/tmp/wd"), out_path=Path("o.mp4"),
+        plan=plan,
+        work_dir=Path("/tmp/wd"),
+        out_path=Path("o.mp4"),
     )
     # n clips → n-1 xfade steps
     assert len(steps) == 3
@@ -260,15 +319,29 @@ def test_pairwise_commands_step_count():
 
 
 def test_caption_filter_empty_when_no_headline():
-    assert caption_filter(
-        headline="", sub="anything", t_start=0, t_end=10, font_path="/x.ttf",
-    ) == ""
+    assert (
+        caption_filter(
+            headline="",
+            sub="anything",
+            t_start=0,
+            t_end=10,
+            font_path="/x.ttf",
+        )
+        == ""
+    )
 
 
 def test_caption_filter_empty_when_no_font():
-    assert caption_filter(
-        headline="hi", sub="", t_start=0, t_end=10, font_path=None,
-    ) == ""
+    assert (
+        caption_filter(
+            headline="hi",
+            sub="",
+            t_start=0,
+            t_end=10,
+            font_path=None,
+        )
+        == ""
+    )
 
 
 def test_caption_filter_escapes_quote_and_percent():
@@ -280,7 +353,9 @@ def test_caption_filter_escapes_quote_and_percent():
     out = caption_filter(
         headline="Brian's run · +5%",
         sub="",
-        t_start=0, t_end=5, font_path="/x.ttf",
+        t_start=0,
+        t_end=5,
+        font_path="/x.ttf",
     )
     # exactly one backslash + the quote (no doubled-backslash). Search
     # for the substring inside the text='…' segment so other backslashes
@@ -296,7 +371,10 @@ def test_caption_filter_strips_crlf_from_headline():
     Strip them at escape time."""
     out = caption_filter(
         headline="line one\nline two\r\nthree",
-        sub="", t_start=0, t_end=5, font_path="/x.ttf",
+        sub="",
+        t_start=0,
+        t_end=5,
+        font_path="/x.ttf",
     )
     # all three lines collapsed onto one
     assert "line one line two three" in out
@@ -309,13 +387,22 @@ def test_xfade_caption_window_ends_before_outgoing_fade():
     stacking two captions visibly. End for non-last clips must trim by
     one fade."""
     clips = [
-        ClipPlan(beat_id=f"b{i}", src=Path("x"), sidecar=Path("y"),
-                 trim_start_sec=0, duration_sec=10,
-                 headline=f"H{i}", sub="", kind="big_fill")
+        ClipPlan(
+            beat_id=f"b{i}",
+            src=Path("x"),
+            sidecar=Path("y"),
+            trim_start_sec=0,
+            duration_sec=10,
+            headline=f"H{i}",
+            sub="",
+            kind="big_fill",
+        )
         for i in range(3)
     ]
     plan = _make_plan(clips, captions=True, font="/x.ttf")
-    cmd = build_xfade_command([Path(f"i{i}.mp4") for i in range(3)], plan=plan, out_path=Path("o.mp4"))
+    cmd = build_xfade_command(
+        [Path(f"i{i}.mp4") for i in range(3)], plan=plan, out_path=Path("o.mp4")
+    )
     fc = cmd[cmd.index("-filter_complex") + 1]
     # Clip 0: 0 → 9.6 (10 - 0.4 fade-out lead)
     # Clip 1: 9.6 → 19.2 (clip 1 starts at 10 - 0.4 = 9.6, ends at 19.6,
@@ -328,14 +415,22 @@ def test_xfade_caption_window_ends_before_outgoing_fade():
 
 def test_caption_filter_includes_enable_window():
     out = caption_filter(
-        headline="hl", sub="", t_start=12.5, t_end=42.0, font_path="/x.ttf",
+        headline="hl",
+        sub="",
+        t_start=12.5,
+        t_end=42.0,
+        font_path="/x.ttf",
     )
     assert "between(t,12.500,42.000)" in out
 
 
 def test_caption_filter_includes_sub_when_present():
     out = caption_filter(
-        headline="hl", sub="some sub", t_start=0, t_end=10, font_path="/x.ttf",
+        headline="hl",
+        sub="some sub",
+        t_start=0,
+        t_end=10,
+        font_path="/x.ttf",
     )
     # two drawtext expressions, comma-separated
     assert out.count("drawtext=") == 2
@@ -374,7 +469,8 @@ def test_stitch_session_returns_error_when_no_clips(tmp_path: Path):
 def test_stitch_session_dry_run_doesnt_invoke_ffmpeg(tmp_path: Path):
     base = tmp_path / "out"
     sdir = _write_session(
-        base, "s_dry",
+        base,
+        "s_dry",
         beats=[_beat("b1", "2026-05-21T14:00:00+00:00")],
         clips=[("b1", _sidecar("b1"))],
     )
@@ -403,22 +499,42 @@ def test_integration_stitch_two_solid_clips(tmp_path: Path):
     # Two 3-second test clips, distinct colours so a manual eyeball
     # confirms the order.
     for beat_id, color in [("b1", "red"), ("b2", "blue")]:
-        subprocess.run([
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"color=c={color}:s=320x180:r=30:d=3",
-            "-c:v", "libvpx", "-b:v", "400k",
-            str(sdir / "clips" / f"{beat_id}.webm"),
-        ], check=True)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={color}:s=320x180:r=30:d=3",
+                "-c:v",
+                "libvpx",
+                "-b:v",
+                "400k",
+                str(sdir / "clips" / f"{beat_id}.webm"),
+            ],
+            check=True,
+        )
         (sdir / "clips" / f"{beat_id}.json").write_text(
             json.dumps(_sidecar(beat_id, scene_ready_at_ms=0, duration_ms=2_500))
         )
-    (sdir / "beats.json").write_text(json.dumps([
-        _beat("b1", "2026-05-21T14:00:00+00:00", headline="First clip", duration=2),
-        _beat("b2", "2026-05-21T14:00:05+00:00", headline="Second clip", duration=2),
-    ]))
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                _beat("b1", "2026-05-21T14:00:00+00:00", headline="First clip", duration=2),
+                _beat("b2", "2026-05-21T14:00:05+00:00", headline="Second clip", duration=2),
+            ]
+        )
+    )
     result = stitch_session(
-        "s_int", sessions_dir=tmp_path,
-        width=320, height=180, fps=30,
+        "s_int",
+        sessions_dir=tmp_path,
+        width=320,
+        height=180,
+        fps=30,
         captions=False,  # solid colours don't need text
     )
     assert result.ok, result.error

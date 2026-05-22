@@ -5,12 +5,13 @@ Decision rule (deliberately simple — LLM overlay tightens it later):
 - if prediction = down AND confidence ≥ enter_conf AND has long → sell to flat
 - otherwise wait
 """
+
 from __future__ import annotations
 
 import pandas as pd
 
 from tradefarm.agents.base import Agent, Signal
-from tradefarm.agents.features import featurize, latest_window
+from tradefarm.agents.features import WARMUP_BARS, featurize, latest_window
 from tradefarm.agents.lstm_model import FittedModel, load
 
 DIR_NAMES = ("down", "flat", "up")
@@ -45,7 +46,7 @@ class LstmAgent(Agent):
         if self._fitted is None:
             return []
         df = bars.get(self.symbol)
-        if df is None or len(df) < self._fitted.model.cfg.seq_len + 1:
+        if df is None or len(df) < WARMUP_BARS + self._fitted.model.cfg.seq_len + 1:
             return []
 
         X, _ = featurize(df)
@@ -71,7 +72,16 @@ class LstmAgent(Agent):
             qty = round(self.state.book.cash * self.size_pct / px, 4)
             if qty <= 0:
                 return []
-            return [Signal(self.symbol, "buy", qty, reason=f"lstm up p={pred.direction_probs[2]:.2f}")]
+            return [
+                Signal(self.symbol, "buy", qty, reason=f"lstm up p={pred.direction_probs[2]:.2f}")
+            ]
         if pred.direction == 0 and max_prob >= self.exit_conf and has_long:
-            return [Signal(self.symbol, "sell", round(pos.qty, 4), reason=f"lstm down p={pred.direction_probs[0]:.2f}")]
+            return [
+                Signal(
+                    self.symbol,
+                    "sell",
+                    round(pos.qty, 4),
+                    reason=f"lstm down p={pred.direction_probs[0]:.2f}",
+                )
+            ]
         return []

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
@@ -79,6 +79,7 @@ def test_parent_override_does_not_leak_into_uncontextualized_call() -> None:
     token = set_replay_now(fixed)
     reset_replay_now(token)
     # And the value is wall-clock, not the fixed value
-    assert now_utc().year != 2030 or abs(
-        (now_utc() - datetime.now(timezone.utc)).total_seconds()
-    ) < 1.0
+    assert (
+        now_utc().year != 2030
+        or abs((now_utc() - datetime.now(timezone.utc)).total_seconds()) < 1.0
+    )

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -23,12 +23,18 @@ class Agent(Base):
     # resolve to "intern" without a migration. `rank_updated_at` stays NULL
     # until Phase 4's curriculum flips a rank.
     rank: Mapped[str] = mapped_column(
-        String(16), default="intern", server_default="intern",
+        String(16),
+        default="intern",
+        server_default="intern",
     )
     rank_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    positions: Mapped[list["Position"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
-    trades: Mapped[list["Trade"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
+    positions: Mapped[list["Position"]] = relationship(
+        back_populates="agent", cascade="all, delete-orphan"
+    )
+    trades: Mapped[list["Trade"]] = relationship(
+        back_populates="agent", cascade="all, delete-orphan"
+    )
 
 
 class Position(Base):
@@ -70,9 +76,7 @@ class Trade(Base):
 
     agent: Mapped[Agent] = relationship(back_populates="trades")
 
-    __table_args__ = (
-        UniqueConstraint("broker_order_id", name="uq_trades_broker_order_id"),
-    )
+    __table_args__ = (UniqueConstraint("broker_order_id", name="uq_trades_broker_order_id"),)
 
 
 class PnlSnapshot(Base):
@@ -140,7 +144,10 @@ class AcademyPromotion(Base):
         # promotion rows for the same threshold crossing, doubling the
         # WS event and the dashboard's promotion-history list.
         UniqueConstraint(
-            "agent_id", "from_rank", "to_rank", "at",
+            "agent_id",
+            "from_rank",
+            "to_rank",
+            "at",
             name="uq_academy_promotions_unique_crossing",
         ),
     )

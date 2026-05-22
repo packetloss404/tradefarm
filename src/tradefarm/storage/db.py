@@ -6,6 +6,7 @@ manual ALTER. `_ensure_columns` is the minimal-viable fix: a list of
 (table, column, DDL-fragment) tuples we re-apply on every boot. SQLite
 ignores duplicates gracefully via a pre-check on `PRAGMA table_info`.
 """
+
 from __future__ import annotations
 
 from sqlalchemy import text
@@ -60,29 +61,29 @@ async def _ensure_columns(conn) -> None:
 async def _ensure_indexes(conn) -> None:
     for table, column in _INDEX_MIGRATIONS:
         idx_name = f"ix_{table}_{column}"
-        await conn.execute(
-            text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})")
-        )
+        await conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})"))
     # Audit fix: partial unique index on Trade.broker_order_id for
     # existing DBs (fresh DBs get the constraint via create_all).
     # Partial-WHERE so the multitude of NULL rows (live trades pre-
     # reconciler + simulated fills) don't all collide on UNIQUE.
-    await conn.execute(text(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_broker_order_id "
-        "ON trades(broker_order_id) WHERE broker_order_id IS NOT NULL"
-    ))
+    await conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_broker_order_id "
+            "ON trades(broker_order_id) WHERE broker_order_id IS NOT NULL"
+        )
+    )
     # Audit fix: hot-path indexes flagged by storage subagent (`/agents/{id}/trades`
     # ordered by executed_at DESC was a full-table scan).
-    await conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_trades_agent_id ON trades(agent_id)"
-    ))
-    await conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_trades_executed_at ON trades(executed_at)"
-    ))
-    await conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_agent_notes_outcome_closed_at "
-        "ON agent_notes(outcome_closed_at)"
-    ))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trades_agent_id ON trades(agent_id)"))
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_trades_executed_at ON trades(executed_at)")
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_agent_notes_outcome_closed_at "
+            "ON agent_notes(outcome_closed_at)"
+        )
+    )
 
 
 async def init_db() -> None:

@@ -33,25 +33,37 @@ def trading_days_between(start: datetime, end: datetime) -> float:
     evaluated Tuesday is counted as ~2 trading days, not 4 wall-clock
     days. Returns a float so partial-day fractions are sensible.
 
-    Implementation: count NYSE schedule rows between start and end,
-    inclusive on the start side. Cheap (< 1 ms for spans up to a year).
+    Implementation: count NYSE schedule rows between start and end, then
+    subtract the unused leading portion of the first session (when start
+    is mid-session) and the unused trailing portion of the last session
+    (when end is mid-session). Cheap (< 1 ms for spans up to a year).
     """
     if end <= start:
         return 0.0
     schedule = NYSE.schedule(start_date=start.date(), end_date=end.date())
     if schedule.empty:
         return 0.0
-    # Count whole-trading-day rows + partial fraction of the trailing
-    # in-progress session.
     days = float(len(schedule))
+
+    # Subtract leading unused portion of the first session. Without this,
+    # Fri 12:00 ET → Tue 12:00 ET across a long weekend would count Friday
+    # afternoon as a full day (it's only ~0.6) and the answer drifts low.
+    first_open = schedule.iloc[0]["market_open"].to_pydatetime()
+    first_close = schedule.iloc[0]["market_close"].to_pydatetime()
+    first_session_len = (first_close - first_open).total_seconds()
+    if first_session_len > 0 and start > first_open:
+        leading_skipped = (start - first_open).total_seconds()
+        days -= min(1.0, leading_skipped / first_session_len)
+
+    # Subtract trailing unused portion of the last session.
+    last_open = schedule.iloc[-1]["market_open"].to_pydatetime()
     last_close = schedule.iloc[-1]["market_close"].to_pydatetime()
-    if end < last_close:
-        # Subtract the unused portion of the last session.
-        last_open = schedule.iloc[-1]["market_open"].to_pydatetime()
-        session_len = (last_close - last_open).total_seconds()
-        elapsed = max(0.0, (end - last_open).total_seconds())
-        days -= 1.0 - min(1.0, elapsed / session_len)
-    return days
+    last_session_len = (last_close - last_open).total_seconds()
+    if last_session_len > 0 and end < last_close:
+        unused_tail = (last_close - max(end, last_open)).total_seconds()
+        days -= min(1.0, unused_tail / last_session_len)
+
+    return max(0.0, days)
 
 
 def next_open(dt: datetime | None = None) -> datetime:
@@ -60,6 +72,7 @@ def next_open(dt: datetime | None = None) -> datetime:
     # raised "No market open found" after a long weekend. timedelta
     # never wraps months and always advances.
     from datetime import timedelta
+
     dt = dt or now_et()
     end_date = dt.date() + timedelta(days=10)
     schedule = NYSE.schedule(start_date=dt.date(), end_date=end_date)

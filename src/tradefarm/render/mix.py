@@ -30,20 +30,21 @@ constants live here so the alignment stays coherent.
 
 System ffmpeg required (probed before any work).
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import subprocess
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from tradefarm.render.stitch import DEFAULT_XFADE_SEC, ffmpeg_info, ffprobe_duration, load_reel_meta
 
 
-VO_LEAD_IN_SEC = 0.5     # delay from a beat's start before VO begins
+VO_LEAD_IN_SEC = 0.5  # delay from a beat's start before VO begins
 DEFAULT_MUSIC_VOLUME = 0.18
 DEFAULT_DUCK_THRESHOLD = 0.05  # 0..1 linear; below this music plays full
 # Music gain reduction (dB) when VO is loud. compander outputs the
@@ -153,7 +154,9 @@ def plan_mix(
 
     sidecars = _load_sidecars(clips_dir)
     beat_order = _load_beats_order(beats_path)
-    vo_index_data = json.loads(vo_index_path.read_text(encoding="utf-8")) if vo_index_path.is_file() else {}
+    vo_index_data = (
+        json.loads(vo_index_path.read_text(encoding="utf-8")) if vo_index_path.is_file() else {}
+    )
     vo_rows: list[dict[str, Any]] = vo_index_data.get("lines") or []
 
     # Index VO rows by beat_id → list of (line_idx, wav, duration).
@@ -187,11 +190,15 @@ def plan_mix(
         local_cursor = vo_lead_in_sec
         for line_idx, wav_path, dur in vo_by_beat.get(beat_id, []):
             onset = clip_start + local_cursor
-            vo_lines.append(VoLine(
-                beat_id=beat_id, line_idx=line_idx,
-                wav=wav_path, duration_sec=dur,
-                onset_sec=round(onset, 3),
-            ))
+            vo_lines.append(
+                VoLine(
+                    beat_id=beat_id,
+                    line_idx=line_idx,
+                    wav=wav_path,
+                    duration_sec=dur,
+                    onset_sec=round(onset, 3),
+                )
+            )
             local_cursor += dur + 0.1  # small breath between lines
         # Advance to the next clip. Last clip has no trailing xfade.
         clip_start += clip_dur - (xfade_sec if i < len(rendered) - 1 else 0.0)
@@ -213,9 +220,9 @@ def plan_mix(
 
 def build_mix_command(plan: MixPlan) -> list[str]:
     """Construct one ffmpeg call that:
-      - copies the video stream from silent_reel.mp4
-      - mixes N delayed VO wavs into one audio stream
-      - optionally adds a looped, ducked music bed
+    - copies the video stream from silent_reel.mp4
+    - mixes N delayed VO wavs into one audio stream
+    - optionally adds a looped, ducked music bed
     """
 
     if plan.reel_duration_sec <= 0:
@@ -284,28 +291,50 @@ def build_mix_command(plan: MixPlan) -> list[str]:
                 f"[aout]"
             )
         else:
-            filter_parts.append(f"[mus]anull[aout]")
+            filter_parts.append("[mus]anull[aout]")
     elif vo_in_indices:
         filter_parts.append(f"[{vo_mix_label}]anull[aout]")
     else:
         # No VO, no music → no audio track. Just stream-copy the video.
         return [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(plan.silent_reel),
-            "-c:v", "copy", "-an",
-            "-movflags", "+faststart",
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(plan.silent_reel),
+            "-c:v",
+            "copy",
+            "-an",
+            "-movflags",
+            "+faststart",
             str(plan.out_path),
         ]
 
     filter_complex = ";".join(filter_parts)
     return [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         *inputs,
-        "-filter_complex", filter_complex,
-        "-map", "0:v", "-c:v", "copy",
-        "-map", "[aout]", "-c:a", "aac", "-b:a", "192k",
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "0:v",
+        "-c:v",
+        "copy",
+        "-map",
+        "[aout]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         "-shortest",
-        "-movflags", "+faststart",
+        "-movflags",
+        "+faststart",
         str(plan.out_path),
     ]
 
@@ -364,17 +393,21 @@ def mix_session(
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except OSError as e:
-        return MixResult(ok=False, plan=plan, error=str(e),
-                         elapsed_ms=(time.perf_counter() - started) * 1000)
+        return MixResult(
+            ok=False, plan=plan, error=str(e), elapsed_ms=(time.perf_counter() - started) * 1000
+        )
     if r.returncode != 0:
         out_path.unlink(missing_ok=True)
         return MixResult(
-            ok=False, plan=plan,
+            ok=False,
+            plan=plan,
             elapsed_ms=(time.perf_counter() - started) * 1000,
             error=(r.stderr or r.stdout or "").strip()[-600:],
         )
     return MixResult(
-        ok=True, plan=plan, out_path=out_path,
+        ok=True,
+        plan=plan,
+        out_path=out_path,
         elapsed_ms=(time.perf_counter() - started) * 1000,
     )
 
@@ -391,14 +424,27 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, default=Path("out/sessions"))
     parser.add_argument("--music", type=Path, default=None, help="Music bed audio file (optional).")
     parser.add_argument("--music-volume", type=float, default=DEFAULT_MUSIC_VOLUME)
-    parser.add_argument("--duck-db", type=float, default=DUCK_REDUCTION_DB,
-                        help="Music gain reduction (dB) when VO is loud.")
-    parser.add_argument("--vo-lead-in", type=float, default=VO_LEAD_IN_SEC,
-                        help="Seconds of clip head-time before VO starts.")
-    parser.add_argument("--xfade", type=float, default=DEFAULT_XFADE_SEC,
-                        help="Stitcher's crossfade seconds (must match for alignment).")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print the plan + ffmpeg command without running it.")
+    parser.add_argument(
+        "--duck-db",
+        type=float,
+        default=DUCK_REDUCTION_DB,
+        help="Music gain reduction (dB) when VO is loud.",
+    )
+    parser.add_argument(
+        "--vo-lead-in",
+        type=float,
+        default=VO_LEAD_IN_SEC,
+        help="Seconds of clip head-time before VO starts.",
+    )
+    parser.add_argument(
+        "--xfade",
+        type=float,
+        default=DEFAULT_XFADE_SEC,
+        help="Stitcher's crossfade seconds (must match for alignment).",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print the plan + ffmpeg command without running it."
+    )
     args = parser.parse_args(argv)
 
     result = mix_session(
@@ -418,7 +464,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"reel_duration={result.plan.reel_duration_sec:.2f}s")
         print(f"vo_lines={len(result.plan.vo_lines)}")
         for ln in result.plan.vo_lines:
-            print(f"  {ln.beat_id}.{ln.line_idx:02d} onset={ln.onset_sec:.2f}s dur={ln.duration_sec:.2f}s")
+            print(
+                f"  {ln.beat_id}.{ln.line_idx:02d} onset={ln.onset_sec:.2f}s dur={ln.duration_sec:.2f}s"
+            )
         if result.plan.music_path:
             print(f"music={result.plan.music_path} vol={result.plan.music_volume}")
         print("\n# ffmpeg command:")
@@ -426,7 +474,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if not result.ok:
-        print(f"FAIL: {result.error}", file=__import__('sys').stderr)
+        print(f"FAIL: {result.error}", file=__import__("sys").stderr)
         raise SystemExit(1)
     print(
         f"session_id={args.session_id}\n"

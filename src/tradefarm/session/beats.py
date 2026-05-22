@@ -32,6 +32,7 @@ manifest today): near_miss (needs LSTM probs as events), chapter_change
 is a free-form string), agent_rivalry / leaderboard_shift (need
 multi-session history). They land in v1 once the runner emits more.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,6 +44,7 @@ from typing import Any, Iterable
 
 
 # ----- tunables --------------------------------------------------------------
+
 
 # All thresholds live here so they're easy to discover and override per
 # session via the DetectorThresholds dataclass.
@@ -63,6 +65,7 @@ class DetectorThresholds:
 
 
 # ----- record types ---------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class Beat:
@@ -125,12 +128,13 @@ KIND_PRIORITY: dict[str, int] = {
     "streak": 3,
     "big_fill": 2,
     "closing_burst": 1,
-    "open": 99,    # always pinned first
-    "recap": 99,   # always pinned last
+    "open": 99,  # always pinned first
+    "recap": 99,  # always pinned last
 }
 
 
 # ----- helpers --------------------------------------------------------------
+
 
 def _parse_iso(ts: str) -> datetime:
     """Manifest timestamps are ISO-8601 with timezone. Cope with the
@@ -158,7 +162,7 @@ class _Fill:
     agent_id: int
     agent_name: str
     symbol: str
-    side: str            # "buy" | "sell"
+    side: str  # "buy" | "sell"
     qty: float
     price: float
     notional: float
@@ -187,7 +191,9 @@ def _fills(manifest: dict[str, Any]) -> list[_Fill]:
                 side=str(p.get("side") or "").lower(),
                 qty=float(p.get("qty") or 0.0),
                 price=float(p.get("price") or 0.0),
-                notional=float(p.get("notional") or abs(float(p.get("qty") or 0) * float(p.get("price") or 0))),
+                notional=float(
+                    p.get("notional") or abs(float(p.get("qty") or 0) * float(p.get("price") or 0))
+                ),
             )
         )
     return out
@@ -198,6 +204,7 @@ def _hhmm(t: datetime) -> str:
 
 
 # ----- per-agent realized PnL from fills ------------------------------------
+
 
 @dataclass
 class _AgentPnl:
@@ -283,6 +290,7 @@ def _agent_pnl_from_fills(fills: list[_Fill]) -> dict[int, _AgentPnl]:
 
 
 # ----- scorers --------------------------------------------------------------
+
 
 def _score_open(manifest: dict[str, Any]) -> Beat | None:
     """Fixed bookend at session start. Always score 0.55 so it survives
@@ -462,7 +470,11 @@ def _score_top_movers(
             out.append(
                 Beat(
                     id=f"b_topwinner_{top_id}",
-                    t=(top.last_close_t or (last.t if last else None) or _parse_iso(fills[-1].t.isoformat())).isoformat(),
+                    t=(
+                        top.last_close_t
+                        or (last.t if last else None)
+                        or _parse_iso(fills[-1].t.isoformat())
+                    ).isoformat(),
                     kind="top_winner",
                     score=score,
                     scene_hint=SCENE_FOR_KIND["top_winner"],
@@ -490,7 +502,11 @@ def _score_top_movers(
             out.append(
                 Beat(
                     id=f"b_toploser_{bot_id}",
-                    t=(bot.last_close_t or (last.t if last else None) or _parse_iso(fills[-1].t.isoformat())).isoformat(),
+                    t=(
+                        bot.last_close_t
+                        or (last.t if last else None)
+                        or _parse_iso(fills[-1].t.isoformat())
+                    ).isoformat(),
                     kind="top_loser",
                     score=score,
                     scene_hint=SCENE_FOR_KIND["top_loser"],
@@ -584,6 +600,7 @@ def _score_recap(
 
 # ----- dedup + selection ----------------------------------------------------
 
+
 def _dedup(beats: list[Beat], th: DetectorThresholds) -> list[Beat]:
     """Collapse beats that target the same (kind, agent, symbol) inside
     a short window. Keeps the higher-scoring beat.
@@ -651,6 +668,7 @@ def _select(beats: list[Beat], th: DetectorThresholds) -> list[Beat]:
 
 # ----- public API -----------------------------------------------------------
 
+
 def detect_beats(
     manifest: dict[str, Any],
     *,
@@ -692,6 +710,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
 
 
 # ----- CLI ------------------------------------------------------------------
+
 
 def main(argv: list[str] | None = None) -> None:
     """`python -m tradefarm.session.beats <session_id>` reads

@@ -22,9 +22,10 @@ The aggregator is split into one helper per section so unit tests can hit
 each without spinning up the full app. ``build_recap`` is the assembler;
 ``GET /recap/today`` just wires the live orchestrator + DB session in.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -36,6 +37,7 @@ from tradefarm.academy import RANK_ORDER
 from tradefarm.academy import promotions_repo
 from tradefarm.config import settings
 from tradefarm.market.hours import ET
+from tradefarm.runtime.clock import now_utc
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import AgentNote, Trade
 
@@ -56,11 +58,16 @@ def _today_et_bounds() -> tuple[datetime, datetime]:
     (handles DST automatically); ``end`` is the current UTC instant. Both
     are returned as timezone-aware UTC datetimes ready to feed SQLAlchemy
     filters on ``Trade.executed_at`` / ``AgentNote.outcome_closed_at``.
+
+    Routes through ``runtime.clock.now_utc()`` so a replay session pinning
+    the clock to 2024-03-15 produces a 2024-03-15 ET window — not a
+    wall-clock-today window that misses all replayed rows.
     """
-    now_et = datetime.now(tz=ET)
+    now = now_utc()
+    now_et = now.astimezone(ET)
     midnight_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
     start_utc = midnight_et.astimezone(timezone.utc)
-    end_utc = datetime.now(timezone.utc)
+    end_utc = now
     return start_utc, end_utc
 
 
@@ -77,8 +84,14 @@ def _iso_utc(dt: datetime | None) -> str | None:
     if dt.tzinfo is None:
         # SQLite-naive: already UTC by convention. Append Z.
         return dt.replace(microsecond=0).isoformat() + "Z"
-    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z",
+    return (
+        dt.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace(
+            "+00:00",
+            "Z",
+        )
     )
 
 
@@ -124,25 +137,29 @@ async def _biggest_fill_and_count(
     async with session_factory() as session:
         # Total fills today. Audit fix: live recap excludes replay-tagged
         # rows so a session.run doesn't appear in the "today" recap.
-        total = (await session.execute(
-            select(func.count(Trade.id)).where(
-                Trade.executed_at >= start_naive,
-                Trade.executed_at <= end_naive,
-                Trade.session_id.is_(None),
+        total = (
+            await session.execute(
+                select(func.count(Trade.id)).where(
+                    Trade.executed_at >= start_naive,
+                    Trade.executed_at <= end_naive,
+                    Trade.session_id.is_(None),
+                )
             )
-        )).scalar_one()
+        ).scalar_one()
         # Biggest by |qty * price|.
         notional_expr = func.abs(Trade.qty * Trade.price)
-        row = (await session.execute(
-            select(Trade)
-            .where(
-                Trade.executed_at >= start_naive,
-                Trade.executed_at <= end_naive,
-                Trade.session_id.is_(None),
+        row = (
+            await session.execute(
+                select(Trade)
+                .where(
+                    Trade.executed_at >= start_naive,
+                    Trade.executed_at <= end_naive,
+                    Trade.session_id.is_(None),
+                )
+                .order_by(notional_expr.desc(), Trade.id.desc())
+                .limit(1)
             )
-            .order_by(notional_expr.desc(), Trade.id.desc())
-            .limit(1)
-        )).scalar_one_or_none()
+        ).scalar_one_or_none()
 
     if row is None:
         return None, int(total or 0)
@@ -174,32 +191,40 @@ async def _winners_and_loss(
         # Top winners: outcome_realized_pnl > 0, descending. We explicitly
         # exclude zero/negative outcomes — a "winners podium" with a loss
         # in it reads wrong on stream.
-        winners_rows = (await session.execute(
-            select(AgentNote)
-            .where(
-                AgentNote.outcome_realized_pnl.is_not(None),
-                AgentNote.outcome_realized_pnl > 0,
-                AgentNote.outcome_closed_at >= start_naive,
-                AgentNote.outcome_closed_at <= end_naive,
-                # Audit fix: live winners exclude replay outcomes.
-                AgentNote.session_id.is_(None),
+        winners_rows = (
+            (
+                await session.execute(
+                    select(AgentNote)
+                    .where(
+                        AgentNote.outcome_realized_pnl.is_not(None),
+                        AgentNote.outcome_realized_pnl > 0,
+                        AgentNote.outcome_closed_at >= start_naive,
+                        AgentNote.outcome_closed_at <= end_naive,
+                        # Audit fix: live winners exclude replay outcomes.
+                        AgentNote.session_id.is_(None),
+                    )
+                    .order_by(AgentNote.outcome_realized_pnl.desc(), AgentNote.id.desc())
+                    .limit(3)
+                )
             )
-            .order_by(AgentNote.outcome_realized_pnl.desc(), AgentNote.id.desc())
-            .limit(3)
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # Biggest loss: most-negative single closed outcome (skip if pnl >= 0).
-        loss_row = (await session.execute(
-            select(AgentNote)
-            .where(
-                AgentNote.outcome_realized_pnl.is_not(None),
-                AgentNote.outcome_closed_at >= start_naive,
-                AgentNote.outcome_closed_at <= end_naive,
-                AgentNote.session_id.is_(None),
+        loss_row = (
+            await session.execute(
+                select(AgentNote)
+                .where(
+                    AgentNote.outcome_realized_pnl.is_not(None),
+                    AgentNote.outcome_closed_at >= start_naive,
+                    AgentNote.outcome_closed_at <= end_naive,
+                    AgentNote.session_id.is_(None),
+                )
+                .order_by(AgentNote.outcome_realized_pnl.asc(), AgentNote.id.asc())
+                .limit(1)
             )
-            .order_by(AgentNote.outcome_realized_pnl.asc(), AgentNote.id.asc())
-            .limit(1)
-        )).scalar_one_or_none()
+        ).scalar_one_or_none()
 
     winners = [
         {
@@ -254,13 +279,15 @@ async def _promotions_today(
         to_idx = rank_idx.get(r.get("to_rank", ""), -1)
         if to_idx <= from_idx:
             continue  # demotion or same — skip
-        out.append({
-            "agent_id": r.get("agent_id"),
-            "agent_name": r.get("agent_name"),
-            "from": r.get("from_rank"),
-            "to": r.get("to_rank"),
-            "at": _iso_utc(at_dt),
-        })
+        out.append(
+            {
+                "agent_id": r.get("agent_id"),
+                "agent_name": r.get("agent_name"),
+                "from": r.get("from_rank"),
+                "to": r.get("to_rank"),
+                "at": _iso_utc(at_dt),
+            }
+        )
     # Order newest-first to match the rest of the API surface.
     out.sort(key=lambda d: d.get("at") or "", reverse=True)
     return out
@@ -281,14 +308,16 @@ def _predictions_for_recap(orchestrator: Any) -> list[dict[str, Any]]:
     for p in raw:
         tally = dict(p.get("tally") or {})
         total_votes = sum(int(v) for v in tally.values())
-        out.append({
-            "id": p.get("id"),
-            "question": p.get("question"),
-            "winning_option": p.get("winning_option"),
-            "tally": tally,
-            "total_votes": total_votes,
-            "status": p.get("status"),
-        })
+        out.append(
+            {
+                "id": p.get("id"),
+                "question": p.get("question"),
+                "winning_option": p.get("winning_option"),
+                "tally": tally,
+                "total_votes": total_votes,
+                "status": p.get("status"),
+            }
+        )
     return out
 
 
@@ -340,10 +369,16 @@ async def build_recap(
     names = _agent_name_lookup(orchestrator)
 
     biggest_fill, total_fills = await _biggest_fill_and_count(
-        sf, start_utc, end_utc, names,
+        sf,
+        start_utc,
+        end_utc,
+        names,
     )
     top_winners, biggest_loss = await _winners_and_loss(
-        sf, start_utc, end_utc, names,
+        sf,
+        start_utc,
+        end_utc,
+        names,
     )
     promotions = await _promotions_today(start_utc, end_utc)
     predictions = _predictions_for_recap(orchestrator)

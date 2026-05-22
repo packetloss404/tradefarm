@@ -115,9 +115,7 @@ class AlpacaBroker:
                     "side": o.side.value if o.side is not None else None,
                     "qty": float(o.qty) if o.qty is not None else None,
                     "filled_qty": float(o.filled_qty) if o.filled_qty else 0.0,
-                    "filled_avg_price": (
-                        float(o.filled_avg_price) if o.filled_avg_price else None
-                    ),
+                    "filled_avg_price": (float(o.filled_avg_price) if o.filled_avg_price else None),
                     "status": o.status.value if o.status is not None else None,
                     "submitted_at": o.submitted_at.isoformat() if o.submitted_at else None,
                     "filled_at": o.filled_at.isoformat() if o.filled_at else None,

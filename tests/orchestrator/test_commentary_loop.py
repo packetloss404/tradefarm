@@ -5,6 +5,7 @@ without touching the broker, DB, or a real LLM. The provider's underlying
 client (``_commentary_completion``) is monkey-patched on the module to a
 predictable async stub.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -110,9 +111,11 @@ async def test_successful_llm_call_emits_source_llm(monkeypatch):
     )
     # And stub overlay construction so we don't need real API keys.
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         result = await loop.tick_once()
 
     assert result is not None
@@ -141,9 +144,11 @@ async def test_llm_error_falls_back(monkeypatch):
 
     stub_completion = AsyncMock(side_effect=RuntimeError("API down"))
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         result = await loop.tick_once()
 
     assert result is not None
@@ -168,13 +173,13 @@ async def test_cost_gate_skips_when_quiet(monkeypatch):
     orch = _StubOrch(agents=[agent], last_marks={"SPY": 400.0})
     loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
 
-    stub_completion = AsyncMock(
-        return_value='{"text": "should not be called", "kind": "color"}'
-    )
+    stub_completion = AsyncMock(return_value='{"text": "should not be called", "kind": "color"}')
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         # First tick seeds the SPY baseline and finds no fills → quiet → skip.
         result = await loop.tick_once()
 
@@ -201,9 +206,11 @@ async def test_unparseable_json_falls_back(monkeypatch):
     # Return text that's not valid JSON.
     stub_completion = AsyncMock(return_value="not a json blob — sorry, model.")
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         result = await loop.tick_once()
 
     assert result is not None
@@ -226,13 +233,13 @@ async def test_overlong_text_is_truncated(monkeypatch):
     loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
 
     long_text = "A " * 200  # 400+ chars
-    stub_completion = AsyncMock(
-        return_value=f'{{"text": "{long_text.strip()}", "kind": "color"}}'
-    )
+    stub_completion = AsyncMock(return_value=f'{{"text": "{long_text.strip()}", "kind": "color"}}')
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         result = await loop.tick_once()
 
     assert result is not None
@@ -253,9 +260,11 @@ async def test_spy_drift_overrides_cost_gate(monkeypatch):
         return_value='{"text": "SPY turning south on heavy tape.", "kind": "color"}'
     )
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         # First call seeds the baseline (400.0) and is quiet → skip.
         first = await loop.tick_once()
         assert first is None
@@ -281,13 +290,13 @@ async def test_counter_increments_per_emission(monkeypatch):
     orch = _StubOrch(agents=[agent], last_marks={"AAPL": 158.0, "SPY": 400.0})
     loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
 
-    stub_completion = AsyncMock(
-        return_value='{"text": "Tape humming.", "kind": "color"}'
-    )
+    stub_completion = AsyncMock(return_value='{"text": "Tape humming.", "kind": "color"}')
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         r1 = await loop.tick_once()
         r2 = await loop.tick_once()
 
@@ -468,9 +477,11 @@ async def test_hallucinated_llm_response_falls_back():
         return_value='{"text": "Agent-088 throwing a $200K long on XLV!", "kind": "play_by_play"}'
     )
     fake_publish = AsyncMock()
-    with patch.object(cl, "_commentary_completion", stub_completion), \
-         patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()), \
-         patch.object(cl, "publish_event", fake_publish):
+    with (
+        patch.object(cl, "_commentary_completion", stub_completion),
+        patch.object(cl.LlmOverlay, "from_settings", return_value=_FakeOverlay()),
+        patch.object(cl, "publish_event", fake_publish),
+    ):
         result = await loop.tick_once()
 
     # The LLM call succeeded but its output was rejected → fallback path.

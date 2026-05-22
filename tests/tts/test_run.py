@@ -4,6 +4,7 @@ Real-cloud-provider tests (elevenlabs / openai) are env-gated and
 skip-by-default. The silence provider is the workhorse for offline
 end-to-end checks of the pipeline shape.
 """
+
 from __future__ import annotations
 
 import json
@@ -103,28 +104,43 @@ def test_build_provider_unknown_raises():
 def _write_script(base: Path, session_id: str, *, beats: list[dict]) -> Path:
     sdir = base / session_id
     sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "script.json").write_text(json.dumps({
-        "session_id": session_id,
-        "episode_title": "Test",
-        "model": "silence",
-        "usage": {},
-        "total_words": 0,
-        "total_duration_sec": 0,
-        "beats": beats,
-    }), encoding="utf-8")
+    (sdir / "script.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "episode_title": "Test",
+                "model": "silence",
+                "usage": {},
+                "total_words": 0,
+                "total_duration_sec": 0,
+                "beats": beats,
+            }
+        ),
+        encoding="utf-8",
+    )
     return sdir
 
 
 async def test_run_tts_produces_wav_per_line(tmp_path: Path):
-    sdir = _write_script(tmp_path, "s_tts", beats=[
-        {"beat_id": "b_open", "lines": [
-            {"text": "Bell rings, agents settle in.", "words": 5, "duration_sec": 1.9},
-            {"text": "Tape is quiet this morning.", "words": 5, "duration_sec": 1.9},
-        ]},
-        {"beat_id": "b_close", "lines": [
-            {"text": "And then the close arrived.", "words": 5, "duration_sec": 1.9},
-        ]},
-    ])
+    _write_script(
+        tmp_path,
+        "s_tts",
+        beats=[
+            {
+                "beat_id": "b_open",
+                "lines": [
+                    {"text": "Bell rings, agents settle in.", "words": 5, "duration_sec": 1.9},
+                    {"text": "Tape is quiet this morning.", "words": 5, "duration_sec": 1.9},
+                ],
+            },
+            {
+                "beat_id": "b_close",
+                "lines": [
+                    {"text": "And then the close arrived.", "words": 5, "duration_sec": 1.9},
+                ],
+            },
+        ],
+    )
     result = await run_tts("s_tts", sessions_dir=tmp_path, provider_name="silence")
     assert result.provider == "silence"
     assert len(result.lines) == 3
@@ -138,14 +154,21 @@ async def test_run_tts_produces_wav_per_line(tmp_path: Path):
 
 
 async def test_run_tts_skips_empty_lines(tmp_path: Path):
-    sdir = _write_script(tmp_path, "s_skip", beats=[
-        {"beat_id": "b1", "lines": [
-            {"text": "real one"},
-            {"text": "   "},
-            {"text": ""},
-            {"text": "another real one"},
-        ]},
-    ])
+    _write_script(
+        tmp_path,
+        "s_skip",
+        beats=[
+            {
+                "beat_id": "b1",
+                "lines": [
+                    {"text": "real one"},
+                    {"text": "   "},
+                    {"text": ""},
+                    {"text": "another real one"},
+                ],
+            },
+        ],
+    )
     result = await run_tts("s_skip", sessions_dir=tmp_path, provider_name="silence")
     assert len(result.lines) == 2
 
@@ -153,9 +176,13 @@ async def test_run_tts_skips_empty_lines(tmp_path: Path):
 async def test_run_tts_is_idempotent_when_force_false(tmp_path: Path):
     """A second run with the same script + force=False reuses the
     wav files and reports them in `skipped`."""
-    _write_script(tmp_path, "s_idem", beats=[
-        {"beat_id": "b1", "lines": [{"text": "one line"}]},
-    ])
+    _write_script(
+        tmp_path,
+        "s_idem",
+        beats=[
+            {"beat_id": "b1", "lines": [{"text": "one line"}]},
+        ],
+    )
     first = await run_tts("s_idem", sessions_dir=tmp_path, provider_name="silence")
     assert len(first.lines) == 1 and first.skipped == []
     # Tamper with the wav so we can prove the second run didn't rewrite.
@@ -167,9 +194,13 @@ async def test_run_tts_is_idempotent_when_force_false(tmp_path: Path):
 
 
 async def test_run_tts_force_overwrites(tmp_path: Path):
-    _write_script(tmp_path, "s_force", beats=[
-        {"beat_id": "b1", "lines": [{"text": "one line"}]},
-    ])
+    _write_script(
+        tmp_path,
+        "s_force",
+        beats=[
+            {"beat_id": "b1", "lines": [{"text": "one line"}]},
+        ],
+    )
     first = await run_tts("s_force", sessions_dir=tmp_path, provider_name="silence")
     wav = first.lines[0].wav
     wav.write_bytes(b"sentinel")
@@ -183,20 +214,27 @@ async def test_run_tts_records_provider_failure(tmp_path: Path, monkeypatch):
     killing the rest of the run."""
     from tradefarm.tts import run as runner
 
-    _write_script(tmp_path, "s_fail", beats=[
-        {"beat_id": "b_good", "lines": [{"text": "ok"}]},
-        {"beat_id": "b_bad", "lines": [{"text": "boom"}]},
-    ])
+    _write_script(
+        tmp_path,
+        "s_fail",
+        beats=[
+            {"beat_id": "b_good", "lines": [{"text": "ok"}]},
+            {"beat_id": "b_bad", "lines": [{"text": "boom"}]},
+        ],
+    )
 
     class FlakyProvider:
         name = "flaky"
         sample_rate = DEFAULT_SAMPLE_RATE
+
         async def synthesize(self, text, *, voice, out_path):
             if text == "boom":
                 raise RuntimeError("simulated provider explosion")
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with wave.open(str(out_path), "wb") as w:
-                w.setnchannels(1); w.setsampwidth(2); w.setframerate(self.sample_rate)
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(self.sample_rate)
                 w.writeframes(b"\x00\x00" * 1000)
             return 0.05
 
@@ -220,9 +258,13 @@ async def test_run_tts_missing_script_raises(tmp_path: Path):
     reason="Set RUN_TTS_TESTS=1 + ELEVENLABS_API_KEY to enable (real API).",
 )
 async def test_integration_elevenlabs(tmp_path: Path):
-    _write_script(tmp_path, "s_el", beats=[
-        {"beat_id": "b1", "lines": [{"text": "Bell rings."}]},
-    ])
+    _write_script(
+        tmp_path,
+        "s_el",
+        beats=[
+            {"beat_id": "b1", "lines": [{"text": "Bell rings."}]},
+        ],
+    )
     result = await run_tts("s_el", sessions_dir=tmp_path, provider_name="elevenlabs")
     assert not result.failed
     assert result.lines[0].wav.is_file()

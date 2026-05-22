@@ -11,9 +11,9 @@ Kept dependency-free and synchronous so it's trivially unit-testable; the
 orchestrator wraps the resulting dicts into a single ``agent_decisions_batch``
 event per tick (see :mod:`tradefarm.orchestrator.scheduler`).
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from tradefarm.agents.base import Agent, Signal
@@ -28,6 +28,7 @@ def _now_iso() -> str:
     # replay carry the replayed timestamp (matches the rest of the
     # manifest), not wall-clock today.
     from tradefarm.runtime.clock import now_utc
+
     return now_utc().isoformat()
 
 

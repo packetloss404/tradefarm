@@ -43,8 +43,9 @@ class Agent(ABC):
         self.journal_note_id: int | None = None
 
     @abstractmethod
-    async def decide(self, bars: dict[str, pd.DataFrame], marks: dict[str, float]) -> list[Signal]:
-        ...
+    async def decide(
+        self, bars: dict[str, pd.DataFrame], marks: dict[str, float]
+    ) -> list[Signal]: ...
 
     def on_fill(self, symbol: str, side: Side, qty: float, price: float) -> float:
         """Apply the fill to the agent's virtual book. Returns the realized

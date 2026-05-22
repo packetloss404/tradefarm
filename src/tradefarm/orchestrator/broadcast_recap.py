@@ -1,4 +1,5 @@
 """In-memory recap ledger for Broadcast OS moments."""
+
 from __future__ import annotations
 
 from collections import deque
@@ -127,7 +128,10 @@ class BroadcastRecapLedger:
     ) -> list[dict[str, Any]]:
         """Serialize top moments to plain dictionaries."""
 
-        return [moment.to_payload() for moment in self.top_moments(limit=limit, kind=kind, output=output)]
+        return [
+            moment.to_payload()
+            for moment in self.top_moments(limit=limit, kind=kind, output=output)
+        ]
 
     def to_payload(
         self,

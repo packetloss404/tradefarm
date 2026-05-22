@@ -26,20 +26,18 @@ System `ffmpeg` is required (`winget install Gyan.FFmpeg` on Windows,
 `brew install ffmpeg` on macOS). The Python module has no media deps —
 keeps the trading-rig install lean.
 """
+
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
-import os
-import shutil
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 
 DEFAULT_WIDTH = 1920
@@ -97,13 +95,13 @@ def _ff_text(s: str) -> str:
     cleaned = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     return (
         cleaned.replace("\\", r"\\")
-               .replace(":", r"\:")
-               .replace("'", r"\'")
-               .replace("%", r"\%")
-               .replace(",", r"\,")
-               .replace(";", r"\;")
-               .replace("[", r"\[")
-               .replace("]", r"\]")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+        .replace("%", r"\%")
+        .replace(",", r"\,")
+        .replace(";", r"\;")
+        .replace("[", r"\[")
+        .replace("]", r"\]")
     )
 
 
@@ -139,12 +137,19 @@ def ffprobe_duration(path: Path) -> float:
     try:
         r = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=nw=1:nk=1",
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
                 str(path),
             ],
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return 0.0
@@ -164,10 +169,10 @@ class ClipPlan:
     """One input clip with its trim + caption metadata."""
 
     beat_id: str
-    src: Path              # the .webm
-    sidecar: Path          # the .json
+    src: Path  # the .webm
+    sidecar: Path  # the .json
     trim_start_sec: float  # scene_ready_at_ms - preroll, clamped >=0
-    duration_sec: float    # how much of the clip to keep
+    duration_sec: float  # how much of the clip to keep
     headline: str
     sub: str
     kind: str
@@ -267,9 +272,7 @@ def plan_stitch(
 
     # Order by the beat's `at` timestamp so the reel reads as the day's
     # story; fall back to filename if a beat went missing from beats.json.
-    order_key: dict[str, str] = {
-        bid: row.get("t", "") for bid, row in beats.items()
-    }
+    order_key: dict[str, str] = {bid: row.get("t", "") for bid, row in beats.items()}
     clips.sort(key=lambda c: (order_key.get(c.beat_id, ""), c.beat_id))
 
     return StitchPlan(
@@ -300,13 +303,26 @@ def build_normalize_command(clip: ClipPlan, *, plan: StitchPlan, out_path: Path)
         f"setsar=1"
     )
     return [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(clip.src),
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-        "-g", str(plan.fps),
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(clip.src),
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-g",
+        str(plan.fps),
         "-an",
-        "-video_track_timescale", "30000",
+        "-video_track_timescale",
+        "30000",
         str(out_path),
     ]
 
@@ -414,12 +430,25 @@ def build_xfade_command(
                 captions_filter = f",{cap}"
         vf = f"setpts=PTS-STARTPTS{captions_filter}"
         return [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(intermediates[0]),
-            "-vf", vf,
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(intermediates[0]),
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
             "-an",
             str(out_path),
         ]
@@ -495,15 +524,26 @@ def build_xfade_command(
             prev_label = "vout"
 
     filter_complex = ";".join(filter_parts)
-    args.extend([
-        "-filter_complex", filter_complex,
-        "-map", f"[{prev_label}]",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        "-an",
-        str(out_path),
-    ])
+    args.extend(
+        [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            f"[{prev_label}]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-an",
+            str(out_path),
+        ]
+    )
     return args
 
 
@@ -520,10 +560,17 @@ def build_pairwise_commands(
     prefix at each step) but recovers when the chained graph fails."""
 
     if len(intermediates) <= 1:
-        return [(build_xfade_command(
-            intermediates, plan=plan, out_path=out_path,
-            actual_durations=actual_durations,
-        ), out_path)]
+        return [
+            (
+                build_xfade_command(
+                    intermediates,
+                    plan=plan,
+                    out_path=out_path,
+                    actual_durations=actual_durations,
+                ),
+                out_path,
+            )
+        ]
 
     work_dir.mkdir(parents=True, exist_ok=True)
     steps: list[tuple[list[str], Path]] = []
@@ -541,14 +588,27 @@ def build_pairwise_commands(
         target = out_path if is_last else (work_dir / f"prefix_{i:02d}.mp4")
         offset = cumulative - fade
         cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(prefix),
-            "-i", str(intermediates[i]),
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(prefix),
+            "-i",
+            str(intermediates[i]),
             "-filter_complex",
             f"[0:v][1:v]xfade=transition=fade:duration={fade:.3f}:offset={offset:.3f}[vout]",
-            "-map", "[vout]",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-            "-pix_fmt", "yuv420p",
+            "-map",
+            "[vout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
             "-an",
         ]
         if is_last:
@@ -633,14 +693,14 @@ def stitch_session(
     ok, info = ffmpeg_info()
     if not ok:
         return StitchResult(
-            ok=False, plan=plan,
+            ok=False,
+            plan=plan,
             error=f"ffmpeg not available on PATH: {info}",
         )
 
     intermediates_dir.mkdir(parents=True, exist_ok=True)
     intermediate_paths: list[Path] = [
-        intermediates_dir / f"{i:03d}_{c.beat_id}.mp4"
-        for i, c in enumerate(plan.clips)
+        intermediates_dir / f"{i:03d}_{c.beat_id}.mp4" for i, c in enumerate(plan.clips)
     ]
 
     # Pass 1: normalise in parallel.
@@ -656,10 +716,13 @@ def stitch_session(
         for fut in as_completed(futures):
             ok, err = fut.result()
             if not ok:
-                norm_failures.append(f"{futures[fut]}: {err.splitlines()[-1] if err else 'unknown'}")
+                norm_failures.append(
+                    f"{futures[fut]}: {err.splitlines()[-1] if err else 'unknown'}"
+                )
     if norm_failures:
         return StitchResult(
-            ok=False, plan=plan,
+            ok=False,
+            plan=plan,
             elapsed_ms=(time.perf_counter() - started) * 1000,
             error="normalize failed: " + " | ".join(norm_failures[:3]),
         )
@@ -672,20 +735,37 @@ def stitch_session(
             "\n".join(f"file '{p.resolve().as_posix()}'" for p in intermediate_paths),
             encoding="utf-8",
         )
-        ok, err = _run_one([
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "concat", "-safe", "0", "-i", str(list_file),
-            "-c", "copy", "-movflags", "+faststart",
-            str(out_path),
-        ])
+        ok, err = _run_one(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(list_file),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ]
+        )
         if not ok:
             return StitchResult(
-                ok=False, plan=plan,
+                ok=False,
+                plan=plan,
                 elapsed_ms=(time.perf_counter() - started) * 1000,
                 error=f"concat-demux failed: {err.splitlines()[-1] if err else ''}",
             )
         return StitchResult(
-            ok=True, plan=plan, out_path=out_path,
+            ok=True,
+            plan=plan,
+            out_path=out_path,
             elapsed_ms=(time.perf_counter() - started) * 1000,
         )
 
@@ -697,20 +777,25 @@ def stitch_session(
 
     # Pass 2: chained xfade. If it fails, fall back to pairwise.
     chain_cmd = build_xfade_command(
-        intermediate_paths, plan=plan, out_path=out_path,
+        intermediate_paths,
+        plan=plan,
+        out_path=out_path,
         actual_durations=actual_durations,
     )
     ok, err = _run_one(chain_cmd, cleanup_on_fail=out_path)
     if ok:
         _write_reel_meta(plan)
         return StitchResult(
-            ok=True, plan=plan, out_path=out_path,
+            ok=True,
+            plan=plan,
+            out_path=out_path,
             elapsed_ms=(time.perf_counter() - started) * 1000,
         )
 
     # Fallback path.
     pairwise_steps = build_pairwise_commands(
-        intermediate_paths, plan=plan,
+        intermediate_paths,
+        plan=plan,
         work_dir=intermediates_dir / "pairwise",
         out_path=out_path,
         actual_durations=actual_durations,
@@ -719,14 +804,17 @@ def stitch_session(
         ok, err = _run_one(cmd, cleanup_on_fail=target)
         if not ok:
             return StitchResult(
-                ok=False, plan=plan,
+                ok=False,
+                plan=plan,
                 elapsed_ms=(time.perf_counter() - started) * 1000,
                 error=f"pairwise step failed ({target.name}): {err.splitlines()[-1] if err else ''}",
                 fallback_used=True,
             )
     _write_reel_meta(plan)
     return StitchResult(
-        ok=True, plan=plan, out_path=out_path,
+        ok=True,
+        plan=plan,
+        out_path=out_path,
         elapsed_ms=(time.perf_counter() - started) * 1000,
         fallback_used=True,
     )
@@ -833,7 +921,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"session_id={args.session_id}")
         print(f"clips={len(result.plan.clips)} font={result.plan.font_path}")
         for c in result.plan.clips:
-            print(f"  {c.beat_id} trim={c.trim_start_sec:.3f}s dur={c.duration_sec:.3f}s · {c.headline[:60]}")
+            print(
+                f"  {c.beat_id} trim={c.trim_start_sec:.3f}s dur={c.duration_sec:.3f}s · {c.headline[:60]}"
+            )
         # Per the flag's help text, emit the ffmpeg commands too — so an
         # operator can copy-paste them and debug a specific clip outside
         # the pipeline.
@@ -847,7 +937,9 @@ def main(argv: list[str] | None = None) -> None:
             print("  " + " ".join(cmd))
         print("\n# pass 2 (chained xfade):")
         if intermediates:
-            cmd = build_xfade_command(intermediates, plan=result.plan, out_path=result.plan.out_path)
+            cmd = build_xfade_command(
+                intermediates, plan=result.plan, out_path=result.plan.out_path
+            )
             print("  " + " ".join(cmd))
         return
 

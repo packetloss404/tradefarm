@@ -24,6 +24,7 @@ When the next session of the roadmap lands (point-in-time marks +
 status/journal-counter snapshots), this module gets enriched. For now
 it's the smallest substrate the headless renderer needs.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,7 +42,7 @@ DEFAULT_SESSIONS_DIR = Path("out/sessions")
 # escape `out/sessions/` or carry a leading dot. Real session ids come
 # from session.run as `s_<YYYY-MM-DD>_<6-hex>`; the regex is wider so
 # operators can hand-craft ids during dev (e.g. `s_smoke_test`).
-import re as _re
+import re as _re  # noqa: E402  (co-located with the regex it defines)
 
 _SAFE_SESSION_ID = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
@@ -53,8 +54,7 @@ def _require_safe_session_id(session_id: str) -> str:
     component — REST endpoints, WS handshake, CLI."""
     if not isinstance(session_id, str) or not _SAFE_SESSION_ID.match(session_id):
         raise ValueError(
-            f"invalid session_id {session_id!r}: must match "
-            f"[A-Za-z0-9][A-Za-z0-9_.-]{{0,127}}"
+            f"invalid session_id {session_id!r}: must match [A-Za-z0-9][A-Za-z0-9_.-]{{0,127}}"
         )
     if ".." in session_id or session_id.startswith("."):
         raise ValueError(f"invalid session_id {session_id!r}: traversal-like")
@@ -79,6 +79,7 @@ def parse_iso(ts: str) -> datetime:
 
 
 # ----- per-agent fold -------------------------------------------------------
+
 
 @dataclass
 class Position:
@@ -210,6 +211,7 @@ def fold_to(
 
 # ----- equity / account aggregates -----------------------------------------
 
+
 def position_value(positions: dict[str, Position], marks: dict[str, float]) -> tuple[float, float]:
     """Returns (notional_value, unrealized_pnl). Unmarked symbols fall
     back to the position's average price (so they read as zero
@@ -248,6 +250,7 @@ def agent_status(snap: AgentSnapshot, marks: dict[str, float], starting_capital:
 
 
 # ----- endpoint-shaped builders --------------------------------------------
+
 
 def agent_payload(
     snap: AgentSnapshot,
@@ -394,20 +397,23 @@ def trades_for_agent(
         if t > at:
             break
         payload = ev.get("payload") or {}
-        out.append({
-            "id": idx,
-            "symbol": payload.get("symbol"),
-            "side": payload.get("side"),
-            "qty": float(payload.get("qty") or 0.0),
-            "price": float(payload.get("price") or 0.0),
-            "executed_at": ev["t"],
-            "reason": payload.get("reason"),
-        })
+        out.append(
+            {
+                "id": idx,
+                "symbol": payload.get("symbol"),
+                "side": payload.get("side"),
+                "qty": float(payload.get("qty") or 0.0),
+                "price": float(payload.get("price") or 0.0),
+                "executed_at": ev["t"],
+                "reason": payload.get("reason"),
+            }
+        )
     out.reverse()
     return out[:limit]
 
 
 # ----- WS replay event stream ----------------------------------------------
+
 
 def events_in_window(
     manifest: dict[str, Any],
@@ -436,6 +442,7 @@ def events_in_window(
 
 
 # ----- helpers to convert manifest events into WS envelopes ----------------
+
 
 def manifest_event_to_ws_envelope(ev: dict[str, Any]) -> dict[str, Any] | None:
     """Translate a manifest event into the {type, ts, payload} shape

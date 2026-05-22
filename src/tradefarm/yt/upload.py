@@ -19,6 +19,7 @@ AND the file is present.
 For v0 we keep the upload synchronous (single-shot resumable PUT —
 no chunked retry). Real ops use a retry harness on top.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,16 +27,14 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 
 OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 VIDEOS_INSERT_URL = (
-    "https://www.googleapis.com/upload/youtube/v3/videos"
-    "?part=snippet,status&uploadType=resumable"
+    "https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=resumable"
 )
 THUMBNAILS_SET_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 
@@ -78,6 +77,7 @@ async def refresh_access_token(creds: YtCredentials) -> str:
     """Trade a refresh_token for a fresh access_token. Same shape as
     src/tradefarm/orchestrator/youtube_chat.py's refresh dance."""
     import httpx
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.post(
             OAUTH_TOKEN_URL,
@@ -128,10 +128,14 @@ def build_video_resource(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _initiate_resumable_upload(
-    *, access_token: str, body: dict[str, Any], video_bytes: int,
+    *,
+    access_token: str,
+    body: dict[str, Any],
+    video_bytes: int,
 ) -> str:
     """Step 1 — POST snippet/status, get a resumable upload Location."""
     import httpx
+
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8",
@@ -160,7 +164,9 @@ RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024  # 8 MiB
 
 
 async def _put_video_bytes(
-    *, location_url: str, video_path: Path,
+    *,
+    location_url: str,
+    video_path: Path,
     refresh_creds: "YtCredentials | None" = None,
 ) -> dict[str, Any]:
     """Step 2 — resumable chunked PUT of the mp4 bytes.
@@ -182,7 +188,18 @@ async def _put_video_bytes(
     async with httpx.AsyncClient(timeout=300.0) as client:
         with video_path.open("rb") as fh:
             offset = 0
+            # Audit fix (round-3 V): explicit counter, reset whenever
+            # the offset actually advances. The previous `locals().get(
+            # "_same_offset_retries", 0) + 1` measured *lifetime* no-
+            # Range 308s across the whole upload, not consecutive at
+            # the same offset — false-positive on a long upload with
+            # interleaved successes.
+            same_offset_retries = 0
+            last_offset = -1
             while offset < size:
+                if offset != last_offset:
+                    same_offset_retries = 0
+                    last_offset = offset
                 chunk = fh.read(RESUMABLE_CHUNK_BYTES)
                 end = offset + len(chunk) - 1
                 headers = {
@@ -216,9 +233,8 @@ async def _put_video_bytes(
                     # still valid for 24h).
                     await asyncio.sleep(1.0)
                     fh.seek(offset)
-                    # Cap consecutive same-offset retries.
-                    _same_offset_retries = locals().get("_same_offset_retries", 0) + 1
-                    if _same_offset_retries > 5:
+                    same_offset_retries += 1
+                    if same_offset_retries > 5:
                         raise RuntimeError(
                             "PUT video stalled at offset "
                             f"{offset} — server returned 308 without Range "
@@ -232,9 +248,7 @@ async def _put_video_bytes(
                     await refresh_access_token(refresh_creds)
                     fh.seek(offset)
                     continue
-                raise RuntimeError(
-                    f"PUT video failed {r.status_code}: {r.text[:300]}"
-                )
+                raise RuntimeError(f"PUT video failed {r.status_code}: {r.text[:300]}")
     raise RuntimeError("resumable upload ended without final response")
 
 
@@ -246,6 +260,7 @@ async def _set_thumbnail(*, access_token: str, video_id: str, thumb_path: Path) 
     upload protocol (raw image body, not multipart). Without it,
     YouTube returns 400."""
     import httpx
+
     url = f"{THUMBNAILS_SET_URL}?uploadType=media&videoId={video_id}"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -291,23 +306,31 @@ async def upload_episode(
 
     if dry_run:
         return UploadResult(
-            ok=True, video_id=None, video_url=None,
-            response={"dry_run": True, "body": body,
-                      "video_bytes": video_path.stat().st_size,
-                      "thumbnail": str(thumb_path) if thumb_path.is_file() else None},
+            ok=True,
+            video_id=None,
+            video_url=None,
+            response={
+                "dry_run": True,
+                "body": body,
+                "video_bytes": video_path.stat().st_size,
+                "thumbnail": str(thumb_path) if thumb_path.is_file() else None,
+            },
         )
 
     creds = creds or YtCredentials.from_env()
     try:
         access_token = await refresh_access_token(creds)
         location = await _initiate_resumable_upload(
-            access_token=access_token, body=body,
+            access_token=access_token,
+            body=body,
             video_bytes=video_path.stat().st_size,
         )
         # Pass creds to the chunked PUT so it can refresh the access
         # token mid-upload if the original expires (audit fix C14).
         response = await _put_video_bytes(
-            location_url=location, video_path=video_path, refresh_creds=creds,
+            location_url=location,
+            video_path=video_path,
+            refresh_creds=creds,
         )
     except Exception as exc:  # noqa: BLE001
         return UploadResult(
@@ -325,14 +348,19 @@ async def upload_episode(
             # call — a long PUT could have left the original expired.
             access_token = await refresh_access_token(creds)
             await _set_thumbnail(
-                access_token=access_token, video_id=video_id, thumb_path=thumb_path,
+                access_token=access_token,
+                video_id=video_id,
+                thumb_path=thumb_path,
             )
         except Exception as exc:  # noqa: BLE001
             # Non-fatal: log via the response, video still uploaded.
             response = {**response, "thumbnail_error": str(exc)}
 
     return UploadResult(
-        ok=True, video_id=video_id, video_url=video_url, response=response,
+        ok=True,
+        video_id=video_id,
+        video_url=video_url,
+        response=response,
         elapsed_ms=(time.perf_counter() - started) * 1000,
     )
 
@@ -347,19 +375,23 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("session_id")
     parser.add_argument("--out", type=Path, default=Path("out/sessions"))
-    parser.add_argument("--no-thumbnail", action="store_true",
-                        help="Skip the custom-thumbnail upload step.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print the request body without calling YT.")
+    parser.add_argument(
+        "--no-thumbnail", action="store_true", help="Skip the custom-thumbnail upload step."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print the request body without calling YT."
+    )
     args = parser.parse_args(argv)
 
     try:
-        result = asyncio.run(upload_episode(
-            args.session_id,
-            sessions_dir=args.out,
-            upload_thumbnail=not args.no_thumbnail,
-            dry_run=args.dry_run,
-        ))
+        result = asyncio.run(
+            upload_episode(
+                args.session_id,
+                sessions_dir=args.out,
+                upload_thumbnail=not args.no_thumbnail,
+                dry_run=args.dry_run,
+            )
+        )
     except RuntimeError as exc:
         raise SystemExit(f"upload failed to start: {exc}") from exc
 
@@ -367,7 +399,7 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(result.response, indent=2))
         return
     if not result.ok:
-        print(f"FAIL: {result.error}", file=__import__('sys').stderr)
+        print(f"FAIL: {result.error}", file=__import__("sys").stderr)
         raise SystemExit(1)
     print(
         f"session_id={args.session_id}\n"

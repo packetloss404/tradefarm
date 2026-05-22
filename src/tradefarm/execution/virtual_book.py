@@ -5,6 +5,7 @@ real paper account, but each agent has an isolated book of positions, cash,
 and P&L computed locally. Fills from the real broker get attributed back to
 the agent that placed the parent order.
 """
+
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -69,7 +70,9 @@ class VirtualBook:
             self.positions[symbol] = pos
         return pos
 
-    def record_fill(self, symbol: str, side: str, qty: float, price: float, at: datetime | None = None) -> float:
+    def record_fill(
+        self, symbol: str, side: str, qty: float, price: float, at: datetime | None = None
+    ) -> float:
         """Apply a fill to this book. Returns the realized PnL produced by
         this fill alone (zero for opening fills / same-side adds, non-zero
         for fills that close or flip part/all of a position). The
@@ -219,9 +222,7 @@ class VirtualBook:
             final_qty = mid_qty + opening_signed
             if abs(final_qty) > 1e-9:
                 mid_avg = prev_avg if abs(mid_qty) > 1e-9 else 0.0
-                pos.avg_price = (
-                    mid_avg * mid_qty + actual_price * opening_signed
-                ) / final_qty
+                pos.avg_price = (mid_avg * mid_qty + actual_price * opening_signed) / final_qty
         return True
 
     # Kept for backwards compatibility — used by older call sites. New

@@ -4,11 +4,11 @@ Envelope: {"type": str, "ts": iso8601_utc, "payload": dict}
 Per-subscriber asyncio.Queue; fan-out on publish; drop-on-disconnect.
 Slow subscribers (queue > MAX_QUEUE) get dropped by the WS layer.
 """
+
 from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import AsyncIterator
 
 MAX_QUEUE = 100
@@ -20,6 +20,7 @@ def _now_iso() -> str:
     # timestamp. Consumers that compare (now - ts) for "age" would
     # otherwise see all replayed events as decades old.
     from tradefarm.runtime.clock import now_utc
+
     return now_utc().isoformat()
 
 

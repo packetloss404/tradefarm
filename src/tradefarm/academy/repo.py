@@ -5,6 +5,7 @@ curriculum will log the ``reason`` into a dedicated ``academy_promotions``
 table; for Phase 2 we accept the parameter to keep the call-site stable and
 just log it via structlog.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -28,9 +29,9 @@ async def set_rank(agent_id: int, rank: Rank, reason: str = "") -> None:
         return
     try:
         async with SessionLocal() as session:
-            agent = (await session.execute(
-                select(Agent).where(Agent.id == agent_id)
-            )).scalar_one_or_none()
+            agent = (
+                await session.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one_or_none()
             if agent is None:
                 return
             previous = agent.rank
@@ -54,9 +55,9 @@ async def get_rank(agent_id: int) -> Rank:
     """Current persisted rank for ``agent_id``. Defaults to ``intern``."""
     try:
         async with SessionLocal() as session:
-            row = (await session.execute(
-                select(Agent.rank).where(Agent.id == agent_id)
-            )).scalar_one_or_none()
+            row = (
+                await session.execute(select(Agent.rank).where(Agent.id == agent_id))
+            ).scalar_one_or_none()
     except Exception as e:
         log.warning("academy_get_rank_failed", agent_id=agent_id, error=str(e))
         return "intern"
@@ -70,9 +71,9 @@ async def rank_distribution() -> dict[str, int]:
     out: dict[str, int] = {r: 0 for r in RANK_ORDER}
     try:
         async with SessionLocal() as session:
-            rows = (await session.execute(
-                select(Agent.rank, func.count(Agent.id)).group_by(Agent.rank)
-            )).all()
+            rows = (
+                await session.execute(select(Agent.rank, func.count(Agent.id)).group_by(Agent.rank))
+            ).all()
     except Exception as e:
         log.warning("academy_rank_distribution_failed", error=str(e))
         return out
@@ -86,9 +87,7 @@ async def ranks_by_agent() -> dict[int, str]:
     """Snapshot of every agent's current rank (agent_id → rank)."""
     try:
         async with SessionLocal() as session:
-            rows = (await session.execute(
-                select(Agent.id, Agent.rank)
-            )).all()
+            rows = (await session.execute(select(Agent.id, Agent.rank))).all()
     except Exception as e:
         log.warning("academy_ranks_by_agent_failed", error=str(e))
         return {}

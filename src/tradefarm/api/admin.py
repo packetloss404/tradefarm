@@ -5,6 +5,7 @@ be local-dev only. If you expose the port externally, put an auth layer in
 front (reverse proxy, API key, etc.). The allowlist below is NOT a substitute
 for that — it's scope control, not access control.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -186,7 +187,16 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
 
     # Swap the shared LLM overlay if any provider-related field moved.
     overlay_info: dict[str, str | None] | None = None
-    if any(k in changes for k in ("llm_provider", "llm_model", "anthropic_api_key", "minimax_api_key", "minimax_base_url")):
+    if any(
+        k in changes
+        for k in (
+            "llm_provider",
+            "llm_model",
+            "anthropic_api_key",
+            "minimax_api_key",
+            "minimax_base_url",
+        )
+    ):
         orch = request.app.state.orchestrator
         overlay_info = orch.reload_llm_overlay()
 
@@ -206,8 +216,10 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
                 # Non-fatal — in-memory change still stands.
                 pass
 
-    return {"changed": {k: v if k not in SECRET_KEYS else _mask(str(v)) for k, v in changes.items()},
-            "overlay": overlay_info}
+    return {
+        "changed": {k: v if k not in SECRET_KEYS else _mask(str(v)) for k, v in changes.items()},
+        "overlay": overlay_info,
+    }
 
 
 @router.post("/toggle-ai")

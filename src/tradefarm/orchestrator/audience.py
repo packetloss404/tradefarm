@@ -17,6 +17,7 @@ event when the operator approves or rejects.
 State is in-memory only — predictions and sentiment are lost on backend
 restart. That's an explicit v1 choice (a single-day broadcast).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -286,7 +287,9 @@ class AudienceCoordinator:
         return [r.to_payload() for r in reversed(self._pin_requests)]
 
     async def approve_pin_request(
-        self, request_id: str, agent_id_override: int | None = None,
+        self,
+        request_id: str,
+        agent_id_override: int | None = None,
     ) -> bool:
         """Approve a pending pin request.
 

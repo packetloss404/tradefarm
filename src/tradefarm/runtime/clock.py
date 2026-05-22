@@ -15,13 +15,15 @@ across concurrent ``asyncio`` tasks: each task sees its own override
 without leaking into sibling tasks. Live mode never touches the var,
 so the live trading path is a strict no-op against today's behavior.
 """
+
 from __future__ import annotations
 
 import contextvars
 from datetime import date, datetime, timezone
 
 _replay_now: contextvars.ContextVar[datetime | None] = contextvars.ContextVar(
-    "tradefarm_replay_now", default=None,
+    "tradefarm_replay_now",
+    default=None,
 )
 
 

@@ -19,6 +19,7 @@ The writer never skips beats. Recap clips don't render today (the
 recap scene isn't replay-aware yet), but the narration is ready for
 when they do.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -124,7 +125,9 @@ class Script:
     episode_title: str
     model: str
     beats: list[BeatScript] = field(default_factory=list)
-    usage: dict[str, int] = field(default_factory=dict)  # input/output/cache tokens for cost tracking
+    usage: dict[str, int] = field(
+        default_factory=dict
+    )  # input/output/cache tokens for cost tracking
 
 
 # ----- prompt construction (pure) -----------------------------------------
@@ -140,11 +143,21 @@ def _scrub_for_prompt(s: str, *, max_len: int = 400) -> str:
     100k-char "headline" can't blow the token budget."""
     if not s:
         return ""
-    bad = set(range(0, 32)) - {9, 10, 13} | {0x200B, 0x200C, 0x200D,
-                                              0x202A, 0x202B, 0x202C,
-                                              0x202D, 0x202E, 0x2066,
-                                              0x2067, 0x2068, 0x2069,
-                                              0xFEFF}
+    bad = set(range(0, 32)) - {9, 10, 13} | {
+        0x200B,
+        0x200C,
+        0x200D,
+        0x202A,
+        0x202B,
+        0x202C,
+        0x202D,
+        0x202E,
+        0x2066,
+        0x2067,
+        0x2068,
+        0x2069,
+        0xFEFF,
+    }
     cleaned = "".join(c for c in s if ord(c) not in bad)
     return cleaned.strip()[:max_len]
 
@@ -173,8 +186,15 @@ def format_beat_for_prompt(beat: dict[str, Any]) -> str:
         # Compact key facts (notional, realized_pnl, streak length…) the
         # model can quote without inventing.
         keys = (
-            "notional", "realized_pnl", "streak_length", "burst_ratio",
-            "winning_trades", "closed_trades", "side", "qty", "price",
+            "notional",
+            "realized_pnl",
+            "streak_length",
+            "burst_ratio",
+            "winning_trades",
+            "closed_trades",
+            "side",
+            "qty",
+            "price",
         )
         bits = [f"{k}={md[k]!r}" for k in keys if k in md]
         if bits:
@@ -247,7 +267,7 @@ def _extract_json_object(s: str) -> str:
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                return s[start:i + 1]
+                return s[start : i + 1]
     return s[start:]
 
 
@@ -364,11 +384,13 @@ async def _call_model(
         # write_script() invocation the retry will read from cache. The
         # 5-minute TTL means cross-session reuse only happens on rapid
         # re-runs (e.g. operator iterating on a failed script).
-        system=[{
-            "type": "text",
-            "text": SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }],
+        system=[
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=messages,
     )
     # Concatenate text content blocks (only ones we expect).
@@ -435,13 +457,13 @@ async def write_script(
     # of bottoming out in the SDK's "Could not resolve auth" trace.
     resolved_key = api_key or (settings.anthropic_api_key or None)
     if not resolved_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY not set. Add it to .env or pass api_key= explicitly."
-        )
+        raise RuntimeError("ANTHROPIC_API_KEY not set. Add it to .env or pass api_key= explicitly.")
 
     accumulated_usage = {
-        "input_tokens": 0, "output_tokens": 0,
-        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
     }
     title = "Today on TradeFarm"
     beats: list[BeatScript] = []
@@ -468,9 +490,7 @@ async def write_script(
             break
         except (ValueError, RuntimeError) as exc:
             if attempt >= max_retries:
-                err = RuntimeError(
-                    f"script writer failed after {attempt + 1} attempts: {exc}"
-                )
+                err = RuntimeError(f"script writer failed after {attempt + 1} attempts: {exc}")
                 # Carry usage through the failure so callers / cost
                 # tracking still see what they paid for.
                 err.usage = accumulated_usage  # type: ignore[attr-defined]

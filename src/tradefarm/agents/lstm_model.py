@@ -1,4 +1,5 @@
 """Tiny LSTM classifier: 3-class direction + 1 confidence head."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -80,6 +81,7 @@ def save(symbol: str, fitted: FittedModel) -> Path:
     caught at load time. Closes the CLAUDE.md gotcha #6 footgun.
     """
     from tradefarm.agents.features import FEATURE_NAMES
+
     MODELS_DIR.mkdir(exist_ok=True)
     path = model_path(symbol)
     torch.save(
@@ -108,6 +110,7 @@ def load(symbol: str) -> FittedModel | None:
     cfg = ModelConfig(**blob["cfg"])
 
     from tradefarm.agents.features import FEATURE_NAMES
+
     saved_names = blob.get("feature_names")
     if saved_names is None:
         # Pre-audit artifact — emit a one-liner so the operator sees it
@@ -115,9 +118,11 @@ def load(symbol: str) -> FittedModel | None:
         # caught the obvious case (cfg.n_features matches features.py),
         # but we can't detect a reorder/rename without the names.
         import structlog
+
         structlog.get_logger().warning(
             "lstm_model_load_legacy_no_feature_names",
-            symbol=symbol, n_features=cfg.n_features,
+            symbol=symbol,
+            n_features=cfg.n_features,
             note="re-train to embed feature names",
         )
     elif tuple(saved_names) != tuple(FEATURE_NAMES):
@@ -129,4 +134,6 @@ def load(symbol: str) -> FittedModel | None:
 
     model = LstmDirectionModel(cfg)
     model.load_state_dict(blob["state_dict"])
-    return FittedModel(model=model, feature_mean=blob["feature_mean"], feature_std=blob["feature_std"])
+    return FittedModel(
+        model=model, feature_mean=blob["feature_mean"], feature_std=blob["feature_std"]
+    )

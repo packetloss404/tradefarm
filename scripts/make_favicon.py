@@ -3,15 +3,16 @@
 Mirrors web/public/favicon.svg: 3x3 grid of dots on a rounded-square bg,
 diagonal (BL -> TR) lit emerald.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-BG = (9, 9, 11, 255)            # zinc-950
-DOT_OFF = (63, 63, 70, 255)     # zinc-700
-DOT_ON = (52, 211, 153, 255)    # emerald-400
+BG = (9, 9, 11, 255)  # zinc-950
+DOT_OFF = (63, 63, 70, 255)  # zinc-700
+DOT_ON = (52, 211, 153, 255)  # emerald-400
 
 OUT = Path(__file__).resolve().parent.parent / "web" / "public" / "favicon.ico"
 

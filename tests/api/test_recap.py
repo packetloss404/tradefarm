@@ -13,10 +13,11 @@ Cases:
 5. Promotions ordered + demotions filtered.
 6. Predictions snapshot is mapped cleanly (mock board).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -118,10 +119,26 @@ async def recap_db(monkeypatch):
 
     # Seed two agents.
     async with SessionLocal() as s:
-        s.add(Agent(id=1, name="agent-001", strategy="momentum_sma20",
-                    starting_capital=1000.0, cash=1000.0, status="waiting"))
-        s.add(Agent(id=2, name="agent-002", strategy="lstm_v1",
-                    starting_capital=1000.0, cash=1000.0, status="waiting"))
+        s.add(
+            Agent(
+                id=1,
+                name="agent-001",
+                strategy="momentum_sma20",
+                starting_capital=1000.0,
+                cash=1000.0,
+                status="waiting",
+            )
+        )
+        s.add(
+            Agent(
+                id=2,
+                name="agent-002",
+                strategy="lstm_v1",
+                starting_capital=1000.0,
+                cash=1000.0,
+                status="waiting",
+            )
+        )
         await s.commit()
 
     yield SessionLocal
@@ -168,8 +185,14 @@ async def test_empty_day_shape(recap_db):
     assert payload["predictions"] == []
     # Shape sanity — every contract key present.
     assert set(payload.keys()) == {
-        "date", "session_pnl_pct", "session_total_equity", "total_fills",
-        "biggest_fill", "top_winners", "biggest_loss", "promotions",
+        "date",
+        "session_pnl_pct",
+        "session_total_equity",
+        "total_fills",
+        "biggest_fill",
+        "top_winners",
+        "biggest_loss",
+        "promotions",
         "predictions",
     }
     # ISO YYYY-MM-DD.
@@ -189,17 +212,46 @@ async def test_biggest_fill_picks_largest_notional(recap_db):
     mid_naive = mid.replace(tzinfo=None)
     async with recap_db() as s:
         # Three fills of different notionals on the same day.
-        s.add(Trade(agent_id=1, symbol="AAPL", side="buy", qty=2.0,
-                    price=100.0, executed_at=mid_naive, reason="x"))
-        s.add(Trade(agent_id=2, symbol="NVDA", side="buy", qty=5.0,
-                    price=180.5, executed_at=mid_naive + timedelta(seconds=1), reason="x"))
-        s.add(Trade(agent_id=1, symbol="MSFT", side="sell", qty=1.0,
-                    price=300.0, executed_at=mid_naive + timedelta(seconds=2), reason="x"))
+        s.add(
+            Trade(
+                agent_id=1,
+                symbol="AAPL",
+                side="buy",
+                qty=2.0,
+                price=100.0,
+                executed_at=mid_naive,
+                reason="x",
+            )
+        )
+        s.add(
+            Trade(
+                agent_id=2,
+                symbol="NVDA",
+                side="buy",
+                qty=5.0,
+                price=180.5,
+                executed_at=mid_naive + timedelta(seconds=1),
+                reason="x",
+            )
+        )
+        s.add(
+            Trade(
+                agent_id=1,
+                symbol="MSFT",
+                side="sell",
+                qty=1.0,
+                price=300.0,
+                executed_at=mid_naive + timedelta(seconds=2),
+                reason="x",
+            )
+        )
         await s.commit()
 
     orch = _make_orch(board=_StubBoard([]))
     payload = await build_recap(
-        orch, session_factory=recap_db, bounds=(start_utc, end_utc),
+        orch,
+        session_factory=recap_db,
+        bounds=(start_utc, end_utc),
     )
 
     assert payload["total_fills"] == 3
@@ -227,13 +279,24 @@ async def test_biggest_fill_uses_orchestrator_for_name(recap_db):
 
     start_utc, end_utc, mid = _today_et_window()
     async with recap_db() as s:
-        s.add(Trade(agent_id=99, symbol="GHOST", side="buy", qty=1.0,
-                    price=1.0, executed_at=mid.replace(tzinfo=None), reason="x"))
+        s.add(
+            Trade(
+                agent_id=99,
+                symbol="GHOST",
+                side="buy",
+                qty=1.0,
+                price=1.0,
+                executed_at=mid.replace(tzinfo=None),
+                reason="x",
+            )
+        )
         await s.commit()
 
     orch = _make_orch(board=_StubBoard([]))  # agent 99 not in orch
     payload = await build_recap(
-        orch, session_factory=recap_db, bounds=(start_utc, end_utc),
+        orch,
+        session_factory=recap_db,
+        bounds=(start_utc, end_utc),
     )
     assert payload["biggest_fill"]["agent_id"] == 99
     assert payload["biggest_fill"]["agent_name"] is None
@@ -252,38 +315,74 @@ async def test_top_winners_sorted_and_biggest_loss(recap_db):
     mid_naive = mid.replace(tzinfo=None)
     async with recap_db() as s:
         # 4 closed outcomes today: pnls 50, 200, 10, -75.
-        s.add(AgentNote(
-            agent_id=1, kind="entry", symbol="AAPL", content="a",
-            note_metadata="", created_at=mid_naive,
-            outcome_realized_pnl=50.0, outcome_closed_at=mid_naive,
-        ))
-        s.add(AgentNote(
-            agent_id=2, kind="entry", symbol="NVDA", content="b",
-            note_metadata="", created_at=mid_naive,
-            outcome_realized_pnl=200.0, outcome_closed_at=mid_naive,
-        ))
-        s.add(AgentNote(
-            agent_id=1, kind="entry", symbol="MSFT", content="c",
-            note_metadata="", created_at=mid_naive,
-            outcome_realized_pnl=10.0, outcome_closed_at=mid_naive,
-        ))
-        s.add(AgentNote(
-            agent_id=2, kind="entry", symbol="TSLA", content="d",
-            note_metadata="", created_at=mid_naive,
-            outcome_realized_pnl=-75.0, outcome_closed_at=mid_naive,
-        ))
+        s.add(
+            AgentNote(
+                agent_id=1,
+                kind="entry",
+                symbol="AAPL",
+                content="a",
+                note_metadata="",
+                created_at=mid_naive,
+                outcome_realized_pnl=50.0,
+                outcome_closed_at=mid_naive,
+            )
+        )
+        s.add(
+            AgentNote(
+                agent_id=2,
+                kind="entry",
+                symbol="NVDA",
+                content="b",
+                note_metadata="",
+                created_at=mid_naive,
+                outcome_realized_pnl=200.0,
+                outcome_closed_at=mid_naive,
+            )
+        )
+        s.add(
+            AgentNote(
+                agent_id=1,
+                kind="entry",
+                symbol="MSFT",
+                content="c",
+                note_metadata="",
+                created_at=mid_naive,
+                outcome_realized_pnl=10.0,
+                outcome_closed_at=mid_naive,
+            )
+        )
+        s.add(
+            AgentNote(
+                agent_id=2,
+                kind="entry",
+                symbol="TSLA",
+                content="d",
+                note_metadata="",
+                created_at=mid_naive,
+                outcome_realized_pnl=-75.0,
+                outcome_closed_at=mid_naive,
+            )
+        )
         # An outcome from yesterday — should be excluded.
-        s.add(AgentNote(
-            agent_id=1, kind="entry", symbol="OLD", content="old",
-            note_metadata="", created_at=mid_naive - timedelta(days=2),
-            outcome_realized_pnl=9999.0,
-            outcome_closed_at=mid_naive - timedelta(days=2),
-        ))
+        s.add(
+            AgentNote(
+                agent_id=1,
+                kind="entry",
+                symbol="OLD",
+                content="old",
+                note_metadata="",
+                created_at=mid_naive - timedelta(days=2),
+                outcome_realized_pnl=9999.0,
+                outcome_closed_at=mid_naive - timedelta(days=2),
+            )
+        )
         await s.commit()
 
     orch = _make_orch(board=_StubBoard([]))
     payload = await build_recap(
-        orch, session_factory=recap_db, bounds=(start_utc, end_utc),
+        orch,
+        session_factory=recap_db,
+        bounds=(start_utc, end_utc),
     )
 
     winners = payload["top_winners"]
@@ -313,21 +412,37 @@ async def test_biggest_loss_null_when_all_profitable(recap_db):
     start_utc, end_utc, mid = _today_et_window()
     mid_naive = mid.replace(tzinfo=None)
     async with recap_db() as s:
-        s.add(AgentNote(
-            agent_id=1, kind="entry", symbol="AAPL", content="a",
-            note_metadata="", created_at=mid_naive,
-            outcome_realized_pnl=5.0, outcome_closed_at=mid_naive,
-        ))
-        s.add(AgentNote(
-            agent_id=2, kind="entry", symbol="NVDA", content="b",
-            note_metadata="", created_at=mid_naive,
-            outcome_realized_pnl=1.0, outcome_closed_at=mid_naive,
-        ))
+        s.add(
+            AgentNote(
+                agent_id=1,
+                kind="entry",
+                symbol="AAPL",
+                content="a",
+                note_metadata="",
+                created_at=mid_naive,
+                outcome_realized_pnl=5.0,
+                outcome_closed_at=mid_naive,
+            )
+        )
+        s.add(
+            AgentNote(
+                agent_id=2,
+                kind="entry",
+                symbol="NVDA",
+                content="b",
+                note_metadata="",
+                created_at=mid_naive,
+                outcome_realized_pnl=1.0,
+                outcome_closed_at=mid_naive,
+            )
+        )
         await s.commit()
 
     orch = _make_orch(board=_StubBoard([]))
     payload = await build_recap(
-        orch, session_factory=recap_db, bounds=(start_utc, end_utc),
+        orch,
+        session_factory=recap_db,
+        bounds=(start_utc, end_utc),
     )
     assert payload["biggest_loss"] is None
     assert len(payload["top_winners"]) == 2
@@ -347,25 +462,45 @@ async def test_promotions_today_filters_demotions_and_orders_newest(recap_db):
     earlier_naive = mid_naive - timedelta(minutes=30)
     async with recap_db() as s:
         # Promotion (intern → junior), earlier today.
-        s.add(AcademyPromotion(
-            agent_id=1, from_rank="intern", to_rank="junior",
-            reason="t1", stats_snapshot="{}", at=earlier_naive,
-        ))
+        s.add(
+            AcademyPromotion(
+                agent_id=1,
+                from_rank="intern",
+                to_rank="junior",
+                reason="t1",
+                stats_snapshot="{}",
+                at=earlier_naive,
+            )
+        )
         # Promotion (junior → senior), later today.
-        s.add(AcademyPromotion(
-            agent_id=2, from_rank="junior", to_rank="senior",
-            reason="t2", stats_snapshot="{}", at=mid_naive,
-        ))
+        s.add(
+            AcademyPromotion(
+                agent_id=2,
+                from_rank="junior",
+                to_rank="senior",
+                reason="t2",
+                stats_snapshot="{}",
+                at=mid_naive,
+            )
+        )
         # Demotion (should be filtered).
-        s.add(AcademyPromotion(
-            agent_id=1, from_rank="senior", to_rank="junior",
-            reason="d", stats_snapshot="{}", at=mid_naive - timedelta(minutes=10),
-        ))
+        s.add(
+            AcademyPromotion(
+                agent_id=1,
+                from_rank="senior",
+                to_rank="junior",
+                reason="d",
+                stats_snapshot="{}",
+                at=mid_naive - timedelta(minutes=10),
+            )
+        )
         await s.commit()
 
     orch = _make_orch(board=_StubBoard([]))
     payload = await build_recap(
-        orch, session_factory=recap_db, bounds=(start_utc, end_utc),
+        orch,
+        session_factory=recap_db,
+        bounds=(start_utc, end_utc),
     )
     promos = payload["promotions"]
     assert len(promos) == 2
@@ -389,28 +524,30 @@ async def test_promotions_today_filters_demotions_and_orders_newest(recap_db):
 async def test_predictions_mapped_from_board_snapshot(recap_db):
     from tradefarm.api.recap import build_recap
 
-    board = _StubBoard([
-        {
-            "id": "pick-winner",
-            "question": "Pick today's winner agent",
-            "options": ["agent-001", "agent-002"],
-            "status": "revealed",
-            "tally": {"agent-001": 12, "agent-002": 8},
-            "locks_at": "2026-05-14T13:30:00+00:00",
-            "reveals_at": "2026-05-14T20:00:00+00:00",
-            "winning_option": "agent-001",
-        },
-        {
-            "id": "spy-direction",
-            "question": "Will SPY close green?",
-            "options": ["up", "down"],
-            "status": "locked",
-            "tally": {"up": 5, "down": 3},
-            "locks_at": "",
-            "reveals_at": "",
-            "winning_option": None,
-        },
-    ])
+    board = _StubBoard(
+        [
+            {
+                "id": "pick-winner",
+                "question": "Pick today's winner agent",
+                "options": ["agent-001", "agent-002"],
+                "status": "revealed",
+                "tally": {"agent-001": 12, "agent-002": 8},
+                "locks_at": "2026-05-14T13:30:00+00:00",
+                "reveals_at": "2026-05-14T20:00:00+00:00",
+                "winning_option": "agent-001",
+            },
+            {
+                "id": "spy-direction",
+                "question": "Will SPY close green?",
+                "options": ["up", "down"],
+                "status": "locked",
+                "tally": {"up": 5, "down": 3},
+                "locks_at": "",
+                "reveals_at": "",
+                "winning_option": None,
+            },
+        ]
+    )
     orch = _make_orch(board=board)
     payload = await build_recap(orch, session_factory=recap_db)
 

@@ -1,33 +1,34 @@
 """Audit fixes for bar_cache: today-bar staleness + parquet concurrency."""
+
 from __future__ import annotations
 
 import threading
 from datetime import date, timedelta
-from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from tradefarm.data import bar_cache
 
 
 def _df(dates: list[date]) -> pd.DataFrame:
-    return pd.DataFrame({
-        "date": dates,
-        "open": [1.0] * len(dates),
-        "high": [1.0] * len(dates),
-        "low": [1.0] * len(dates),
-        "close": [1.0] * len(dates),
-        "adjusted_close": [1.0] * len(dates),
-        "volume": [100] * len(dates),
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": [1.0] * len(dates),
+            "high": [1.0] * len(dates),
+            "low": [1.0] * len(dates),
+            "close": [1.0] * len(dates),
+            "adjusted_close": [1.0] * len(dates),
+            "volume": [100] * len(dates),
+        }
+    )
 
 
 def test_covers_returns_false_when_end_is_today(monkeypatch):
     """Refuse to serve today's row from cache — the EOD bar is still
     provisional and can revise until end-of-session."""
     fixed = date(2026, 5, 22)
-    monkeypatch.setattr(bar_cache, "today_utc", lambda: fixed)
+    monkeypatch.setattr(bar_cache, "_wall_today_utc", lambda: fixed)
     df = _df([date(2026, 5, 20), date(2026, 5, 21), fixed])
     assert bar_cache.covers(df, date(2026, 5, 20), fixed) is False
     # End strictly before today is fine.
@@ -38,7 +39,7 @@ def test_merge_does_not_persist_today_bar(tmp_path, monkeypatch):
     """Today's row appears in the returned frame but is not on disk."""
     fixed = date(2026, 5, 22)
     monkeypatch.setattr(bar_cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(bar_cache, "today_utc", lambda: fixed)
+    monkeypatch.setattr(bar_cache, "_wall_today_utc", lambda: fixed)
     df = _df([date(2026, 5, 21), fixed])
     out = bar_cache.merge("AAA", df)
     # Both rows in return.
@@ -62,7 +63,7 @@ def test_concurrent_merges_dont_corrupt_parquet(tmp_path, monkeypatch):
     symbol lock."""
     fixed = date(2026, 5, 22)
     monkeypatch.setattr(bar_cache, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(bar_cache, "today_utc", lambda: fixed)
+    monkeypatch.setattr(bar_cache, "_wall_today_utc", lambda: fixed)
 
     def worker(start_offset: int):
         rows = [date(2026, 5, 1) + timedelta(days=start_offset + i) for i in range(10)]

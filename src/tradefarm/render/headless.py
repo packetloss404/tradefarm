@@ -38,6 +38,7 @@ endpoint's `?session_id=&at=` params.
 Stream server must be reachable at `--stream-base` (default
 http://localhost:5180/) — start it with `cd stream && npm run dev`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -92,8 +93,8 @@ class RenderJob:
     beat_id: str
     kind: str
     scene: str
-    at: str            # ISO timestamp
-    until: str         # ISO timestamp
+    at: str  # ISO timestamp
+    until: str  # ISO timestamp
     duration_sec: float
     url: str
     out_path: Path
@@ -183,7 +184,9 @@ def plan_jobs(
         if not beat_id:
             continue  # malformed entry — quietly drop rather than crash the run
         kind = str(b.get("kind") or "")
-        scene = overrides.get(kind) or str(b.get("scene_hint") or DEFAULT_SCENE_BY_KIND.get(kind, "hero"))
+        scene = overrides.get(kind) or str(
+            b.get("scene_hint") or DEFAULT_SCENE_BY_KIND.get(kind, "hero")
+        )
         if kind in skips or scene not in allowed:
             skipped.append(beat_id)
             continue
@@ -272,9 +275,10 @@ async def _render_one(
     # hide a React crash. Attached before navigation.
     page_errors: list[str] = []
     page.on("pageerror", lambda e: page_errors.append(f"pageerror: {e}"))
-    page.on("requestfailed", lambda req: page_errors.append(
-        f"requestfailed: {req.method} {req.url} ({req.failure})"
-    ))
+    page.on(
+        "requestfailed",
+        lambda req: page_errors.append(f"requestfailed: {req.method} {req.url} ({req.failure})"),
+    )
 
     video = page.video  # handle is valid pre-close; .path() is post-close only
 
@@ -549,7 +553,7 @@ def main(argv: list[str] | None = None) -> None:
         "--include-recap",
         action="store_true",
         help="Render recap beats too. Off by default — /api/recap/today "
-             "isn't replay-aware yet so the clip will mix live data.",
+        "isn't replay-aware yet so the clip will mix live data.",
     )
     parser.add_argument(
         "--viewport",

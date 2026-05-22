@@ -13,18 +13,29 @@ historical weeks many times.
 Old per-range cache files (``data_cache/eod_*.parquet``) coexist
 harmlessly with the new layout — they're simply never consulted.
 """
+
 from __future__ import annotations
 
 import os
 import threading
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
-from tradefarm.runtime.clock import today_utc
-
 CACHE_DIR = Path("data_cache")
+
+
+def _wall_today_utc() -> date:
+    """Wall-clock UTC date — used by the cache's "don't persist today's
+    provisional EOD bar" rule. Round-3 audit caught a regression here:
+    the previous code used the replay-aware `today_utc()`, which under
+    a replay session returned the replayed date — forcing a re-fetch
+    every iteration over the replayed day's bar and ensuring it never
+    persisted. Replay dates are HISTORICAL (settled, safe to cache);
+    only the live wall-clock today's bar is provisional."""
+    return datetime.now(timezone.utc).date()
+
 
 # Per-symbol locks so two coroutines / threads fetching the same symbol
 # don't trample each other's parquet write. Created on demand.
@@ -62,7 +73,7 @@ def covers(df: pd.DataFrame | None, start: date, end: date) -> bool:
     """
     if df is None or df.empty:
         return False
-    if end >= today_utc():
+    if end >= _wall_today_utc():
         return False
     return df["date"].min() <= start and df["date"].max() >= end
 
@@ -104,7 +115,7 @@ def merge(symbol: str, new_df: pd.DataFrame) -> pd.DataFrame:
     # Filter out today's bar from anything written to disk. Callers that
     # need today's value can still see it in the returned frame (we add
     # it back before returning) but it never persists.
-    today = today_utc()
+    today = _wall_today_utc()
     if "date" in new_df.columns:
         persistable = new_df[new_df["date"] < today]
         provisional = new_df[new_df["date"] >= today]

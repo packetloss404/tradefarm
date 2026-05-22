@@ -5,6 +5,7 @@ matches the subset of the API the poller uses (``post`` + ``get``).
 ``publish_event`` is patched to a list-appender so we can inspect each
 emitted payload.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -92,9 +93,7 @@ class _FakeClient:
         headers: dict[str, str] | None = None,
         **_: Any,
     ) -> _FakeResponse:
-        self.calls.append(
-            _Call(method="GET", url=url, params=params, data=None, headers=headers)
-        )
+        self.calls.append(_Call(method="GET", url=url, params=params, data=None, headers=headers))
         return self._pop(url)
 
     def _pop(self, url: str) -> _FakeResponse:
@@ -187,11 +186,7 @@ async def test_401_triggers_refresh_and_retries(monkeypatch):
         yt.LIVE_BROADCASTS_URL,
         _FakeResponse(
             status_code=200,
-            _payload={
-                "items": [
-                    {"snippet": {"liveChatId": "chat-xyz"}}
-                ]
-            },
+            _payload={"items": [{"snippet": {"liveChatId": "chat-xyz"}}]},
         ),
     )
     # First liveChatMessages call — seeds the cursor (no publishes).

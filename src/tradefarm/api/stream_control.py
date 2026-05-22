@@ -9,6 +9,7 @@ Why route control commands through the same bus rather than a separate
 channel: the stream app already maintains a single WS subscription for live
 data, so re-using it keeps the broadcast wire to one socket per viewer.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -23,20 +24,22 @@ log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/stream", tags=["stream"])
 
-ALLOWED_TYPES: frozenset[str] = frozenset({
-    "stream_scene",
-    "stream_banner",
-    "stream_audio",
-    "stream_preroll",
-    "stream_rotation",
-    "stream_layout",
-    "stream_crt",
-    "stream_cadence",
-    "stream_fullscreen",
-    "stream_macro_fired",
-    "stream_state",
-    "stream_commentary",
-})
+ALLOWED_TYPES: frozenset[str] = frozenset(
+    {
+        "stream_scene",
+        "stream_banner",
+        "stream_audio",
+        "stream_preroll",
+        "stream_rotation",
+        "stream_layout",
+        "stream_crt",
+        "stream_cadence",
+        "stream_fullscreen",
+        "stream_macro_fired",
+        "stream_state",
+        "stream_commentary",
+    }
+)
 
 
 class StreamCmd(BaseModel):

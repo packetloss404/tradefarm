@@ -11,6 +11,7 @@ half-days, etc. We cache it at module load — calendar construction allocates
 non-trivially and the contents only change when the project upgrades the
 package.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
@@ -52,33 +53,53 @@ def _schedule_for(now_utc: datetime) -> pd.DataFrame:
 
 
 def _next_open_close(
-    schedule: pd.DataFrame, now_utc: datetime,
+    schedule: pd.DataFrame,
+    now_utc: datetime,
 ) -> tuple[datetime | None, datetime | None]:
     next_open: datetime | None = None
     next_close: datetime | None = None
     for _, row in schedule.iterrows():
         mo: datetime = row["market_open"].to_pydatetime()
         mc: datetime = row["market_close"].to_pydatetime()
-        if next_open is None and mo > now_utc:
+        # Use >= so the boundary moment (the close tick itself) still
+        # reports today's close, not tomorrow's. Without this, at exactly
+        # 16:00:00 ET the dashboard would briefly say "next close tomorrow"
+        # before the next-second tick re-evaluates.
+        if next_open is None and mo >= now_utc:
             next_open = mo
-        if next_close is None and mc > now_utc:
+        if next_close is None and mc >= now_utc:
             next_close = mc
         if next_open is not None and next_close is not None:
             break
     return next_open, next_close
 
 
-def _phase(now_et: datetime, schedule: pd.DataFrame) -> Phase:
+def _today_close_et(now_et: datetime, schedule: pd.DataFrame) -> time | None:
+    """Return the actual RTH close time-of-day for today's session, in ET.
+
+    On half-days (day-after-Thanksgiving, Christmas Eve, July 3 sometimes)
+    the NYSE schedule reports `market_close` at 13:00 ET. Without this,
+    `_phase` would call 13:00-16:00 "rth" and the broadcast UI would show
+    "MARKET OPEN" for three hours after trading actually halted.
+    """
     today = now_et.date()
-    is_trading_day = any(idx.date() == today for idx in schedule.index)
-    if not is_trading_day:
+    for idx, row in schedule.iterrows():
+        if idx.date() == today:
+            mc: datetime = row["market_close"].to_pydatetime()
+            return mc.astimezone(ET).time()
+    return None
+
+
+def _phase(now_et: datetime, schedule: pd.DataFrame) -> Phase:
+    today_close = _today_close_et(now_et, schedule)
+    if today_close is None:
         return "closed"
     t = now_et.time()
     if PREMARKET_START <= t < RTH_START:
         return "premarket"
-    if RTH_START <= t < RTH_END:
+    if RTH_START <= t < today_close:
         return "rth"
-    if RTH_END <= t < AFTERHOURS_END:
+    if today_close <= t < AFTERHOURS_END:
         return "afterhours"
     return "closed"
 

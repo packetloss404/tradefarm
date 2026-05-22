@@ -7,6 +7,7 @@ flag will read to rehydrate books at the start of a follow-up session.
 
 Skeleton — implementation lives in this file; see TODOs.
 """
+
 from __future__ import annotations
 
 import structlog

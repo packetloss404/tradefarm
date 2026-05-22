@@ -5,6 +5,7 @@ orchestrator events and the stream presentation surfaces. It emits one
 canonical ``broadcast_moment`` event, then fans out to legacy stream events
 that today's frontend already understands.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -241,12 +242,15 @@ async def publish_broadcast_moment(
         # the queue depth. Always publish the canonical moment too.
         for sm in scheduled:
             try:
-                await publish("broadcast_slot", {
-                    "moment_id": sm.moment.id,
-                    "kind": sm.moment.kind,
-                    "outputs": list(sm.moment.outputs),
-                    "state": getattr(sm, "state", "active"),
-                })
+                await publish(
+                    "broadcast_slot",
+                    {
+                        "moment_id": sm.moment.id,
+                        "kind": sm.moment.kind,
+                        "outputs": list(sm.moment.outputs),
+                        "state": getattr(sm, "state", "active"),
+                    },
+                )
             except Exception:
                 pass
 

@@ -5,6 +5,7 @@ Uses stub Orchestrator / agent objects and patches
 exercised without a real DB. ``publish_event`` is patched to a list-appender
 to inspect every macro fire.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -39,7 +40,9 @@ class _StubOrch:
     agents: list[_StubAgent] = field(default_factory=list)
 
 
-def _make_agent(agent_id: int = 1, name: str | None = None, symbol: str | None = "AAPL") -> _StubAgent:
+def _make_agent(
+    agent_id: int = 1, name: str | None = None, symbol: str | None = "AAPL"
+) -> _StubAgent:
     return _StubAgent(
         state=_StubState(id=agent_id, name=name or f"agent-{agent_id:03d}"),
         symbol=symbol,
@@ -87,8 +90,10 @@ def _journal_stub(rows_by_agent: dict[int, list[dict]]):
     """Build an AsyncMock for ``journal.recent_outcomes`` that returns the
     canned rows per agent id.
     """
+
     async def _impl(agent_id: int, n: int = 20) -> list[dict]:
         return list(rows_by_agent.get(agent_id, []))[:n]
+
     return AsyncMock(side_effect=_impl)
 
 
@@ -109,8 +114,10 @@ async def test_win_streak_fires_then_cooldown_suppresses():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub({1: rows})
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         fired_a = await watcher.check_once()
         fired_b = await watcher.check_once()
 
@@ -152,8 +159,10 @@ async def test_mixed_history_with_tail_wins_fires():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub({2: rows})
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         fired = await watcher.check_once()
 
     assert "streak-win3-2" in fired
@@ -173,8 +182,10 @@ async def test_broken_tail_does_not_fire():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub({3: rows})
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         fired = await watcher.check_once()
 
     assert "streak-win3-3" not in fired
@@ -201,8 +212,10 @@ async def test_five_loss_streak_fires():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub({4: rows})
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         fired = await watcher.check_once()
 
     assert "streak-loss5-4" in fired
@@ -225,16 +238,20 @@ async def test_bigwin_of_day_refires_on_new_leader():
         10: [_outcome(120.0, now - timedelta(minutes=5))],
         11: [_outcome(50.0, now - timedelta(minutes=10))],
     }
-    orch = _StubOrch(agents=[
-        _make_agent(agent_id=10, name="agent-010"),
-        _make_agent(agent_id=11, name="agent-011"),
-    ])
+    orch = _StubOrch(
+        agents=[
+            _make_agent(agent_id=10, name="agent-010"),
+            _make_agent(agent_id=11, name="agent-011"),
+        ]
+    )
     watcher = StreakWatcher(orch=orch)  # type: ignore[arg-type]
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub(initial_rows)
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         # First poll seeds the leader cache without firing (mid-day-restart
         # protection — stale leaders shouldn't auto-announce on boot).
         seed = await watcher.check_once()
@@ -270,8 +287,10 @@ async def test_bigwin_of_day_cooldown_suppresses_repeat_fire():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub(rows)
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         # First poll seeds. Push a bigger leader so the second poll fires once.
         await watcher.check_once()
         rows[10] = [_outcome(300.0, now - timedelta(minutes=4))]
@@ -301,8 +320,10 @@ async def test_back_in_action_after_quiet():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub({7: rows})
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         fired = await watcher.check_once()
 
     assert "streak-awake-7" in fired
@@ -324,8 +345,10 @@ async def test_back_in_action_skipped_when_not_quiet():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub({8: rows})
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         fired = await watcher.check_once()
 
     assert "streak-awake-8" not in fired
@@ -342,8 +365,10 @@ async def test_no_outcomes_no_fires():
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub({99: []})
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         fired = await watcher.check_once()
 
     assert fired == []
@@ -361,16 +386,20 @@ async def test_bigloss_of_day_fires_and_refires_on_worse_loss():
         20: [_outcome(-150.0, now - timedelta(minutes=5))],
         21: [_outcome(-30.0, now - timedelta(minutes=8))],
     }
-    orch = _StubOrch(agents=[
-        _make_agent(agent_id=20, name="agent-020"),
-        _make_agent(agent_id=21, name="agent-021"),
-    ])
+    orch = _StubOrch(
+        agents=[
+            _make_agent(agent_id=20, name="agent-020"),
+            _make_agent(agent_id=21, name="agent-021"),
+        ]
+    )
     watcher = StreakWatcher(orch=orch)  # type: ignore[arg-type]
 
     fake_publish = AsyncMock()
     journal_mock = _journal_stub(rows)
-    with patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish), \
-            patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock):
+    with (
+        patch("tradefarm.orchestrator.streak_watcher.publish_event", fake_publish),
+        patch("tradefarm.orchestrator.streak_watcher.journal.recent_outcomes", journal_mock),
+    ):
         # First poll seeds the leader cache; doesn't fire.
         seed = await watcher.check_once()
         rows[21] = [

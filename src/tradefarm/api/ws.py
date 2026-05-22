@@ -8,6 +8,7 @@ manifest and replays its events in the requested time window. The
 headless renderer leans on this — it loads stream/?replay=…&at=… with
 a high `speed`, captures N seconds, and closes the page.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -36,9 +37,7 @@ async def _maybe_read_replay_handshake(ws: WebSocket) -> dict | None:
     """Wait briefly for a replay frame. Anything else (including timeout
     or non-replay JSON) means the client wants live mode."""
     try:
-        frame = await asyncio.wait_for(
-            ws.receive_json(), timeout=REPLAY_HANDSHAKE_TIMEOUT_SEC
-        )
+        frame = await asyncio.wait_for(ws.receive_json(), timeout=REPLAY_HANDSHAKE_TIMEOUT_SEC)
     except (asyncio.TimeoutError, Exception):
         return None
     if isinstance(frame, dict) and frame.get("type") == "replay":
@@ -48,14 +47,17 @@ async def _maybe_read_replay_handshake(ws: WebSocket) -> dict | None:
 
 async def _stream_live(ws: WebSocket) -> None:
     async with bus.subscribe() as q:
+
         async def heartbeat() -> None:
             while True:
                 await asyncio.sleep(HEARTBEAT_SEC)
-                await ws.send_json({
-                    "type": "heartbeat",
-                    "ts": _now_iso(),
-                    "payload": {"qsize": q.qsize()},
-                })
+                await ws.send_json(
+                    {
+                        "type": "heartbeat",
+                        "ts": _now_iso(),
+                        "payload": {"qsize": q.qsize()},
+                    }
+                )
 
         hb_task = asyncio.create_task(heartbeat())
         try:
@@ -89,11 +91,13 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
 
     session_id = frame.get("session_id")
     if not isinstance(session_id, str) or not session_id:
-        await ws.send_json({
-            "type": "hello",
-            "ts": _now_iso(),
-            "payload": {"replay": True, "error": "missing session_id"},
-        })
+        await ws.send_json(
+            {
+                "type": "hello",
+                "ts": _now_iso(),
+                "payload": {"replay": True, "error": "missing session_id"},
+            }
+        )
         return
 
     # Path-traversal guard. A WS connection from anywhere CORS allows
@@ -103,21 +107,25 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
     try:
         replay_query._require_safe_session_id(session_id)
     except ValueError as exc:
-        await ws.send_json({
-            "type": "hello",
-            "ts": _now_iso(),
-            "payload": {"replay": True, "error": str(exc)},
-        })
+        await ws.send_json(
+            {
+                "type": "hello",
+                "ts": _now_iso(),
+                "payload": {"replay": True, "error": str(exc)},
+            }
+        )
         return
 
     try:
         manifest = replay_query.load_manifest(session_id)
     except FileNotFoundError:
-        await ws.send_json({
-            "type": "hello",
-            "ts": _now_iso(),
-            "payload": {"replay": True, "error": f"no manifest for {session_id}"},
-        })
+        await ws.send_json(
+            {
+                "type": "hello",
+                "ts": _now_iso(),
+                "payload": {"replay": True, "error": f"no manifest for {session_id}"},
+            }
+        )
         return
 
     raw_at = frame.get("at") or manifest.get("started_at")
@@ -126,11 +134,13 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
         at_dt = replay_query.parse_iso(raw_at)
         until_dt = replay_query.parse_iso(raw_until) if raw_until else None
     except (ValueError, TypeError):
-        await ws.send_json({
-            "type": "hello",
-            "ts": _now_iso(),
-            "payload": {"replay": True, "error": "invalid timestamps"},
-        })
+        await ws.send_json(
+            {
+                "type": "hello",
+                "ts": _now_iso(),
+                "payload": {"replay": True, "error": "invalid timestamps"},
+            }
+        )
         return
 
     try:
@@ -140,18 +150,20 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
 
     events = replay_query.events_in_window(manifest, at=at_dt, until=until_dt)
 
-    await ws.send_json({
-        "type": "hello",
-        "ts": _now_iso(),
-        "payload": {
-            "replay": True,
-            "session_id": session_id,
-            "at": at_dt.isoformat(),
-            "until": until_dt.isoformat() if until_dt is not None else None,
-            "speed": speed,
-            "event_count": len(events),
-        },
-    })
+    await ws.send_json(
+        {
+            "type": "hello",
+            "ts": _now_iso(),
+            "payload": {
+                "replay": True,
+                "session_id": session_id,
+                "at": at_dt.isoformat(),
+                "until": until_dt.isoformat() if until_dt is not None else None,
+                "speed": speed,
+                "event_count": len(events),
+            },
+        }
+    )
 
     prev_t: datetime | None = None
     for ev in events:
@@ -175,11 +187,13 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
 
     # Signal end-of-replay so the renderer can stop capturing.
     try:
-        await ws.send_json({
-            "type": "hello",
-            "ts": _now_iso(),
-            "payload": {"replay": True, "done": True},
-        })
+        await ws.send_json(
+            {
+                "type": "hello",
+                "ts": _now_iso(),
+                "payload": {"replay": True, "done": True},
+            }
+        )
     except (WebSocketDisconnect, RuntimeError):
         return
 

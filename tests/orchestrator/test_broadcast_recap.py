@@ -26,12 +26,14 @@ def _moment(
 def test_recent_moments_are_newest_first_and_bounded():
     ledger = BroadcastRecapLedger(max_moments=3)
 
-    ledger.extend([
-        _moment("m1"),
-        _moment("m2"),
-        _moment("m3"),
-        _moment("m4"),
-    ])
+    ledger.extend(
+        [
+            _moment("m1"),
+            _moment("m2"),
+            _moment("m3"),
+            _moment("m4"),
+        ]
+    )
 
     assert len(ledger) == 3
     assert [moment.id for moment in ledger.recent_moments()] == ["m4", "m3", "m2"]
@@ -40,12 +42,14 @@ def test_recent_moments_are_newest_first_and_bounded():
 
 def test_top_moments_sort_by_priority_then_recency():
     ledger = BroadcastRecapLedger(max_moments=10)
-    ledger.extend([
-        _moment("low", priority=10),
-        _moment("tie-old", priority=90),
-        _moment("best", priority=95),
-        _moment("tie-new", priority=90),
-    ])
+    ledger.extend(
+        [
+            _moment("low", priority=10),
+            _moment("tie-old", priority=90),
+            _moment("best", priority=95),
+            _moment("tie-new", priority=90),
+        ]
+    )
 
     assert [moment.id for moment in ledger.top_moments(limit=3)] == [
         "best",
@@ -56,12 +60,14 @@ def test_top_moments_sort_by_priority_then_recency():
 
 def test_queries_filter_by_kind_and_output():
     ledger = BroadcastRecapLedger(max_moments=10)
-    ledger.extend([
-        _moment("activity-ticker", kind="activity", outputs=("ticker", "recap_log")),
-        _moment("market-audio", kind="market_move", outputs=("audio",)),
-        _moment("market-lower", kind="market_move", outputs=("lower_third", "recap_log")),
-        _moment("rank-lower", kind="rank_change", outputs=("lower_third",)),
-    ])
+    ledger.extend(
+        [
+            _moment("activity-ticker", kind="activity", outputs=("ticker", "recap_log")),
+            _moment("market-audio", kind="market_move", outputs=("audio",)),
+            _moment("market-lower", kind="market_move", outputs=("lower_third", "recap_log")),
+            _moment("rank-lower", kind="rank_change", outputs=("lower_third",)),
+        ]
+    )
 
     assert [moment.id for moment in ledger.recent_moments(kind="market_move")] == [
         "market-lower",
@@ -79,23 +85,27 @@ def test_queries_filter_by_kind_and_output():
 
 def test_payloads_are_plain_dicts_for_api_work():
     ledger = BroadcastRecapLedger(max_moments=5)
-    ledger.extend([
-        _moment("low", priority=20, outputs=("ticker",)),
-        _moment("high", priority=80, kind="rank_change", outputs=("ticker", "recap_log")),
-    ])
+    ledger.extend(
+        [
+            _moment("low", priority=20, outputs=("ticker",)),
+            _moment("high", priority=80, kind="rank_change", outputs=("ticker", "recap_log")),
+        ]
+    )
 
     recent = ledger.recent_payloads(limit=1)
-    assert recent == [{
-        "id": "high",
-        "kind": "rank_change",
-        "title": "Moment high",
-        "priority": 80,
-        "color": "neutral",
-        "outputs": ["ticker", "recap_log"],
-        "ttl_sec": 8,
-        "created_at": recent[0]["created_at"],
-        "metadata": {"source": "test"},
-    }]
+    assert recent == [
+        {
+            "id": "high",
+            "kind": "rank_change",
+            "title": "Moment high",
+            "priority": 80,
+            "color": "neutral",
+            "outputs": ["ticker", "recap_log"],
+            "ttl_sec": 8,
+            "created_at": recent[0]["created_at"],
+            "metadata": {"source": "test"},
+        }
+    ]
     assert isinstance(recent[0], dict)
     assert isinstance(recent[0]["outputs"], list)
 

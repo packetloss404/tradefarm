@@ -16,6 +16,7 @@ Lifecycle keyed off the ET wall clock:
 State is in-memory only. One vote per voter (per prediction) — late votes
 update the option silently.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -38,9 +39,9 @@ PredictionId = Literal["pick-winner", "spy-direction"]
 PredictionStatus = Literal["open", "locked", "revealed"]
 
 # ET boundary times.
-LOCK_TIME = time(9, 30)   # 9:30 AM ET → market open
+LOCK_TIME = time(9, 30)  # 9:30 AM ET → market open
 REVEAL_TIME = time(16, 0)  # 4:00 PM ET → market close
-RESET_TIME = time(17, 0)   # 5:00 PM ET → next-session reset
+RESET_TIME = time(17, 0)  # 5:00 PM ET → next-session reset
 
 POLL_INTERVAL_SEC: float = 30.0
 PUBLISH_DEBOUNCE_SEC: float = 1.0
@@ -193,7 +194,10 @@ class PredictionsBoard:
     # ------------------------------------------------------------------
 
     async def record_vote(
-        self, prediction_id: str, voter: str, option: str,
+        self,
+        prediction_id: str,
+        voter: str,
+        option: str,
     ) -> bool:
         """Record one vote. Returns True if accepted, False if rejected.
 

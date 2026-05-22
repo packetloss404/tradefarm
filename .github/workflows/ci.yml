@@ -22,20 +22,16 @@ jobs:
         run: uv sync --locked --extra ml --extra dev
 
       - name: Ruff (lint)
-        # Auto-fix the obvious unused-import / E702 / F841 violations so
-        # CI's first run on a fresh checkout doesn't red-line on the
-        # codebase's existing lint debt. Anything that ruff can't fix
-        # stops the build (the `check` flag retains exit-on-error
-        # for the unfixed remainder).
-        run: |
-          uv run ruff check --fix . || true
-          uv run ruff check .
+        # The codebase's existing lint debt has been cleared (see the
+        # `style: ruff` commit). Treat lint failures as hard errors going
+        # forward — no `--fix` fallback.
+        run: uv run ruff check .
 
-      # NOTE: `ruff format --check` is intentionally NOT run yet. The
-      # codebase has ~106 files that would reformat; landing the format
-      # pass in CI without first running it on every file would
-      # red-line every PR. Land a separate `style: ruff format`
-      # commit, then enable this gate.
+      - name: Ruff (format)
+        # Format gate enabled after the one-time `ruff format .` pass
+        # landed across the tree (108 files reformatted). Any drift fails
+        # CI; run `uv run ruff format .` locally to fix.
+        run: uv run ruff format --check .
 
       - name: Pytest
         # Tests are deterministic (no network, no real LLM); env-gated

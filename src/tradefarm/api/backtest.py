@@ -5,6 +5,7 @@ GET  /backtest/{id}    → progress + accumulated results
 
 Jobs live in memory only; a restart clears them. Fine for a local tool.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -68,15 +69,15 @@ async def run(req: RunRequest) -> dict[str, Any]:
     if _inflight_count() >= _MAX_INFLIGHT_JOBS:
         raise HTTPException(
             429,
-            f"too many inflight backtests (cap {_MAX_INFLIGHT_JOBS}); "
-            "wait for one to finish",
+            f"too many inflight backtests (cap {_MAX_INFLIGHT_JOBS}); wait for one to finish",
         )
     symbols = [s.strip().upper() for s in (req.symbols or default_universe()) if s.strip()]
     if not symbols:
         raise HTTPException(400, "no symbols to backtest")
     if len(symbols) > _MAX_SYMBOLS_PER_REQUEST:
         raise HTTPException(
-            400, f"too many symbols: {len(symbols)} > {_MAX_SYMBOLS_PER_REQUEST}",
+            400,
+            f"too many symbols: {len(symbols)} > {_MAX_SYMBOLS_PER_REQUEST}",
         )
     job_id = uuid4().hex[:12]
     _JOBS[job_id] = {

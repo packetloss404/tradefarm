@@ -1,8 +1,9 @@
 """Train per-symbol LSTM direction models. CLI entry:
 
-    uv run python -m tradefarm.agents.lstm_train --symbol SPY
-    uv run python -m tradefarm.agents.lstm_train --universe       # train all default-universe symbols
+uv run python -m tradefarm.agents.lstm_train --symbol SPY
+uv run python -m tradefarm.agents.lstm_train --universe       # train all default-universe symbols
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,7 +43,10 @@ async def fetch_history(symbol: str) -> np.ndarray | None:
 
 
 def _make_loaders(
-    X: np.ndarray, y: np.ndarray, *, split: int | None = None,
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    split: int | None = None,
 ) -> tuple[DataLoader, DataLoader, np.ndarray, np.ndarray]:
     if split is None:
         split = int(len(X) * 0.8)
@@ -57,11 +61,13 @@ def _make_loaders(
 
     tr = DataLoader(
         TensorDataset(torch.from_numpy(std(X_tr).astype(np.float32)), torch.from_numpy(y_tr)),
-        batch_size=BATCH, shuffle=True,
+        batch_size=BATCH,
+        shuffle=True,
     )
     va = DataLoader(
         TensorDataset(torch.from_numpy(std(X_va).astype(np.float32)), torch.from_numpy(y_va)),
-        batch_size=BATCH, shuffle=False,
+        batch_size=BATCH,
+        shuffle=False,
     )
     return tr, va, feature_mean.astype(np.float32), feature_std.astype(np.float32)
 
@@ -103,12 +109,11 @@ async def train_one(symbol: str) -> bool:
         log.warning("not_enough_train_bars", symbol=symbol, n=train_end)
         return False
     X_tr_flat, y_tr_flat = X_flat[:train_end], y_flat[:train_end]
-    X_va_flat, y_va_flat = X_flat[train_end + SEQ_LEN:], y_flat[train_end + SEQ_LEN:]
+    X_va_flat, y_va_flat = X_flat[train_end + SEQ_LEN :], y_flat[train_end + SEQ_LEN :]
     X_tr, y_tr_w = make_windows(X_tr_flat, y_tr_flat, seq_len=SEQ_LEN)
     X_va, y_va_w = make_windows(X_va_flat, y_va_flat, seq_len=SEQ_LEN)
     if len(X_tr) < 100 or len(X_va) < 20:
-        log.warning("not_enough_windows", symbol=symbol,
-                    tr=len(X_tr), va=len(X_va))
+        log.warning("not_enough_windows", symbol=symbol, tr=len(X_tr), va=len(X_va))
         return False
 
     # Concatenate into the legacy layout the loader expects, then split
@@ -129,7 +134,9 @@ async def train_one(symbol: str) -> bool:
     log.info(
         "class_distribution",
         symbol=symbol,
-        down=int(counts[0]), flat=int(counts[1]), up=int(counts[2]),
+        down=int(counts[0]),
+        flat=int(counts[1]),
+        up=int(counts[2]),
         pct_down=round(counts[0] / total, 3),
         pct_flat=round(counts[1] / total, 3),
         pct_up=round(counts[2] / total, 3),
@@ -173,7 +180,14 @@ async def train_one(symbol: str) -> bool:
         va_loss /= len(va_loader.dataset)
         va_acc = correct / total
 
-        log.info("epoch", symbol=symbol, e=epoch, tr=round(tr_loss, 4), va=round(va_loss, 4), va_acc=round(va_acc, 3))
+        log.info(
+            "epoch",
+            symbol=symbol,
+            e=epoch,
+            tr=round(tr_loss, 4),
+            va=round(va_loss, 4),
+            va_acc=round(va_acc, 3),
+        )
         if va_loss < best_va - 1e-4:
             best_va = va_loss
             bad = 0

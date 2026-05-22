@@ -15,11 +15,15 @@ import { fmtMoney } from "../vod/widgets";
 // Recognise the backend's masked-secret sentinel so we never POST it
 // back as a literal value (which would persist the dots into .env and
 // destroy the real key). The masked form looks like "••••GH8X".
-const MASKED_SENTINEL = "•";
+// The backend masks secrets as 4+ bullets followed by the last chars
+// (e.g. "••••GH8X"). Round-3 audit caught a false-positive: a single
+// bullet anywhere in a paste (e.g. "Project • Beta") triggered the
+// guard and silently dropped the write. Match the actual mask format
+// (≥2 consecutive bullets) instead.
+const MASKED_PATTERN = /•{2,}/;
 
-// Bullet sentinel that survives transport without unicode shenanigans.
 function looksMasked(v: unknown): boolean {
-  return typeof v === "string" && v.includes(MASKED_SENTINEL);
+  return typeof v === "string" && MASKED_PATTERN.test(v);
 }
 
 const PATCH_DEBOUNCE_MS = 600;
@@ -812,16 +816,40 @@ export function AdminPage() {
                 <Input
                   value={config.llm_model}
                   onChange={(v) => update("llm_model", v)}
-                  placeholder="claude-haiku-4-5"
+                  placeholder={
+                    config.llm_provider === "minimax"
+                      ? "M2.7-highspeed"
+                      : "claude-haiku-4-5"
+                  }
                 />
               </Field>
-              <Field label="API key" hint="masked · stored in .env · /admin/config POST">
-                <Input
-                  value={config.anthropic_api_key}
-                  onChange={(v) => update("anthropic_api_key", v)}
-                  mono
-                />
-              </Field>
+              {/* Audit fix (round-3 W): condition the API-key field on
+                  the selected provider so MiniMax users get the right
+                  key editor instead of the silently-broken Anthropic
+                  field. Mirrors the legacy AdminModal pattern. */}
+              {config.llm_provider === "minimax" ? (
+                <Field
+                  label="MiniMax API key"
+                  hint="masked · stored in .env · /admin/config POST"
+                >
+                  <Input
+                    value={config.minimax_api_key}
+                    onChange={(v) => update("minimax_api_key", v)}
+                    mono
+                  />
+                </Field>
+              ) : (
+                <Field
+                  label="Anthropic API key"
+                  hint="masked · stored in .env · /admin/config POST"
+                >
+                  <Input
+                    value={config.anthropic_api_key}
+                    onChange={(v) => update("anthropic_api_key", v)}
+                    mono
+                  />
+                </Field>
+              )}
             </div>
             <Field
               label="LSTM confidence gate"

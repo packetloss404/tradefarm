@@ -3,6 +3,7 @@
 Same shape as test_beats.py: build a synthetic manifest inline, fold
 it, assert the per-agent state and aggregate payloads come out right.
 """
+
 from __future__ import annotations
 
 import json
@@ -76,7 +77,9 @@ def _decision(
     }
 
 
-def _manifest(events: list[dict[str, Any]], *, started: datetime | None = None, ended: datetime | None = None) -> dict[str, Any]:
+def _manifest(
+    events: list[dict[str, Any]], *, started: datetime | None = None, ended: datetime | None = None
+) -> dict[str, Any]:
     started = started or OPEN
     ended = ended or CLOSE
     return {
@@ -96,7 +99,9 @@ def _manifest(events: list[dict[str, Any]], *, started: datetime | None = None, 
 
 
 def test_fold_to_buy_only_holds_position():
-    snaps, marks = fold_to(_manifest([_fill(agent_id=1, qty=10, price=100, side="buy")]), OPEN + timedelta(minutes=1))
+    snaps, marks = fold_to(
+        _manifest([_fill(agent_id=1, qty=10, price=100, side="buy")]), OPEN + timedelta(minutes=1)
+    )
     assert 1 in snaps
     snap = snaps[1]
     assert snap.cash == pytest.approx(0.0)  # 1000 starting - 10*100 spent
@@ -148,8 +153,20 @@ def test_fold_to_respects_at_cutoff():
 
 def test_fold_to_captures_last_decision():
     events = [
-        _decision(agent_id=2, kind="entry", symbol="MSFT", content="early read", t=OPEN + timedelta(minutes=1)),
-        _decision(agent_id=2, kind="entry", symbol="NVDA", content="updated read", t=OPEN + timedelta(minutes=5)),
+        _decision(
+            agent_id=2,
+            kind="entry",
+            symbol="MSFT",
+            content="early read",
+            t=OPEN + timedelta(minutes=1),
+        ),
+        _decision(
+            agent_id=2,
+            kind="entry",
+            symbol="NVDA",
+            content="updated read",
+            t=OPEN + timedelta(minutes=5),
+        ),
     ]
     snaps, _ = fold_to(_manifest(events), OPEN + timedelta(minutes=10))
     assert snaps[2].last_decision is not None
@@ -163,7 +180,9 @@ def test_fold_to_captures_last_decision():
 def test_agent_payload_includes_static_meta():
     snap = AgentSnapshot(agent_id=7, name="ian_walmsley", cash=950.0, realized_pnl=-50.0)
     payload = agent_payload(
-        snap, marks={}, static_meta={"strategy": "lstm_v1", "rank": "senior", "symbol": "NVDA"},
+        snap,
+        marks={},
+        static_meta={"strategy": "lstm_v1", "rank": "senior", "symbol": "NVDA"},
     )
     assert payload["id"] == 7
     assert payload["strategy"] == "lstm_v1"
@@ -202,7 +221,9 @@ def test_account_payload_aggregates_correctly():
     ]
     snaps, marks = fold_to(_manifest(events), OPEN + timedelta(minutes=10))
     # Agent 2 still holds an open position; agent 1 is flat.
-    payload = account_payload(snaps, marks, silent_agent_count=98, last_tick_at="2026-05-19T20:00:00Z")
+    payload = account_payload(
+        snaps, marks, silent_agent_count=98, last_tick_at="2026-05-19T20:00:00Z"
+    )
     assert payload["last_tick_at"] == "2026-05-19T20:00:00Z"
     # 98 silent + 1 flat (agent 1, waiting) + 1 holder (agent 2, status depends on unrealized)
     assert payload["waiting_ai"] + payload["profit_ai"] + payload["loss_ai"] == 100
@@ -222,7 +243,9 @@ def test_trades_for_agent_filters_and_orders_newest_first():
         _fill(agent_id=1, t=OPEN + timedelta(minutes=3), qty=2, price=110),
         _fill(agent_id=1, t=OPEN + timedelta(minutes=20), qty=3, price=120),  # after cutoff
     ]
-    rows = trades_for_agent(_manifest(events), agent_id=1, at=OPEN + timedelta(minutes=10), limit=10)
+    rows = trades_for_agent(
+        _manifest(events), agent_id=1, at=OPEN + timedelta(minutes=10), limit=10
+    )
     assert len(rows) == 2
     # newest first
     assert rows[0]["executed_at"] > rows[1]["executed_at"]
@@ -235,7 +258,9 @@ def test_trades_for_agent_handles_agent_id_zero():
         _fill(agent_id=0, t=OPEN + timedelta(minutes=1), qty=1, price=100),
         _fill(agent_id=0, t=OPEN + timedelta(minutes=2), qty=1, price=105),
     ]
-    rows = trades_for_agent(_manifest(events), agent_id=0, at=OPEN + timedelta(minutes=10), limit=10)
+    rows = trades_for_agent(
+        _manifest(events), agent_id=0, at=OPEN + timedelta(minutes=10), limit=10
+    )
     assert len(rows) == 2
 
 
@@ -256,7 +281,9 @@ def test_events_in_window_slices_inclusive():
 
 
 def test_manifest_event_to_ws_envelope_translates_kinds():
-    fill_ev = _fill(agent_id=5, symbol="MSFT", side="sell", qty=2, price=400, t=OPEN + timedelta(minutes=1))
+    fill_ev = _fill(
+        agent_id=5, symbol="MSFT", side="sell", qty=2, price=400, t=OPEN + timedelta(minutes=1)
+    )
     envelope = manifest_event_to_ws_envelope(fill_ev)
     assert envelope is not None
     assert envelope["type"] == "fill"

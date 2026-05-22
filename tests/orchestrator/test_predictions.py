@@ -1,4 +1,5 @@
 """PredictionsBoard — voting, lifecycle, winner resolution, dedup."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -51,8 +52,7 @@ def _make_orch(
 ) -> _StubOrch:
     pnls = pnls or [(1, "agent-001", 0.0), (2, "agent-002", 0.0)]
     agents = [
-        _StubAgent(state=_StubState(id=i, name=n, book=_StubBook(realized=p)))
-        for i, n, p in pnls
+        _StubAgent(state=_StubState(id=i, name=n, book=_StubBook(realized=p))) for i, n, p in pnls
     ]
     return _StubOrch(agents=agents, last_marks=marks or {})
 
@@ -234,6 +234,7 @@ async def test_spy_direction_down_winner():
 
 async def test_pick_winner_uses_highest_realized_plus_unrealized():
     """Resolution should consider both realized and unrealized P&L."""
+
     @dataclass
     class _Book:
         @property
@@ -248,12 +249,20 @@ async def test_pick_winner_uses_highest_realized_plus_unrealized():
 
     orch = _StubOrch(
         agents=[
-            _StubAgent(state=_StubState(
-                id=1, name="alpha", book=_StubBook(realized=10.0, unrealized=0.0),
-            )),
-            _StubAgent(state=_StubState(
-                id=2, name="beta", book=_StubBook(realized=5.0, unrealized=100.0),
-            )),
+            _StubAgent(
+                state=_StubState(
+                    id=1,
+                    name="alpha",
+                    book=_StubBook(realized=10.0, unrealized=0.0),
+                )
+            ),
+            _StubAgent(
+                state=_StubState(
+                    id=2,
+                    name="beta",
+                    book=_StubBook(realized=5.0, unrealized=100.0),
+                )
+            ),
         ],
         last_marks={},
     )

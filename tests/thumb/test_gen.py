@@ -4,6 +4,7 @@ Pillow is already a dev dep so the render path runs without env-gating.
 ffmpeg frame-grab is mocked away so we don't need the binary for the
 default test path.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ import pytest
 from tradefarm.thumb.gen import (
     DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
-    ThumbPlan,
     derive_badge,
     derive_title,
     make_thumbnail,
@@ -26,12 +26,23 @@ from tradefarm.thumb.gen import (
 # ----- helpers ------------------------------------------------------------
 
 
-def _beat(beat_id: str, *, kind: str = "big_fill", score: float = 0.7,
-          headline: str = "h", sub: str = "s", duration: int = 30,
-          metadata: dict | None = None) -> dict:
+def _beat(
+    beat_id: str,
+    *,
+    kind: str = "big_fill",
+    score: float = 0.7,
+    headline: str = "h",
+    sub: str = "s",
+    duration: int = 30,
+    metadata: dict | None = None,
+) -> dict:
     return {
-        "id": beat_id, "kind": kind, "score": score,
-        "headline": headline, "sub": sub, "duration_sec": duration,
+        "id": beat_id,
+        "kind": kind,
+        "score": score,
+        "headline": headline,
+        "sub": sub,
+        "duration_sec": duration,
         "t": "2026-05-21T14:00:00+00:00",
         "metadata": metadata or {},
     }
@@ -52,11 +63,19 @@ def _write_session(
     for bid in clips_present or []:
         (sdir / "clips" / f"{bid}.webm").write_bytes(b"placeholder")
     if script_title is not None:
-        (sdir / "script.json").write_text(json.dumps({
-            "session_id": session_id, "episode_title": script_title,
-            "model": "m", "usage": {}, "total_words": 0,
-            "total_duration_sec": 0, "beats": [],
-        }))
+        (sdir / "script.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "episode_title": script_title,
+                    "model": "m",
+                    "usage": {},
+                    "total_words": 0,
+                    "total_duration_sec": 0,
+                    "beats": [],
+                }
+            )
+        )
     if manifest is not None:
         (sdir / "manifest.json").write_text(json.dumps(manifest))
     return sdir
@@ -67,7 +86,8 @@ def _write_session(
 
 def test_pick_source_beat_takes_highest_score_with_clip(tmp_path: Path):
     sdir = _write_session(
-        tmp_path, "s_pick",
+        tmp_path,
+        "s_pick",
         beats=[
             _beat("b_low", score=0.3),
             _beat("b_high", score=0.9),
@@ -85,8 +105,10 @@ def test_pick_source_beat_takes_highest_score_with_clip(tmp_path: Path):
 
 def test_pick_source_beat_returns_none_when_no_clips(tmp_path: Path):
     sdir = _write_session(
-        tmp_path, "s_empty",
-        beats=[_beat("b1")], clips_present=[],
+        tmp_path,
+        "s_empty",
+        beats=[_beat("b1")],
+        clips_present=[],
     )
     beats = json.loads((sdir / "beats.json").read_text())
     assert pick_source_beat(beats, sdir / "clips") is None
@@ -103,7 +125,8 @@ def test_derive_title_prefers_script_episode_title():
     title = derive_title(
         beats=[_beat("b1", headline="best beat headline", score=0.9)],
         script={"episode_title": "  Mei takes #1 after 47 days  "},
-        manifest=None, session_id="s_x",
+        manifest=None,
+        session_id="s_x",
     )
     assert title == "Mei takes #1 after 47 days"
 
@@ -114,15 +137,17 @@ def test_derive_title_falls_back_to_best_beat_headline():
             _beat("b_low", headline="boring", score=0.2),
             _beat("b_high", headline="The Big Move", score=0.95),
         ],
-        script=None, manifest=None, session_id="s_x",
+        script=None,
+        manifest=None,
+        session_id="s_x",
     )
     assert title == "The Big Move"
 
 
 def test_derive_title_falls_back_to_manifest_then_session_id():
-    title = derive_title(beats=[], script=None,
-                         manifest={"trading_days": ["2026-05-21"]},
-                         session_id="s_x")
+    title = derive_title(
+        beats=[], script=None, manifest={"trading_days": ["2026-05-21"]}, session_id="s_x"
+    )
     assert "2026-05-21" in title
     # And last-ditch session_id
     title2 = derive_title(beats=[], script=None, manifest=None, session_id="s_xyz")
@@ -144,8 +169,7 @@ def test_derive_badge_negative_pnl_formatted_with_minus_glyph():
 
 
 def test_derive_badge_falls_back_to_recap_sub_when_no_pnl():
-    beats = [_beat("b_recap", kind="recap", sub="momentum +2.1% · lstm +1.2%",
-                   metadata={})]
+    beats = [_beat("b_recap", kind="recap", sub="momentum +2.1% · lstm +1.2%", metadata={})]
     assert derive_badge(beats) == "momentum +2.1% · lstm +1.2%"
 
 
@@ -159,7 +183,8 @@ def test_derive_badge_none_when_no_recap_beat():
 
 def test_plan_thumb_grabs_mid_clip_frame(tmp_path: Path):
     _write_session(
-        tmp_path, "s_plan",
+        tmp_path,
+        "s_plan",
         beats=[_beat("b1", score=0.9, duration=30)],
         clips_present=["b1"],
         script_title="Test Episode",
@@ -173,8 +198,10 @@ def test_plan_thumb_grabs_mid_clip_frame(tmp_path: Path):
 
 def test_plan_thumb_returns_none_when_no_clips(tmp_path: Path):
     _write_session(
-        tmp_path, "s_none",
-        beats=[_beat("b1")], clips_present=[],
+        tmp_path,
+        "s_none",
+        beats=[_beat("b1")],
+        clips_present=[],
     )
     assert plan_thumb(session_id="s_none", sessions_dir=tmp_path) is None
 
@@ -189,17 +216,18 @@ def _stub_grab_frame_to_solid(monkeypatch, color=(80, 100, 140)):
 
     def fake_grab(clip, at_sec, out_png):
         Image.new("RGB", (1920, 1080), color).save(out_png)
+
     monkeypatch.setattr(gen, "_grab_frame", fake_grab)
 
 
 def test_make_thumbnail_produces_jpeg_at_target_size(tmp_path: Path, monkeypatch):
     _stub_grab_frame_to_solid(monkeypatch)
     _write_session(
-        tmp_path, "s_e2e",
+        tmp_path,
+        "s_e2e",
         beats=[
             _beat("b1", score=0.9, headline="The Big Day", duration=30),
-            _beat("b_recap", kind="recap", score=0.5,
-                  metadata={"realized_pnl": 1840.0}),
+            _beat("b_recap", kind="recap", score=0.5, metadata={"realized_pnl": 1840.0}),
         ],
         clips_present=["b1"],
     )
@@ -208,6 +236,7 @@ def test_make_thumbnail_produces_jpeg_at_target_size(tmp_path: Path, monkeypatch
     assert result.out_path is not None and result.out_path.is_file()
     # Verify the rendered file is a JPEG at the target resolution.
     from PIL import Image
+
     img = Image.open(result.out_path)
     assert img.format == "JPEG"
     assert img.size == (DEFAULT_WIDTH, DEFAULT_HEIGHT)
@@ -219,8 +248,10 @@ def test_make_thumbnail_produces_jpeg_at_target_size(tmp_path: Path, monkeypatch
 def test_make_thumbnail_cleans_temp_frame(tmp_path: Path, monkeypatch):
     _stub_grab_frame_to_solid(monkeypatch)
     _write_session(
-        tmp_path, "s_clean",
-        beats=[_beat("b1", score=0.9)], clips_present=["b1"],
+        tmp_path,
+        "s_clean",
+        beats=[_beat("b1", score=0.9)],
+        clips_present=["b1"],
     )
     result = make_thumbnail("s_clean", sessions_dir=tmp_path)
     assert result.ok
@@ -229,8 +260,10 @@ def test_make_thumbnail_cleans_temp_frame(tmp_path: Path, monkeypatch):
 
 def test_make_thumbnail_dry_run_skips_render(tmp_path: Path):
     _write_session(
-        tmp_path, "s_dry",
-        beats=[_beat("b1", score=0.9)], clips_present=["b1"],
+        tmp_path,
+        "s_dry",
+        beats=[_beat("b1", score=0.9)],
+        clips_present=["b1"],
     )
     result = make_thumbnail("s_dry", sessions_dir=tmp_path, dry_run=True)
     assert result.ok
@@ -240,8 +273,10 @@ def test_make_thumbnail_dry_run_skips_render(tmp_path: Path):
 
 def test_make_thumbnail_errors_when_no_clips(tmp_path: Path):
     _write_session(
-        tmp_path, "s_no",
-        beats=[_beat("b1")], clips_present=[],
+        tmp_path,
+        "s_no",
+        beats=[_beat("b1")],
+        clips_present=[],
     )
     result = make_thumbnail("s_no", sessions_dir=tmp_path)
     assert not result.ok
@@ -254,11 +289,14 @@ def test_make_thumbnail_recovers_after_grab_failure(tmp_path: Path, monkeypatch)
 
     def fake_grab(clip, at_sec, out_png):
         raise RuntimeError("simulated ffmpeg failure")
+
     monkeypatch.setattr(gen, "_grab_frame", fake_grab)
 
     _write_session(
-        tmp_path, "s_fail",
-        beats=[_beat("b1", score=0.9)], clips_present=["b1"],
+        tmp_path,
+        "s_fail",
+        beats=[_beat("b1", score=0.9)],
+        clips_present=["b1"],
     )
     result = make_thumbnail("s_fail", sessions_dir=tmp_path)
     assert not result.ok

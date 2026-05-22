@@ -14,6 +14,7 @@ The discriminated-union return type uses plain ``dataclasses`` + ``Literal``
 field types — no pydantic — matching the codebase's "event payloads are plain
 dicts" convention.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

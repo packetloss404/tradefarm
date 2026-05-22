@@ -3,6 +3,7 @@
 The real OAuth + upload network calls are env-gated; the default test
 path mocks httpx so the upload state-machine runs offline.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from tradefarm.yt.upload import (
-    UploadResult,
     YtCredentials,
     build_video_resource,
     upload_episode,
@@ -43,8 +43,10 @@ def test_credentials_from_env_picks_them_up(monkeypatch):
 
 def test_build_video_resource_carries_snippet_and_status():
     meta = {
-        "title": "T", "description": "D",
-        "tags": ["a", "b"], "category_id": "28",
+        "title": "T",
+        "description": "D",
+        "tags": ["a", "b"],
+        "category_id": "28",
         "privacy_status": "private",
         "publish_at_iso": "2026-05-21T20:30:00+00:00",
     }
@@ -59,7 +61,10 @@ def test_build_video_resource_carries_snippet_and_status():
 
 def test_build_video_resource_drops_publish_at_when_public():
     meta = {
-        "title": "T", "description": "D", "tags": [], "category_id": "28",
+        "title": "T",
+        "description": "D",
+        "tags": [],
+        "category_id": "28",
         "privacy_status": "public",
         "publish_at_iso": "2026-05-21T20:30:00+00:00",
     }
@@ -69,8 +74,12 @@ def test_build_video_resource_drops_publish_at_when_public():
 
 def test_build_video_resource_drops_publish_at_when_none():
     meta = {
-        "title": "T", "description": "D", "tags": [], "category_id": "28",
-        "privacy_status": "private", "publish_at_iso": None,
+        "title": "T",
+        "description": "D",
+        "tags": [],
+        "category_id": "28",
+        "privacy_status": "private",
+        "publish_at_iso": None,
     }
     body = build_video_resource(meta)
     assert "publishAt" not in body["status"]
@@ -79,18 +88,28 @@ def test_build_video_resource_drops_publish_at_when_none():
 # ----- upload_episode short-circuits + dry-run --------------------------
 
 
-def _seed_session(tmp_path: Path, *, has_video: bool = True,
-                  has_meta: bool = True, has_thumb: bool = False) -> Path:
+def _seed_session(
+    tmp_path: Path, *, has_video: bool = True, has_meta: bool = True, has_thumb: bool = False
+) -> Path:
     sdir = tmp_path / "s_up"
     sdir.mkdir()
     if has_meta:
-        (sdir / "episode.yaml").write_text(json.dumps({
-            "session_id": "s_up", "title": "T", "description": "D",
-            "tags": ["x"], "category_id": "28",
-            "privacy_status": "private",
-            "publish_at_iso": "2026-05-21T20:30:00+00:00",
-            "chapters": [], "thumbnail": None, "video": None,
-        }))
+        (sdir / "episode.yaml").write_text(
+            json.dumps(
+                {
+                    "session_id": "s_up",
+                    "title": "T",
+                    "description": "D",
+                    "tags": ["x"],
+                    "category_id": "28",
+                    "privacy_status": "private",
+                    "publish_at_iso": "2026-05-21T20:30:00+00:00",
+                    "chapters": [],
+                    "thumbnail": None,
+                    "video": None,
+                }
+            )
+        )
     if has_video:
         (sdir / "reel.mp4").write_bytes(b"x" * 1024)
     if has_thumb:
@@ -125,7 +144,8 @@ async def test_upload_episode_dry_run_emits_body_without_network(tmp_path: Path)
 
 
 async def test_upload_episode_runs_state_machine_with_mocks(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ):
     """Patches httpx so the OAuth refresh + resumable upload sequence
     runs offline. Verifies the function returns video_id + video_url."""
@@ -153,6 +173,7 @@ async def test_upload_episode_runs_state_machine_with_mocks(
         return {"id": "dQw4w9WgXcQ", "status": {"uploadStatus": "uploaded"}}
 
     thumb_calls: list[str] = []
+
     async def fake_thumbnail(*, access_token, video_id, thumb_path):
         thumb_calls.append(video_id)
 
@@ -172,16 +193,24 @@ async def test_upload_episode_runs_state_machine_with_mocks(
 
 
 async def test_upload_episode_carries_thumbnail_error_into_response(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ):
     """Thumbnail failure is non-fatal — the video still uploaded."""
     from tradefarm.yt import upload as up
+
     _seed_session(tmp_path, has_thumb=True)
     creds = YtCredentials(client_id="cid", client_secret="sec", refresh_token="ref")
 
-    async def fake_refresh(_c): return "tok"
-    async def fake_init(**_): return "https://x/y"
-    async def fake_put(**_): return {"id": "vid"}
+    async def fake_refresh(_c):
+        return "tok"
+
+    async def fake_init(**_):
+        return "https://x/y"
+
+    async def fake_put(**_):
+        return {"id": "vid"}
+
     async def fake_thumb(**_):
         raise RuntimeError("custom thumbnails require verified channel")
 
@@ -198,14 +227,17 @@ async def test_upload_episode_carries_thumbnail_error_into_response(
 
 
 async def test_upload_episode_failure_path_returns_error(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ):
     from tradefarm.yt import upload as up
+
     _seed_session(tmp_path)
     creds = YtCredentials(client_id="cid", client_secret="sec", refresh_token="ref")
 
     async def fake_refresh(_c):
         raise RuntimeError("token refresh failed 400: invalid_grant")
+
     monkeypatch.setattr(up, "refresh_access_token", fake_refresh)
 
     result = await upload_episode("s_up", sessions_dir=tmp_path, creds=creds)
@@ -217,14 +249,14 @@ async def test_upload_episode_failure_path_returns_error(
 
 
 @pytest.mark.skipif(
-    os.environ.get("RUN_YT_TESTS") != "1"
-    or not os.environ.get("YOUTUBE_CLIENT_ID"),
+    os.environ.get("RUN_YT_TESTS") != "1" or not os.environ.get("YOUTUBE_CLIENT_ID"),
     reason="Set RUN_YT_TESTS=1 + YOUTUBE_* env vars to enable; this hits real auth.",
 )
 async def test_integration_oauth_refresh_only(tmp_path):
     """Exercise the OAuth refresh against the real Google endpoint to
     catch credential drift. Does NOT upload a video."""
     from tradefarm.yt.upload import refresh_access_token, YtCredentials
+
     creds = YtCredentials.from_env()
     token = await refresh_access_token(creds)
     assert isinstance(token, str) and token.startswith("ya29.")

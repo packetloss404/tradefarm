@@ -9,6 +9,7 @@ the dev DB. Covers:
 - risk manager rebuild on rank change,
 - end-to-end via FastAPI's TestClient.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -68,11 +69,18 @@ async def curriculum_db(monkeypatch):
 
     three_weeks_ago = datetime.now(timezone.utc) - timedelta(days=21)
     async with SessionLocal() as s:
-        s.add(Agent(
-            id=1, name="agent-001", strategy="lstm_llm_v1",
-            starting_capital=1000.0, cash=1000.0, status="waiting",
-            rank="intern", created_at=three_weeks_ago,
-        ))
+        s.add(
+            Agent(
+                id=1,
+                name="agent-001",
+                strategy="lstm_llm_v1",
+                starting_capital=1000.0,
+                cash=1000.0,
+                status="waiting",
+                rank="intern",
+                created_at=three_weeks_ago,
+            )
+        )
         await s.commit()
 
     yield SessionLocal
@@ -81,28 +89,41 @@ async def curriculum_db(monkeypatch):
 
 async def _seed_wins(agent_id: int, symbol: str, n: int) -> None:
     from tradefarm.storage import journal
+
     for i in range(n):
         await journal.write_note(
-            agent_id=agent_id, kind="entry", symbol=symbol, content=f"win #{i}",
+            agent_id=agent_id,
+            kind="entry",
+            symbol=symbol,
+            content=f"win #{i}",
         )
         await journal.close_outcome(
-            agent_id=agent_id, symbol=symbol, realized_pnl=5.0 + i * 0.01,
+            agent_id=agent_id,
+            symbol=symbol,
+            realized_pnl=5.0 + i * 0.01,
         )
 
 
 async def _seed_losses(agent_id: int, symbol: str, n: int) -> None:
     from tradefarm.storage import journal
+
     for i in range(n):
         await journal.write_note(
-            agent_id=agent_id, kind="entry", symbol=symbol, content=f"loss #{i}",
+            agent_id=agent_id,
+            kind="entry",
+            symbol=symbol,
+            content=f"loss #{i}",
         )
         await journal.close_outcome(
-            agent_id=agent_id, symbol=symbol, realized_pnl=-4.0 - i * 0.01,
+            agent_id=agent_id,
+            symbol=symbol,
+            realized_pnl=-4.0 - i * 0.01,
         )
 
 
 def _make_agent(agent_id: int, name: str, rank: str):
     from tradefarm.risk.manager import RiskManager
+
     return FakeAgent(agent_id, name, RiskManager(starting_capital=1000.0, rank=rank))
 
 
@@ -222,18 +243,30 @@ async def test_per_pass_demotion_cap(curriculum_db, monkeypatch):
     agents = []
     async with SessionLocal() as s:
         for i in range(1, 51):
-            s.add(Agent(
-                id=i, name=f"agent-{i:03d}", strategy="momentum_sma20",
-                starting_capital=1000.0, cash=1000.0, status="waiting", rank="senior",
-            ))
+            s.add(
+                Agent(
+                    id=i,
+                    name=f"agent-{i:03d}",
+                    strategy="momentum_sma20",
+                    starting_capital=1000.0,
+                    cash=1000.0,
+                    status="waiting",
+                    rank="senior",
+                )
+            )
         await s.commit()
     for i in range(1, 51):
         for k in range(5):
             await journal.write_note(
-                agent_id=i, kind="entry", symbol="AAPL", content=f"loss #{k}",
+                agent_id=i,
+                kind="entry",
+                symbol="AAPL",
+                content=f"loss #{k}",
             )
             await journal.close_outcome(
-                agent_id=i, symbol="AAPL", realized_pnl=-5.0,
+                agent_id=i,
+                symbol="AAPL",
+                realized_pnl=-5.0,
             )
         agents.append(_make_agent(i, f"agent-{i:03d}", "senior"))
 
@@ -264,7 +297,8 @@ async def test_risk_manager_rebuilt_on_rank_change(curriculum_db, monkeypatch):
     from tradefarm.risk.manager import BASE_MAX_POSITION_NOTIONAL_PCT
 
     monkeypatch.setattr(
-        settings, "academy_rank_multipliers",
+        settings,
+        "academy_rank_multipliers",
         "intern=0.5,junior=1.0,senior=1.5,principal=2.0",
     )
 
@@ -272,6 +306,7 @@ async def test_risk_manager_rebuilt_on_rank_change(curriculum_db, monkeypatch):
     # promotion in this pass lands on "senior".
     await _seed_wins(agent_id=1, symbol="AAPL", n=20)
     from tradefarm.academy import repo as academy_repo
+
     await academy_repo.set_rank(1, "junior", reason="test setup")
     agent = _make_agent(1, "agent-001", "junior")
 
@@ -304,7 +339,8 @@ async def test_end_to_end_evaluate_endpoint(curriculum_db, monkeypatch):
 
     from tradefarm.academy import curriculum
     from tradefarm.api.main import (
-        academy_evaluate, agent_promotions, academy_promotions as academy_promos_ep,
+        agent_promotions,
+        academy_promotions as academy_promos_ep,
     )
 
     # Seed 10 winning trades — clears junior (min=5) but not senior (min=15).

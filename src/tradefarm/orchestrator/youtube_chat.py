@@ -23,6 +23,7 @@ dormant — the trade scheduler keeps running uninterrupted.
 OAuth: uses an installed-app refresh-token flow. The one-time consent dance
 that produces the refresh token lives in :mod:`tradefarm.tools.youtube_auth`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -204,10 +205,7 @@ class YouTubeChatPoller:
         # Audit fix (H9): if the circuit breaker is open (too many
         # consecutive refresh failures, e.g. revoked refresh token),
         # skip the refresh entirely until the cool-down expires.
-        if (
-            self._refresh_circuit_open_until is not None
-            and now < self._refresh_circuit_open_until
-        ):
+        if self._refresh_circuit_open_until is not None and now < self._refresh_circuit_open_until:
             raise RuntimeError(
                 "youtube_chat refresh circuit open — token likely revoked; "
                 f"retry after {self._refresh_circuit_open_until.isoformat()}"
@@ -287,7 +285,9 @@ class YouTubeChatPoller:
         log.info("youtube_chat_live_chat_id", live_chat_id=chat_id)
 
     async def _fetch_live_chat_id(
-        self, client: httpx.AsyncClient, params: dict[str, str],
+        self,
+        client: httpx.AsyncClient,
+        params: dict[str, str],
     ) -> str | None:
         r = await self._authed_get(client, LIVE_BROADCASTS_URL, params=params)
         data = r.json()
@@ -323,9 +323,7 @@ class YouTubeChatPoller:
         polling_ms = data.get("pollingIntervalMillis")
         try:
             sleep_for = (
-                float(polling_ms) / 1000.0
-                if polling_ms is not None
-                else self.poll_interval_sec
+                float(polling_ms) / 1000.0 if polling_ms is not None else self.poll_interval_sec
             )
         except (TypeError, ValueError):
             sleep_for = self.poll_interval_sec
@@ -436,11 +434,7 @@ def _is_quota_error(r: httpx.Response) -> bool:
     except Exception:
         return False
     err = data.get("error") or {}
-    reason_set = {
-        e.get("reason")
-        for e in (err.get("errors") or [])
-        if isinstance(e, dict)
-    }
+    reason_set = {e.get("reason") for e in (err.get("errors") or []) if isinstance(e, dict)}
     quota_reasons = {"quotaExceeded", "rateLimitExceeded", "dailyLimitExceeded"}
     return bool(reason_set & quota_reasons)
 

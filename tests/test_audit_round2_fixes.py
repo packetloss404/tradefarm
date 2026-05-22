@@ -8,12 +8,10 @@ Covers:
   Q — broadcast arbiter only installed during start_background
   R — predictions evening-of-reset doesn't walk straight to revealed
 """
+
 from __future__ import annotations
 
-import json
-from datetime import date, datetime, timedelta, timezone
-
-import pytest
+from datetime import datetime, timedelta
 
 
 # ----- N: journal session_id scoping -------------------------------------
@@ -38,14 +36,26 @@ async def test_recent_outcomes_scopes_to_current_session_id(tmp_path, monkeypatc
 
     # Seed: 1 live note + 1 replay note for the same agent.
     async with SessionLocal() as s:
-        s.add(AgentNote(
-            agent_id=42, kind="entry", symbol="SPY", content="live",
-            note_metadata="{}", session_id=None,
-        ))
-        s.add(AgentNote(
-            agent_id=42, kind="entry", symbol="SPY", content="replay",
-            note_metadata="{}", session_id="s_replay_x",
-        ))
+        s.add(
+            AgentNote(
+                agent_id=42,
+                kind="entry",
+                symbol="SPY",
+                content="live",
+                note_metadata="{}",
+                session_id=None,
+            )
+        )
+        s.add(
+            AgentNote(
+                agent_id=42,
+                kind="entry",
+                symbol="SPY",
+                content="replay",
+                note_metadata="{}",
+                session_id="s_replay_x",
+            )
+        )
         await s.commit()
 
     # Live caller sees only the live row.
@@ -87,6 +97,7 @@ async def test_predictions_reset_evening_does_not_walk_to_revealed(tmp_path):
     pb = PredictionsBoard(orch=_StubOrch())
     # Wall-time 18:00 ET on day D — past RESET_TIME (17:00 ET).
     from zoneinfo import ZoneInfo
+
     et = ZoneInfo("America/New_York")
     t_d_evening = datetime(2026, 5, 22, 18, 0, tzinfo=et)
     # Seed initial session for today so the reset path can fire.
@@ -123,6 +134,7 @@ def test_orchestrator_constructor_does_not_install_arbiter():
 
     # Constructing the Orchestrator no longer installs anything.
     from tradefarm.orchestrator.scheduler import Orchestrator
+
     orch = Orchestrator(agents=[])
     assert bos.get_broadcast_ledger() is None
     assert bos.get_broadcast_scheduler() is None

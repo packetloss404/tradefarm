@@ -1,4 +1,5 @@
 """Tests for the RiskManager.should_exit risk-based exit rules."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -93,21 +94,26 @@ def test_priority_stop_loss_beats_trailing():
     assert trig.kind == "stop-loss"  # checked first
 
 
-@pytest.mark.parametrize("sl_pct,mark,kind", [
-    (0.03, 96.0, "stop-loss"),
-    (0.03, 103.0, None),
-    # Wider 10% SL → no SL trigger at -4%. Also widen trailing + disable the
-    # time-stop so we're genuinely checking "SL threshold is configurable"
-    # without another rule firing incidentally.
-    (0.10, 96.0, None),
-])
+@pytest.mark.parametrize(
+    "sl_pct,mark,kind",
+    [
+        (0.03, 96.0, "stop-loss"),
+        (0.03, 103.0, None),
+        # Wider 10% SL → no SL trigger at -4%. Also widen trailing + disable the
+        # time-stop so we're genuinely checking "SL threshold is configurable"
+        # without another rule firing incidentally.
+        (0.10, 96.0, None),
+    ],
+)
 def test_stop_loss_pct_is_configurable(sl_pct: float, mark: float, kind: str | None):
-    risk = _fresh_risk(RiskLimits(
-        stop_loss_pct=sl_pct,
-        take_profit_pct=1.0,       # effectively disabled
-        trailing_stop_pct=1.0,     # effectively disabled
-        max_hold_days=10_000,      # effectively disabled
-    ))
+    risk = _fresh_risk(
+        RiskLimits(
+            stop_loss_pct=sl_pct,
+            take_profit_pct=1.0,  # effectively disabled
+            trailing_stop_pct=1.0,  # effectively disabled
+            max_hold_days=10_000,  # effectively disabled
+        )
+    )
     pos = VirtualPosition("SPY", qty=1.0, avg_price=100.0, opened_at=_now())
     trig = risk.should_exit("SPY", pos, mark=mark)
     if kind is None:

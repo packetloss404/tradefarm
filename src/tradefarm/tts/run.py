@@ -23,23 +23,22 @@ keys are present.
 Idempotent: re-running over an existing vo/ directory skips files
 that already exist unless --force is set.
 """
+
 from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import json
 import os
-import struct
 import wave
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 
-DEFAULT_PROVIDER = "auto"   # "auto" → first available based on env keys
+DEFAULT_PROVIDER = "auto"  # "auto" → first available based on env keys
 DEFAULT_VOICE = "Daniel"
-DEFAULT_MODEL = ""           # provider-specific default
+DEFAULT_MODEL = ""  # provider-specific default
 DEFAULT_SAMPLE_RATE = 22_050
 DEFAULT_FORMAT = "wav"
 
@@ -75,7 +74,7 @@ class SilentTtsProvider:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(out_path), "wb") as w:
             w.setnchannels(1)
-            w.setsampwidth(2)        # 16-bit
+            w.setsampwidth(2)  # 16-bit
             w.setframerate(self.sample_rate)
             w.writeframes(b"\x00\x00" * n_frames)
         return duration
@@ -102,7 +101,7 @@ class ElevenLabsTtsProvider:
     VOICE_IDS = {
         "Daniel": "onwK4e9ZLuTAKqWW03F9",
         "Rachel": "21m00Tcm4TlvDq8ikWAM",
-        "Adam":   "pNInz6obpgDQGcFmaJgB",
+        "Adam": "pNInz6obpgDQGcFmaJgB",
     }
 
     DEFAULT_MODEL_ID = "eleven_flash_v2_5"
@@ -114,6 +113,7 @@ class ElevenLabsTtsProvider:
     async def synthesize(self, text: str, *, voice: str, out_path: Path) -> float:
         import httpx
         import subprocess
+
         voice_id = self.VOICE_IDS.get(voice, voice)
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -139,13 +139,22 @@ class ElevenLabsTtsProvider:
         # is happier with a uniform sample-rate input.
         result = subprocess.run(
             [
-                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-i", str(mp3_path),
-                "-ac", "1",
-                "-ar", str(self.sample_rate),
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(mp3_path),
+                "-ac",
+                "1",
+                "-ar",
+                str(self.sample_rate),
                 str(out_path),
             ],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         mp3_path.unlink(missing_ok=True)
         if result.returncode != 0:
@@ -169,7 +178,7 @@ class OpenAiTtsProvider:
     VOICE_MAP = {
         "Daniel": "onyx",
         "Rachel": "nova",
-        "Adam":   "alloy",
+        "Adam": "alloy",
     }
 
     def __init__(self, *, api_key: str, model_id: str | None = None):
@@ -214,7 +223,9 @@ def _wav_duration_sec(path: Path) -> float:
         return 0.0
 
 
-def build_provider(name: str, *, api_key: str | None = None, voice_model: str | None = None) -> TtsProvider:
+def build_provider(
+    name: str, *, api_key: str | None = None, voice_model: str | None = None
+) -> TtsProvider:
     """Pick a provider by name. `auto` selects elevenlabs → openai →
     silence based on which env keys are present."""
     if name == "auto":
@@ -349,12 +360,17 @@ async def run_tts(
 
             if not force and key in existing and wav_path.is_file():
                 row = existing[key]
-                result.lines.append(TtsLine(
-                    beat_id=beat_id, line_idx=idx, text=text,
-                    wav=wav_path, duration_sec=float(row.get("duration_sec", 0.0)),
-                    provider=row.get("provider", provider.name),
-                    voice=row.get("voice", voice),
-                ))
+                result.lines.append(
+                    TtsLine(
+                        beat_id=beat_id,
+                        line_idx=idx,
+                        text=text,
+                        wav=wav_path,
+                        duration_sec=float(row.get("duration_sec", 0.0)),
+                        provider=row.get("provider", provider.name),
+                        voice=row.get("voice", voice),
+                    )
+                )
                 result.skipped.append(stem)
                 continue
 
@@ -363,11 +379,17 @@ async def run_tts(
             except Exception as exc:  # noqa: BLE001
                 result.failed.append((stem, f"{type(exc).__name__}: {exc}"))
                 continue
-            result.lines.append(TtsLine(
-                beat_id=beat_id, line_idx=idx, text=text,
-                wav=wav_path, duration_sec=dur,
-                provider=provider.name, voice=voice,
-            ))
+            result.lines.append(
+                TtsLine(
+                    beat_id=beat_id,
+                    line_idx=idx,
+                    text=text,
+                    wav=wav_path,
+                    duration_sec=dur,
+                    provider=provider.name,
+                    voice=voice,
+                )
+            )
 
     # Write the index. Sorted by (beat order, line idx) — matches the
     # order the mixer will splice them in.
@@ -403,30 +425,37 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("session_id")
     parser.add_argument(
-        "--out", type=Path, default=Path("out/sessions"),
+        "--out",
+        type=Path,
+        default=Path("out/sessions"),
         help="Sessions directory (default: out/sessions).",
     )
     parser.add_argument(
-        "--provider", default=DEFAULT_PROVIDER,
+        "--provider",
+        default=DEFAULT_PROVIDER,
         choices=["auto", "elevenlabs", "openai", "silence"],
         help="TTS backend. 'auto' picks first-available based on env keys, falling back to 'silence'.",
     )
     parser.add_argument("--voice", default=DEFAULT_VOICE)
     parser.add_argument("--api-key", default=None, help="Override env-derived key.")
     parser.add_argument("--voice-model", default=None, help="Provider-specific model id.")
-    parser.add_argument("--force", action="store_true", help="Re-synth even when wav already exists.")
+    parser.add_argument(
+        "--force", action="store_true", help="Re-synth even when wav already exists."
+    )
     args = parser.parse_args(argv)
 
     try:
-        result = asyncio.run(run_tts(
-            args.session_id,
-            sessions_dir=args.out,
-            provider_name=args.provider,
-            voice=args.voice,
-            api_key=args.api_key,
-            voice_model=args.voice_model,
-            force=args.force,
-        ))
+        result = asyncio.run(
+            run_tts(
+                args.session_id,
+                sessions_dir=args.out,
+                provider_name=args.provider,
+                voice=args.voice,
+                api_key=args.api_key,
+                voice_model=args.voice_model,
+                force=args.force,
+            )
+        )
     except FileNotFoundError as exc:
         raise SystemExit(f"missing input: {exc}") from exc
     except (ValueError, RuntimeError) as exc:
@@ -441,7 +470,7 @@ def main(argv: list[str] | None = None) -> None:
         f"total_speech_sec={total:.1f}"
     )
     for stem, err in result.failed[:5]:
-        print(f"  FAIL {stem}: {err}", file=__import__('sys').stderr)
+        print(f"  FAIL {stem}: {err}", file=__import__("sys").stderr)
     if result.failed:
         raise SystemExit(1)
 

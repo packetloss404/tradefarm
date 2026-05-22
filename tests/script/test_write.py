@@ -1,7 +1,7 @@
 """Script writer — pure-function tests + LLM call gated behind env var."""
+
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from pathlib import Path
@@ -28,8 +28,12 @@ from tradefarm.script.write import (
 
 def test_format_beat_includes_id_kind_t_and_headline():
     beat = {
-        "id": "b_open", "kind": "open", "t": "2026-05-21T13:30:00+00:00",
-        "duration_sec": 12, "headline": "Market open", "sub": "100 agents",
+        "id": "b_open",
+        "kind": "open",
+        "t": "2026-05-21T13:30:00+00:00",
+        "duration_sec": 12,
+        "headline": "Market open",
+        "sub": "100 agents",
         "metadata": {},
     }
     s = format_beat_for_prompt(beat)
@@ -47,10 +51,15 @@ def test_format_beat_only_emits_facts_with_known_keys():
     """metadata can carry arbitrary keys but we only surface the ones
     the narrator can quote without inventing context."""
     beat = {
-        "id": "b1", "kind": "big_fill", "t": "x",
-        "headline": "h", "sub": "s", "duration_sec": 30,
+        "id": "b1",
+        "kind": "big_fill",
+        "t": "x",
+        "headline": "h",
+        "sub": "s",
+        "duration_sec": 30,
         "metadata": {
-            "notional": 9600, "side": "buy",
+            "notional": 9600,
+            "side": "buy",
             "session_internal_ref": "ignore-me",
         },
     }
@@ -73,13 +82,15 @@ def test_build_user_prompt_includes_episode_label():
 
 
 def test_parse_response_happy_path():
-    raw = json.dumps({
-        "episode_title": "Quiet Tuesday",
-        "beats": [
-            {"beat_id": "b_open", "lines": ["Bell rings.", "100 agents settle in."]},
-            {"beat_id": "b_close", "lines": ["The tape closes flat.", "Tomorrow."]},
-        ],
-    })
+    raw = json.dumps(
+        {
+            "episode_title": "Quiet Tuesday",
+            "beats": [
+                {"beat_id": "b_open", "lines": ["Bell rings.", "100 agents settle in."]},
+                {"beat_id": "b_close", "lines": ["The tape closes flat.", "Tomorrow."]},
+            ],
+        }
+    )
     title, beats = parse_response(raw, expected_beat_ids=["b_open", "b_close"])
     assert title == "Quiet Tuesday"
     assert [b.beat_id for b in beats] == ["b_open", "b_close"]
@@ -90,9 +101,11 @@ def test_parse_response_happy_path():
 
 def test_parse_response_strips_code_fences():
     """Models love to wrap JSON in ```json … ``` even when asked not to."""
-    raw = "```json\n" + json.dumps({
-        "episode_title": "t", "beats": [{"beat_id": "b1", "lines": ["one"]}]
-    }) + "\n```"
+    raw = (
+        "```json\n"
+        + json.dumps({"episode_title": "t", "beats": [{"beat_id": "b1", "lines": ["one"]}]})
+        + "\n```"
+    )
     title, beats = parse_response(raw, expected_beat_ids=["b1"])
     assert title == "t"
     assert beats[0].beat_id == "b1"
@@ -101,22 +114,26 @@ def test_parse_response_strips_code_fences():
 def test_parse_response_preserves_order_of_expected_ids():
     """The model may return beats in any order; we re-sort to match
     the input so the TTS pipeline stays aligned."""
-    raw = json.dumps({
-        "episode_title": "t",
-        "beats": [
-            {"beat_id": "b2", "lines": ["second"]},
-            {"beat_id": "b1", "lines": ["first"]},
-        ],
-    })
+    raw = json.dumps(
+        {
+            "episode_title": "t",
+            "beats": [
+                {"beat_id": "b2", "lines": ["second"]},
+                {"beat_id": "b1", "lines": ["first"]},
+            ],
+        }
+    )
     _, beats = parse_response(raw, expected_beat_ids=["b1", "b2"])
     assert [b.beat_id for b in beats] == ["b1", "b2"]
 
 
 def test_parse_response_drops_empty_lines():
-    raw = json.dumps({
-        "episode_title": "t",
-        "beats": [{"beat_id": "b1", "lines": ["", "  ", "real"]}],
-    })
+    raw = json.dumps(
+        {
+            "episode_title": "t",
+            "beats": [{"beat_id": "b1", "lines": ["", "  ", "real"]}],
+        }
+    )
     _, beats = parse_response(raw, expected_beat_ids=["b1"])
     assert [ln.text for ln in beats[0].lines] == ["real"]
 
@@ -138,10 +155,12 @@ def test_parse_response_raises_on_missing_beats_key():
 
 
 def test_parse_response_raises_on_beat_with_no_lines():
-    raw = json.dumps({
-        "episode_title": "t",
-        "beats": [{"beat_id": "b1", "lines": ["", "  "]}],
-    })
+    raw = json.dumps(
+        {
+            "episode_title": "t",
+            "beats": [{"beat_id": "b1", "lines": ["", "  "]}],
+        }
+    )
     with pytest.raises(ValueError, match="no usable lines"):
         parse_response(raw, expected_beat_ids=["b1"])
 
@@ -169,14 +188,14 @@ def test_strip_code_fences_handles_plain_json():
 
 
 def test_strip_code_fences_handles_fenced_json():
-    raw = "```json\n{\"a\": 1}\n```"
+    raw = '```json\n{"a": 1}\n```'
     assert _strip_code_fences(raw) == '{"a": 1}'
 
 
 def test_extract_json_handles_leading_prose():
     """Common Claude failure mode: 'Here is the JSON:\\n```json\\n…\\n```'
     The extractor must grab the JSON body anyway."""
-    raw = "Here is the JSON:\n```json\n{\"a\": 1}\n```\nHope this helps!"
+    raw = 'Here is the JSON:\n```json\n{"a": 1}\n```\nHope this helps!'
     assert _strip_code_fences(raw) == '{"a": 1}'
 
 
@@ -191,13 +210,15 @@ def test_extract_json_handles_unfenced_object_with_preamble():
 def test_parse_response_dedupes_beat_ids_keeping_first():
     """A model that repeats a beat shouldn't lose the earlier draft.
     Regression: previous version did last-wins via dict comprehension."""
-    raw = json.dumps({
-        "episode_title": "t",
-        "beats": [
-            {"beat_id": "b1", "lines": ["first version"]},
-            {"beat_id": "b1", "lines": ["second version — should be ignored"]},
-        ],
-    })
+    raw = json.dumps(
+        {
+            "episode_title": "t",
+            "beats": [
+                {"beat_id": "b1", "lines": ["first version"]},
+                {"beat_id": "b1", "lines": ["second version — should be ignored"]},
+            ],
+        }
+    )
     _, beats = parse_response(raw, expected_beat_ids=["b1"])
     assert beats[0].lines[0].text == "first version"
 
@@ -205,13 +226,25 @@ def test_parse_response_dedupes_beat_ids_keeping_first():
 async def test_write_script_missing_api_key_raises_cleanly(tmp_path: Path, monkeypatch):
     """Used to bottom out inside the SDK with an opaque trace."""
     from tradefarm.script import write as writer
+
     monkeypatch.setattr(writer.settings, "anthropic_api_key", "")
     sdir = tmp_path / "s_nokey"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([
-        {"id": "b1", "kind": "open", "t": "x", "headline": "h",
-         "sub": "", "duration_sec": 10, "metadata": {}},
-    ]))
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "b1",
+                    "kind": "open",
+                    "t": "x",
+                    "headline": "h",
+                    "sub": "",
+                    "duration_sec": 10,
+                    "metadata": {},
+                },
+            ]
+        )
+    )
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         await writer.write_script("s_nokey", sessions_dir=tmp_path)
 
@@ -220,25 +253,42 @@ async def test_write_script_retry_passes_prior_assistant_turn(tmp_path: Path, mo
     """The retry must show the model its own previous reply, not just
     append the error to the user prompt."""
     from tradefarm.script import write as writer
+
     monkeypatch.setattr(writer.settings, "anthropic_api_key", "test-key")
     sdir = tmp_path / "s_retry2"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([
-        {"id": "b1", "kind": "open", "t": "x", "headline": "h",
-         "sub": "", "duration_sec": 10, "metadata": {}},
-    ]))
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "b1",
+                    "kind": "open",
+                    "t": "x",
+                    "headline": "h",
+                    "sub": "",
+                    "duration_sec": 10,
+                    "metadata": {},
+                },
+            ]
+        )
+    )
     seen: list[list[dict]] = []
 
     async def fake_call_model(*, user_prompt, prior_messages, **kwargs):
         seen.append(prior_messages or [])
         if not seen[-1]:
-            return "garbage", {"input_tokens": 1, "output_tokens": 1,
-                                "cache_read_input_tokens": 0,
-                                "cache_creation_input_tokens": 0}
-        return json.dumps({"episode_title": "t",
-                            "beats": [{"beat_id": "b1", "lines": ["ok"]}]}), \
-            {"input_tokens": 1, "output_tokens": 1,
-             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+            return "garbage", {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+        return json.dumps({"episode_title": "t", "beats": [{"beat_id": "b1", "lines": ["ok"]}]}), {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
     monkeypatch.setattr(writer, "_call_model", fake_call_model)
     await writer.write_script("s_retry2", sessions_dir=tmp_path)
@@ -259,12 +309,18 @@ def test_script_to_dict_round_trip(tmp_path: Path):
         session_id="s_test",
         episode_title="A Day",
         model="claude-haiku-4-5-20251001",
-        beats=[BeatScript(
-            beat_id="b1",
-            lines=[NarrationLine(text="hi", words=1, duration_sec=0.39)],
-        )],
-        usage={"input_tokens": 100, "output_tokens": 50,
-               "cache_read_input_tokens": 0, "cache_creation_input_tokens": 100},
+        beats=[
+            BeatScript(
+                beat_id="b1",
+                lines=[NarrationLine(text="hi", words=1, duration_sec=0.39)],
+            )
+        ],
+        usage={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 100,
+        },
     )
     d = script_to_dict(s)
     assert d["session_id"] == "s_test"
@@ -295,22 +351,46 @@ async def test_write_script_uses_mocked_model(tmp_path: Path, monkeypatch):
 
     sdir = tmp_path / "s_mock"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([
-        {"id": "b1", "kind": "open", "t": "x", "headline": "h",
-         "sub": "s", "duration_sec": 10, "metadata": {}},
-        {"id": "b2", "kind": "big_fill", "t": "y", "headline": "h2",
-         "sub": "s2", "duration_sec": 20, "metadata": {"notional": 5000}},
-    ]))
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "b1",
+                    "kind": "open",
+                    "t": "x",
+                    "headline": "h",
+                    "sub": "s",
+                    "duration_sec": 10,
+                    "metadata": {},
+                },
+                {
+                    "id": "b2",
+                    "kind": "big_fill",
+                    "t": "y",
+                    "headline": "h2",
+                    "sub": "s2",
+                    "duration_sec": 20,
+                    "metadata": {"notional": 5000},
+                },
+            ]
+        )
+    )
 
     async def fake_call_model(**kwargs):
-        return json.dumps({
-            "episode_title": "Mock Day",
-            "beats": [
-                {"beat_id": "b1", "lines": ["First.", "Second."]},
-                {"beat_id": "b2", "lines": ["Third.", "Fourth.", "Fifth."]},
-            ],
-        }), {"input_tokens": 800, "output_tokens": 60,
-              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 800}
+        return json.dumps(
+            {
+                "episode_title": "Mock Day",
+                "beats": [
+                    {"beat_id": "b1", "lines": ["First.", "Second."]},
+                    {"beat_id": "b2", "lines": ["Third.", "Fourth.", "Fifth."]},
+                ],
+            }
+        ), {
+            "input_tokens": 800,
+            "output_tokens": 60,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 800,
+        }
 
     monkeypatch.setattr(writer, "_call_model", fake_call_model)
     script = await writer.write_script("s_mock", sessions_dir=tmp_path)
@@ -328,10 +408,21 @@ async def test_write_script_retries_on_parse_failure(tmp_path: Path, monkeypatch
 
     sdir = tmp_path / "s_retry"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([
-        {"id": "b1", "kind": "open", "t": "x", "headline": "h",
-         "sub": "", "duration_sec": 10, "metadata": {}},
-    ]))
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "b1",
+                    "kind": "open",
+                    "t": "x",
+                    "headline": "h",
+                    "sub": "",
+                    "duration_sec": 10,
+                    "metadata": {},
+                },
+            ]
+        )
+    )
 
     calls: list[str] = []
 
@@ -339,14 +430,22 @@ async def test_write_script_retries_on_parse_failure(tmp_path: Path, monkeypatch
         calls.append(user_prompt)
         if len(calls) == 1:
             return "not even close to json", {
-                "input_tokens": 10, "output_tokens": 5,
-                "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
             }
-        return json.dumps({
-            "episode_title": "Recovered",
-            "beats": [{"beat_id": "b1", "lines": ["got it"]}],
-        }), {"input_tokens": 20, "output_tokens": 5,
-              "cache_read_input_tokens": 10, "cache_creation_input_tokens": 0}
+        return json.dumps(
+            {
+                "episode_title": "Recovered",
+                "beats": [{"beat_id": "b1", "lines": ["got it"]}],
+            }
+        ), {
+            "input_tokens": 20,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+        }
 
     monkeypatch.setattr(writer, "_call_model", flaky_call_model)
     script = await writer.write_script("s_retry", sessions_dir=tmp_path)
@@ -362,15 +461,29 @@ async def test_write_script_gives_up_after_max_retries(tmp_path: Path, monkeypat
 
     sdir = tmp_path / "s_fail"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([
-        {"id": "b1", "kind": "open", "t": "x", "headline": "h",
-         "sub": "", "duration_sec": 10, "metadata": {}},
-    ]))
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "b1",
+                    "kind": "open",
+                    "t": "x",
+                    "headline": "h",
+                    "sub": "",
+                    "duration_sec": 10,
+                    "metadata": {},
+                },
+            ]
+        )
+    )
 
     async def always_garbage(**kwargs):
-        return "still not json", {"input_tokens": 1, "output_tokens": 1,
-                                  "cache_read_input_tokens": 0,
-                                  "cache_creation_input_tokens": 0}
+        return "still not json", {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
     monkeypatch.setattr(writer, "_call_model", always_garbage)
     with pytest.raises(RuntimeError, match="failed after"):
@@ -379,6 +492,7 @@ async def test_write_script_gives_up_after_max_retries(tmp_path: Path, monkeypat
 
 async def test_write_script_missing_beats_raises(tmp_path: Path):
     from tradefarm.script.write import write_script
+
     with pytest.raises(FileNotFoundError):
         await write_script("never", sessions_dir=tmp_path)
 
@@ -394,17 +508,33 @@ async def test_integration_real_anthropic_call(tmp_path: Path):
     """Hit the real API. Costs ~$0.01 per run. Set
     RUN_LLM_TESTS=1 + ANTHROPIC_API_KEY=… to enable."""
     from tradefarm.script.write import write_script
+
     sdir = tmp_path / "s_real"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([
-        {"id": "b_open", "kind": "open", "t": "2026-05-21T13:30:00+00:00",
-         "headline": "Market open · 100 agents back at their desks",
-         "sub": "Pre-market gap +0.4%", "duration_sec": 12, "metadata": {}},
-        {"id": "b_big", "kind": "big_fill", "t": "2026-05-21T14:00:00+00:00",
-         "headline": "Marcus Wagner goes long NVDA — $9,600 notional",
-         "sub": "80 × $120.00 · 14:00 ET", "duration_sec": 30,
-         "metadata": {"notional": 9600, "side": "buy", "qty": 80, "price": 120}},
-    ]))
+    (sdir / "beats.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "b_open",
+                    "kind": "open",
+                    "t": "2026-05-21T13:30:00+00:00",
+                    "headline": "Market open · 100 agents back at their desks",
+                    "sub": "Pre-market gap +0.4%",
+                    "duration_sec": 12,
+                    "metadata": {},
+                },
+                {
+                    "id": "b_big",
+                    "kind": "big_fill",
+                    "t": "2026-05-21T14:00:00+00:00",
+                    "headline": "Marcus Wagner goes long NVDA — $9,600 notional",
+                    "sub": "80 × $120.00 · 14:00 ET",
+                    "duration_sec": 30,
+                    "metadata": {"notional": 9600, "side": "buy", "qty": 80, "price": 120},
+                },
+            ]
+        )
+    )
     script = await write_script("s_real", sessions_dir=tmp_path)
     assert len(script.beats) == 2
     assert sum(len(b.lines) for b in script.beats) >= 2

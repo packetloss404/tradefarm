@@ -6,6 +6,7 @@ H19 — trailing peak never reset on re-open
 H20 — wall-clock days-held instead of trading days
 H21 — _apply_rank_multiplier clobbered explicit caller limits
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -75,8 +76,10 @@ def test_trailing_peak_resets_on_position_reopen():
     rm = RiskManager(
         starting_capital=10000.0,
         limits=RiskLimits(
-            stop_loss_pct=0.5, trailing_stop_pct=0.02,
-            take_profit_pct=0.5, max_hold_days=30,
+            stop_loss_pct=0.5,
+            trailing_stop_pct=0.02,
+            take_profit_pct=0.5,
+            max_hold_days=30,
         ),
     )
     book = _book()
@@ -106,8 +109,10 @@ def test_trailing_peak_resets_even_without_explicit_clear():
     rm = RiskManager(
         starting_capital=10000.0,
         limits=RiskLimits(
-            stop_loss_pct=0.5, trailing_stop_pct=0.02,
-            take_profit_pct=0.5, max_hold_days=30,
+            stop_loss_pct=0.5,
+            trailing_stop_pct=0.02,
+            take_profit_pct=0.5,
+            max_hold_days=30,
         ),
     )
     book = _book()
@@ -139,6 +144,7 @@ def test_rank_multiplier_recomputes_implicit_cap():
     rm = RiskManager(starting_capital=10000.0, rank="principal")
     # No explicit limits: cap should be BASE × multiplier.
     from tradefarm.config import settings
+
     expected = BASE_MAX_POSITION_NOTIONAL_PCT * settings.rank_multiplier("principal")
     assert rm.limits.max_position_notional_pct == pytest.approx(expected)
 

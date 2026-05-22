@@ -6,6 +6,7 @@ stages need; they don't talk to the DB directly.
 
 Skeleton — implementation lives in this file; see TODOs.
 """
+
 from __future__ import annotations
 
 import json

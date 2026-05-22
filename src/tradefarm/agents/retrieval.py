@@ -14,6 +14,7 @@ Contract (hard):
 - Any journal error → :func:`fetch` returns ``[]`` (never blocks a decision).
 - :func:`format_for_prompt([])` → empty string, so callers can concat blindly.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

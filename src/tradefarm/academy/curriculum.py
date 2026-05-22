@@ -4,6 +4,7 @@
 and promotes (always) or demotes (only on a real trigger). Designed to run
 *between ticks*: the caller gates on ``orchestrator._tick_in_progress``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -98,7 +99,9 @@ def _rebuild_risk(agent: "Agent", new_rank: Rank) -> None:
     agent.risk = RiskManager(starting_capital=agent.risk.starting_capital, rank=new_rank)
 
 
-async def _apply(agent: "Agent", stats: RankStats, frm: Rank, to: Rank, reason: str) -> PromotionEvent:
+async def _apply(
+    agent: "Agent", stats: RankStats, frm: Rank, to: Rank, reason: str
+) -> PromotionEvent:
     await academy_repo.set_rank(agent.state.id, to, reason=reason)
     _rebuild_risk(agent, to)
     ev = PromotionEvent(
@@ -116,9 +119,12 @@ async def _apply(agent: "Agent", stats: RankStats, frm: Rank, to: Rank, reason: 
 
 def _payload(ev: PromotionEvent) -> dict:
     return {
-        "agent_id": ev.agent_id, "agent_name": ev.agent_name,
-        "from_rank": ev.from_rank, "to_rank": ev.to_rank,
-        "reason": ev.reason, "at": ev.at,
+        "agent_id": ev.agent_id,
+        "agent_name": ev.agent_name,
+        "from_rank": ev.from_rank,
+        "to_rank": ev.to_rank,
+        "reason": ev.reason,
+        "at": ev.at,
     }
 
 
@@ -131,7 +137,8 @@ async def evaluate_all(orchestrator: "Orchestrator") -> CurriculumResult:
 
     for agent in agents:
         stats = await ranks_mod.compute_stats(
-            agent.state.id, starting_capital=agent.risk.starting_capital,
+            agent.state.id,
+            starting_capital=agent.risk.starting_capital,
         )
         current: Rank = getattr(agent.risk, "rank", "intern")  # type: ignore[assignment]
         if current not in RANK_ORDER:
@@ -147,10 +154,16 @@ async def evaluate_all(orchestrator: "Orchestrator") -> CurriculumResult:
             if not should:
                 result.unchanged += 1
                 continue
-            demotions.append((
-                agent, stats, current, RANK_ORDER[ci - 1], reason,
-                _severity(stats, consec),
-            ))
+            demotions.append(
+                (
+                    agent,
+                    stats,
+                    current,
+                    RANK_ORDER[ci - 1],
+                    reason,
+                    _severity(stats, consec),
+                )
+            )
         else:
             result.unchanged += 1
 
@@ -159,9 +172,14 @@ async def evaluate_all(orchestrator: "Orchestrator") -> CurriculumResult:
     to_demote, skipped = demotions[:cap_n], demotions[cap_n:]
     for s in skipped:
         result.unchanged += 1
-        log.info("curriculum_demotion_skipped",
-                 agent_id=s[0].state.id, from_rank=s[2], to_rank=s[3],
-                 reason=s[4], cap_n=cap_n)
+        log.info(
+            "curriculum_demotion_skipped",
+            agent_id=s[0].state.id,
+            from_rank=s[2],
+            to_rank=s[3],
+            reason=s[4],
+            cap_n=cap_n,
+        )
 
     for agent, stats, frm, to in promotions:
         ev = await _apply(agent, stats, frm, to, f"promoted: eligible for {to}")
@@ -173,7 +191,11 @@ async def evaluate_all(orchestrator: "Orchestrator") -> CurriculumResult:
         result.demoted.append(ev)
         await publish_event("demotion", _payload(ev))
 
-    log.info("curriculum_pass",
-             promoted=len(result.promoted), demoted=len(result.demoted),
-             skipped=len(skipped), unchanged=result.unchanged)
+    log.info(
+        "curriculum_pass",
+        promoted=len(result.promoted),
+        demoted=len(result.demoted),
+        skipped=len(skipped),
+        unchanged=result.unchanged,
+    )
     return result

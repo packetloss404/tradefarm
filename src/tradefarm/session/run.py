@@ -15,6 +15,7 @@ Output:
 
 Skeleton — implementation lives in this file; see TODOs.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -239,7 +240,7 @@ def main() -> None:
         default="asap",
         choices=["asap"],
         help="Replay speed. Only 'asap' is supported in v0; 10x / realtime "
-             "are planned for Phase 1.5.",
+        "are planned for Phase 1.5.",
     )
     parser.add_argument(
         "--session-id",

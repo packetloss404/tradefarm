@@ -5,6 +5,7 @@ provider `settings.llm_provider` currently names. Admin-panel changes swap
 the provider in place via `LlmOverlay.rebuild()` so agents don't need to
 be re-wired.
 """
+
 from __future__ import annotations
 
 from tradefarm.agents.llm_overlay_types import LlmContext, LlmDecision  # re-exported

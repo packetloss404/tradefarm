@@ -1,4 +1,5 @@
 """AudienceCoordinator — sentiment, pin requests, approve/reject."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -35,9 +36,7 @@ class _StubOrch:
 
 def _make_orch(agents: list[tuple[int, str]] | None = None) -> _StubOrch:
     agents = agents or [(1, "agent-001"), (2, "agent-002"), (7, "alpha-bot")]
-    return _StubOrch(agents=[
-        _StubAgent(state=_StubState(id=i, name=n)) for i, n in agents
-    ])
+    return _StubOrch(agents=[_StubAgent(state=_StubState(id=i, name=n)) for i, n in agents])
 
 
 def _msg(text: str, *, user: str = "viewer") -> dict[str, Any]:
@@ -314,7 +313,9 @@ async def test_pick_routes_to_predictions_board():
         await coord.on_chat_message(_msg("!pick agent-002", user="alice"))
 
     predictions.record_vote.assert_awaited_once_with(
-        "pick-winner", "alice", "agent-002",
+        "pick-winner",
+        "alice",
+        "agent-002",
     )
 
 
@@ -328,5 +329,7 @@ async def test_spy_routes_to_predictions_board():
         await coord.on_chat_message(_msg("!spy up", user="bob"))
 
     predictions.record_vote.assert_awaited_once_with(
-        "spy-direction", "bob", "up",
+        "spy-direction",
+        "bob",
+        "up",
     )

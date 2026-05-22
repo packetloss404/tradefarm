@@ -7,21 +7,28 @@ script.json + manifest.json + sidecar JSONs; output is one
 out/sessions/<id>/episode.yaml file (we use yaml-ish but it's
 just JSON-with-key-order, written via json.dumps).
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_PRIVACY = "private"  # "public" | "unlisted" | "private"
-DEFAULT_CATEGORY_ID = "28"   # YouTube's "Science & Technology"
+DEFAULT_CATEGORY_ID = "28"  # YouTube's "Science & Technology"
 DEFAULT_TAGS = [
-    "tradefarm", "ai trading", "paper trading", "llm",
-    "lstm", "daily recap", "agent academy", "autonomous",
+    "tradefarm",
+    "ai trading",
+    "paper trading",
+    "llm",
+    "lstm",
+    "daily recap",
+    "agent academy",
+    "autonomous",
 ]
 
 
@@ -165,9 +172,7 @@ def build_description(
     )
 
     # 3. Chapters (auto-detected by YouTube when each is on its own line).
-    chapter_block = "\n".join(
-        f"{_format_chapter_stamp(c.start_sec)} {c.title}" for c in chapters
-    )
+    chapter_block = "\n".join(f"{_format_chapter_stamp(c.start_sec)} {c.title}" for c in chapters)
 
     parts = [summary, "", boilerplate]
     if chapter_block:
@@ -188,6 +193,7 @@ def default_publish_at(*, now: datetime | None = None) -> str:
     early during EDT (the majority of the year).
     """
     from zoneinfo import ZoneInfo
+
     et = ZoneInfo("America/New_York")
     now = now or datetime.now(timezone.utc)
     now_et = now.astimezone(et)
@@ -222,6 +228,7 @@ def build_episode_meta(
     # align with the real reel timeline). Falls back to CLI default.
     if xfade_sec is None:
         from tradefarm.render.stitch import load_reel_meta
+
         xfade_sec = float(load_reel_meta(sdir).get("xfade_sec", 0.4))
 
     # Title.
@@ -238,8 +245,11 @@ def build_episode_meta(
     chapters = compute_chapters(beats, sidecars, xfade_sec=xfade_sec)
 
     description = (description_override or "").strip() or build_description(
-        beats=beats, script=script, manifest=manifest,
-        chapters=chapters, session_id=session_id,
+        beats=beats,
+        script=script,
+        manifest=manifest,
+        chapters=chapters,
+        session_id=session_id,
     )
 
     publish_at = publish_at_iso if privacy_status == "private" else None
@@ -272,8 +282,11 @@ def meta_to_dict(meta: EpisodeMeta) -> dict[str, Any]:
         "privacy_status": meta.privacy_status,
         "publish_at_iso": meta.publish_at_iso,
         "chapters": [
-            {"start_sec": c.start_sec, "stamp": _format_chapter_stamp(c.start_sec),
-             "title": c.title}
+            {
+                "start_sec": c.start_sec,
+                "stamp": _format_chapter_stamp(c.start_sec),
+                "title": c.title,
+            }
             for c in meta.chapters
         ],
         "thumbnail": str(meta.thumbnail) if meta.thumbnail else None,
@@ -298,16 +311,21 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, default=Path("out/sessions"))
     parser.add_argument("--title", default=None)
     parser.add_argument("--description", default=None)
-    parser.add_argument("--privacy", default=DEFAULT_PRIVACY,
-                        choices=["public", "unlisted", "private"])
-    parser.add_argument("--publish-at", default=None,
-                        help="ISO-8601 UTC; defaults to next 16:30 ET (private only).")
-    parser.add_argument("--tags", default=None,
-                        help="Comma-separated tag override.")
-    parser.add_argument("--category-id", default=DEFAULT_CATEGORY_ID,
-                        help="YouTube category id (default: 28 = Science & Technology).")
-    parser.add_argument("--xfade", type=float, default=0.4,
-                        help="Stitcher's crossfade seconds (must match).")
+    parser.add_argument(
+        "--privacy", default=DEFAULT_PRIVACY, choices=["public", "unlisted", "private"]
+    )
+    parser.add_argument(
+        "--publish-at", default=None, help="ISO-8601 UTC; defaults to next 16:30 ET (private only)."
+    )
+    parser.add_argument("--tags", default=None, help="Comma-separated tag override.")
+    parser.add_argument(
+        "--category-id",
+        default=DEFAULT_CATEGORY_ID,
+        help="YouTube category id (default: 28 = Science & Technology).",
+    )
+    parser.add_argument(
+        "--xfade", type=float, default=0.4, help="Stitcher's crossfade seconds (must match)."
+    )
     args = parser.parse_args(argv)
 
     meta = build_episode_meta(

@@ -3,6 +3,7 @@
 Uses an in-memory SQLite DB (same pattern as ``tests/test_journal.py``) so
 writes don't leak into the dev DB. Each test recreates tables from scratch.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -37,11 +38,18 @@ async def academy_db(monkeypatch):
     # Seed one agent — created 3 weeks ago so `weeks_active` > principal gate.
     three_weeks_ago = datetime.now(timezone.utc) - timedelta(days=21)
     async with SessionLocal() as s:
-        s.add(Agent(
-            id=1, name="agent-001", strategy="lstm_llm_v1",
-            starting_capital=1000.0, cash=1000.0, status="waiting",
-            rank="intern", created_at=three_weeks_ago,
-        ))
+        s.add(
+            Agent(
+                id=1,
+                name="agent-001",
+                strategy="lstm_llm_v1",
+                starting_capital=1000.0,
+                cash=1000.0,
+                status="waiting",
+                rank="intern",
+                created_at=three_weeks_ago,
+            )
+        )
         await s.commit()
 
     yield SessionLocal
@@ -102,7 +110,8 @@ def test_multiplier_csv_parsing(monkeypatch):
 
     # Populated CSV → parsed.
     monkeypatch.setattr(
-        settings, "academy_rank_multipliers",
+        settings,
+        "academy_rank_multipliers",
         "intern=0.5,junior=1.0,senior=1.5,principal=2.0",
     )
     assert settings.rank_multiplier("intern") == 0.5
@@ -112,7 +121,8 @@ def test_multiplier_csv_parsing(monkeypatch):
 
     # Malformed entries silently fall back to 1.0.
     monkeypatch.setattr(
-        settings, "academy_rank_multipliers",
+        settings,
+        "academy_rank_multipliers",
         "intern=xx,junior=,=0.5,senior=1.5,garbage",
     )
     assert settings.rank_multiplier("intern") == 1.0  # malformed value
@@ -136,7 +146,8 @@ def test_risk_manager_uses_rank_multiplier(monkeypatch):
     from tradefarm.risk.manager import BASE_MAX_POSITION_NOTIONAL_PCT, RiskManager
 
     monkeypatch.setattr(
-        settings, "academy_rank_multipliers",
+        settings,
+        "academy_rank_multipliers",
         "intern=0.5,junior=1.0,senior=1.5,principal=2.0",
     )
 
@@ -185,10 +196,15 @@ async def test_stats_from_journal(academy_db):
     # 7 winners + 3 losers on the same symbol.
     for pnl in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -1.0, -2.0, -3.0]:
         await journal.write_note(
-            agent_id=1, kind="entry", symbol="SPY", content=f"trade pnl={pnl}",
+            agent_id=1,
+            kind="entry",
+            symbol="SPY",
+            content=f"trade pnl={pnl}",
         )
         await journal.close_outcome(
-            agent_id=1, symbol="SPY", realized_pnl=pnl,
+            agent_id=1,
+            symbol="SPY",
+            realized_pnl=pnl,
         )
 
     stats = await compute_stats(agent_id=1, starting_capital=1000.0)
@@ -223,7 +239,8 @@ async def test_end_to_end_winning_outcomes_promote_to_senior(academy_db, monkeyp
     from tradefarm.storage import journal
 
     monkeypatch.setattr(
-        settings, "academy_rank_multipliers",
+        settings,
+        "academy_rank_multipliers",
         "intern=0.5,junior=1.0,senior=1.5,principal=2.0",
     )
 
@@ -231,10 +248,15 @@ async def test_end_to_end_winning_outcomes_promote_to_senior(academy_db, monkeyp
     # Kept below 40 to stay *below* principal's min_trades_principal threshold.
     for i in range(20):
         await journal.write_note(
-            agent_id=1, kind="entry", symbol="AAPL", content=f"win #{i}",
+            agent_id=1,
+            kind="entry",
+            symbol="AAPL",
+            content=f"win #{i}",
         )
         await journal.close_outcome(
-            agent_id=1, symbol="AAPL", realized_pnl=5.0 + i * 0.01,
+            agent_id=1,
+            symbol="AAPL",
+            realized_pnl=5.0 + i * 0.01,
         )
 
     stats = await compute_stats(agent_id=1, starting_capital=1000.0)
@@ -261,14 +283,37 @@ async def test_rank_distribution_counts(academy_db):
     from tradefarm.storage.models import Agent
 
     async with SessionLocal() as s:
-        s.add_all([
-            Agent(id=2, name="agent-002", strategy="momentum_sma20",
-                  starting_capital=1000.0, cash=1000.0, status="waiting", rank="junior"),
-            Agent(id=3, name="agent-003", strategy="momentum_sma20",
-                  starting_capital=1000.0, cash=1000.0, status="waiting", rank="senior"),
-            Agent(id=4, name="agent-004", strategy="momentum_sma20",
-                  starting_capital=1000.0, cash=1000.0, status="waiting", rank="principal"),
-        ])
+        s.add_all(
+            [
+                Agent(
+                    id=2,
+                    name="agent-002",
+                    strategy="momentum_sma20",
+                    starting_capital=1000.0,
+                    cash=1000.0,
+                    status="waiting",
+                    rank="junior",
+                ),
+                Agent(
+                    id=3,
+                    name="agent-003",
+                    strategy="momentum_sma20",
+                    starting_capital=1000.0,
+                    cash=1000.0,
+                    status="waiting",
+                    rank="senior",
+                ),
+                Agent(
+                    id=4,
+                    name="agent-004",
+                    strategy="momentum_sma20",
+                    starting_capital=1000.0,
+                    cash=1000.0,
+                    status="waiting",
+                    rank="principal",
+                ),
+            ]
+        )
         await s.commit()
 
     dist = await academy_repo.rank_distribution()

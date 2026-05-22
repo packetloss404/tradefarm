@@ -8,6 +8,7 @@ Public surface:
 
 Phase 4's curriculum will call ``compute_stats`` → ``eligible_rank`` → ``set_rank``.
 """
+
 from tradefarm.academy.ranks import (
     RANK_ORDER,
     Rank,

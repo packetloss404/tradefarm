@@ -4,6 +4,7 @@ Uses stub Orchestrator / agent objects so the polling logic can be exercised
 without touching the DB, broker, or LLM. ``publish_event`` is patched to a
 list-appender so we can inspect every macro fire.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -323,10 +324,7 @@ async def test_payload_omits_optional_when_unset(monkeypatch):
 
 async def test_no_threshold_crossings_no_fires(monkeypatch):
     monkeypatch.setattr(settings, "agent_starting_capital", 1000.0)
-    agents = [
-        _make_agent(agent_id=i, name=f"agent-{i:03d}", equity=1020.0)
-        for i in range(5)
-    ]
+    agents = [_make_agent(agent_id=i, name=f"agent-{i:03d}", equity=1020.0) for i in range(5)]
     orch = _StubOrch(agents=agents, last_marks={"SPY": 400.0})
     director = AutoDirector(orch=orch)  # type: ignore[arg-type]
 

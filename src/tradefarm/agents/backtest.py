@@ -3,6 +3,7 @@
 Replays EOD bars in order, predicts with data ≤ t only, simulates the
 LstmAgent decision rule (full-notional long/flat), and reports summary stats.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from tradefarm.agents.features import featurize, make_windows
+from tradefarm.agents.features import WARMUP_BARS, featurize, make_windows
 from tradefarm.agents.lstm_model import FittedModel, load
 from tradefarm.data.eodhd import EodhdClient
 from tradefarm.data.universe import default_universe
@@ -33,7 +34,9 @@ async def _fetch(symbol: str) -> pd.DataFrame | None:
     return df.sort_values("date").reset_index(drop=True)
 
 
-def _predict_series(fitted: FittedModel, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _predict_series(
+    fitted: FittedModel, df: pd.DataFrame
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """For every bar with enough history, return (indices-into-df, pred_class, max_prob).
 
     Each prediction at position i uses only feature rows up to i (no leak), because
@@ -45,9 +48,11 @@ def _predict_series(fitted: FittedModel, df: pd.DataFrame) -> tuple[np.ndarray, 
     if len(X_win) == 0:
         return np.empty(0, dtype=int), np.empty(0, dtype=int), np.empty(0, dtype=float)
 
-    # featurize drops rows where next_ret is NaN (the last bar). Windows start at
-    # the seq_len-th feature row, which corresponds to df index (seq_len - 1).
-    df_start = seq_len - 1
+    # featurize drops `WARMUP_BARS` leading rows (rolling-stat warmup
+    # contamination — see features.py) and the trailing rows where the
+    # forward label is NaN. Windows start at the seq_len-th surviving
+    # feature row, which corresponds to df index (WARMUP_BARS + seq_len - 1).
+    df_start = WARMUP_BARS + seq_len - 1
     preds = np.empty(len(X_win), dtype=int)
     max_probs = np.empty(len(X_win), dtype=float)
     for i, w in enumerate(X_win):
@@ -135,7 +140,7 @@ async def _backtest_async(symbol: str) -> dict:
     if fitted is None:
         return {"symbol": symbol, "error": "no_model"}
     df = await _fetch(symbol)
-    if df is None or len(df) < fitted.model.cfg.seq_len + 2:
+    if df is None or len(df) < WARMUP_BARS + fitted.model.cfg.seq_len + 2:
         return {"symbol": symbol, "error": "insufficient_history"}
     idx, preds, max_probs = _predict_series(fitted, df)
     if len(idx) == 0:

@@ -8,6 +8,7 @@ Manifest event shape (matches src/tradefarm/session/run.py):
   {"t": ISO, "kind": "fill"|"decision", "agent_id": int,
    "agent_name": str, "payload": {...}}
 """
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,6 @@ from typing import Any
 import pytest
 
 from tradefarm.session.beats import (
-    Beat,
     DetectorThresholds,
     SCENE_FOR_KIND,
     _agent_pnl_from_fills,
@@ -61,7 +61,9 @@ def _fill(
     }
 
 
-def _manifest(events: list[dict[str, Any]], *, started: datetime | None = None, ended: datetime | None = None) -> dict[str, Any]:
+def _manifest(
+    events: list[dict[str, Any]], *, started: datetime | None = None, ended: datetime | None = None
+) -> dict[str, Any]:
     started = started or OPEN
     ended = ended or CLOSE
     return {
@@ -106,8 +108,8 @@ def test_big_fill_above_threshold_fires():
     """A fill above the min-notional threshold becomes a big_fill beat
     with a score that scales linearly toward 1.0 at the full threshold."""
     th = DetectorThresholds(big_fill_notional_min=5_000, big_fill_notional_full=10_000)
-    f1 = _fill(agent_id=1, t=OPEN + timedelta(minutes=10), price=100.0, qty=80)   # $8k
-    f2 = _fill(agent_id=2, t=OPEN + timedelta(minutes=20), price=100.0, qty=10)   # $1k (skipped)
+    f1 = _fill(agent_id=1, t=OPEN + timedelta(minutes=10), price=100.0, qty=80)  # $8k
+    f2 = _fill(agent_id=2, t=OPEN + timedelta(minutes=20), price=100.0, qty=10)  # $1k (skipped)
     beats = detect_beats(_manifest([f1, f2]), thresholds=th)
     bigs = [b for b in beats if b.kind == "big_fill"]
     assert len(bigs) == 1
@@ -121,10 +123,23 @@ def test_top_winner_is_top_by_realized_pnl_from_paired_fills():
     entry-exit pairs in the manifest. agent 1 buys low + sells high,
     agent 2 buys high + sells low → 1 wins, 2 loses."""
     events = [
-        _fill(agent_id=1, name="winner", t=OPEN + timedelta(minutes=5), side="buy", qty=10, price=100),
-        _fill(agent_id=1, name="winner", t=OPEN + timedelta(minutes=30), side="sell", qty=10, price=110),
-        _fill(agent_id=2, name="loser", t=OPEN + timedelta(minutes=5), side="buy", qty=10, price=100),
-        _fill(agent_id=2, name="loser", t=OPEN + timedelta(minutes=30), side="sell", qty=10, price=90),
+        _fill(
+            agent_id=1, name="winner", t=OPEN + timedelta(minutes=5), side="buy", qty=10, price=100
+        ),
+        _fill(
+            agent_id=1,
+            name="winner",
+            t=OPEN + timedelta(minutes=30),
+            side="sell",
+            qty=10,
+            price=110,
+        ),
+        _fill(
+            agent_id=2, name="loser", t=OPEN + timedelta(minutes=5), side="buy", qty=10, price=100
+        ),
+        _fill(
+            agent_id=2, name="loser", t=OPEN + timedelta(minutes=30), side="sell", qty=10, price=90
+        ),
     ]
     beats = detect_beats(_manifest(events))
     winners = [b for b in beats if b.kind == "top_winner"]
@@ -140,11 +155,29 @@ def test_divergence_pairs_opposite_sides_inside_window():
     """Two agents take opposite sides on AAPL inside the divergence
     window → one divergence beat. Two agents same side → none."""
     events = [
-        _fill(agent_id=1, symbol="AAPL", side="buy", qty=20, price=100, t=OPEN + timedelta(minutes=10)),
-        _fill(agent_id=2, symbol="AAPL", side="sell", qty=20, price=100, t=OPEN + timedelta(minutes=10, seconds=15)),
+        _fill(
+            agent_id=1, symbol="AAPL", side="buy", qty=20, price=100, t=OPEN + timedelta(minutes=10)
+        ),
+        _fill(
+            agent_id=2,
+            symbol="AAPL",
+            side="sell",
+            qty=20,
+            price=100,
+            t=OPEN + timedelta(minutes=10, seconds=15),
+        ),
         # Same side — should NOT produce a divergence.
-        _fill(agent_id=3, symbol="MSFT", side="buy", qty=10, price=200, t=OPEN + timedelta(minutes=11)),
-        _fill(agent_id=4, symbol="MSFT", side="buy", qty=10, price=200, t=OPEN + timedelta(minutes=11, seconds=10)),
+        _fill(
+            agent_id=3, symbol="MSFT", side="buy", qty=10, price=200, t=OPEN + timedelta(minutes=11)
+        ),
+        _fill(
+            agent_id=4,
+            symbol="MSFT",
+            side="buy",
+            qty=10,
+            price=200,
+            t=OPEN + timedelta(minutes=11, seconds=10),
+        ),
     ]
     beats = detect_beats(_manifest(events))
     divs = [b for b in beats if b.kind == "divergence"]
@@ -157,8 +190,17 @@ def test_divergence_window_respected():
     """Opposite sides far apart in time do NOT form a divergence."""
     th = DetectorThresholds(divergence_window_sec=30.0)
     events = [
-        _fill(agent_id=1, symbol="AAPL", side="buy", qty=20, price=100, t=OPEN + timedelta(minutes=10)),
-        _fill(agent_id=2, symbol="AAPL", side="sell", qty=20, price=100, t=OPEN + timedelta(minutes=20)),
+        _fill(
+            agent_id=1, symbol="AAPL", side="buy", qty=20, price=100, t=OPEN + timedelta(minutes=10)
+        ),
+        _fill(
+            agent_id=2,
+            symbol="AAPL",
+            side="sell",
+            qty=20,
+            price=100,
+            t=OPEN + timedelta(minutes=20),
+        ),
     ]
     beats = detect_beats(_manifest(events), thresholds=th)
     assert not [b for b in beats if b.kind == "divergence"]
@@ -171,8 +213,14 @@ def test_streak_fires_at_or_above_min_length():
     base = OPEN + timedelta(minutes=5)
     for i in range(5):
         # Buy 10 @ 100, sell 10 @ 105 → +$50 realized each round.
-        events.append(_fill(agent_id=1, side="buy", qty=10, price=100, t=base + timedelta(minutes=i * 10)))
-        events.append(_fill(agent_id=1, side="sell", qty=10, price=105, t=base + timedelta(minutes=i * 10 + 1)))
+        events.append(
+            _fill(agent_id=1, side="buy", qty=10, price=100, t=base + timedelta(minutes=i * 10))
+        )
+        events.append(
+            _fill(
+                agent_id=1, side="sell", qty=10, price=105, t=base + timedelta(minutes=i * 10 + 1)
+            )
+        )
     beats = detect_beats(_manifest(events))
     streaks = [b for b in beats if b.kind == "streak"]
     assert len(streaks) == 1
@@ -186,10 +234,28 @@ def test_streak_resets_on_loss():
     events: list[dict[str, Any]] = []
     base = OPEN + timedelta(minutes=5)
     # 2 winners, 1 loser, 4 winners → longest run = 4.
-    pattern = [(105, "win"), (105, "win"), (95, "loss"), (105, "win"), (105, "win"), (105, "win"), (105, "win")]
+    pattern = [
+        (105, "win"),
+        (105, "win"),
+        (95, "loss"),
+        (105, "win"),
+        (105, "win"),
+        (105, "win"),
+        (105, "win"),
+    ]
     for i, (sell_price, _) in enumerate(pattern):
-        events.append(_fill(agent_id=1, side="buy", qty=10, price=100, t=base + timedelta(minutes=i * 10)))
-        events.append(_fill(agent_id=1, side="sell", qty=10, price=sell_price, t=base + timedelta(minutes=i * 10 + 1)))
+        events.append(
+            _fill(agent_id=1, side="buy", qty=10, price=100, t=base + timedelta(minutes=i * 10))
+        )
+        events.append(
+            _fill(
+                agent_id=1,
+                side="sell",
+                qty=10,
+                price=sell_price,
+                t=base + timedelta(minutes=i * 10 + 1),
+            )
+        )
     beats = detect_beats(_manifest(events))
     streaks = [b for b in beats if b.kind == "streak"]
     assert len(streaks) == 1
@@ -206,7 +272,9 @@ def test_closing_burst_fires_when_density_spikes():
     # 12 fills in the last 9 minutes
     burst_start = CLOSE - timedelta(minutes=9)
     for i in range(12):
-        events.append(_fill(agent_id=20 + i, t=burst_start + timedelta(minutes=i * 0.7), qty=1, price=100))
+        events.append(
+            _fill(agent_id=20 + i, t=burst_start + timedelta(minutes=i * 0.7), qty=1, price=100)
+        )
     beats = detect_beats(_manifest(events))
     bursts = [b for b in beats if b.kind == "closing_burst"]
     assert len(bursts) == 1
@@ -216,8 +284,7 @@ def test_closing_burst_fires_when_density_spikes():
 def test_uniform_fills_dont_trigger_closing_burst():
     """Fill rate flat across the session → no burst beat."""
     events = [
-        _fill(agent_id=i, t=OPEN + timedelta(minutes=i * 30), qty=1, price=100)
-        for i in range(12)
+        _fill(agent_id=i, t=OPEN + timedelta(minutes=i * 30), qty=1, price=100) for i in range(12)
     ]
     beats = detect_beats(_manifest(events))
     assert not [b for b in beats if b.kind == "closing_burst"]
@@ -231,8 +298,17 @@ def test_dedup_collapses_same_agent_symbol_close_in_time():
     should not both survive — the higher-scoring wins."""
     th = DetectorThresholds(big_fill_notional_min=1_000, big_fill_notional_full=2_000)
     events = [
-        _fill(agent_id=1, symbol="AAPL", side="buy", qty=15, price=100, t=OPEN + timedelta(minutes=10)),  # $1500
-        _fill(agent_id=1, symbol="AAPL", side="sell", qty=20, price=100, t=OPEN + timedelta(minutes=10, seconds=30)),  # $2000
+        _fill(
+            agent_id=1, symbol="AAPL", side="buy", qty=15, price=100, t=OPEN + timedelta(minutes=10)
+        ),  # $1500
+        _fill(
+            agent_id=1,
+            symbol="AAPL",
+            side="sell",
+            qty=20,
+            price=100,
+            t=OPEN + timedelta(minutes=10, seconds=30),
+        ),  # $2000
     ]
     beats = detect_beats(_manifest(events), thresholds=th)
     bigs = [b for b in beats if b.kind == "big_fill"]
@@ -284,7 +360,9 @@ def test_every_beat_has_a_known_scene_hint():
     Beat Picker preview pane knows what vignette to draw."""
     events = [
         _fill(agent_id=1, t=OPEN + timedelta(minutes=10), qty=80, price=100),
-        _fill(agent_id=2, t=OPEN + timedelta(minutes=10, seconds=15), side="sell", qty=80, price=100),
+        _fill(
+            agent_id=2, t=OPEN + timedelta(minutes=10, seconds=15), side="sell", qty=80, price=100
+        ),
     ]
     beats = detect_beats(_manifest(events))
     for b in beats:
@@ -296,7 +374,9 @@ def test_event_refs_index_into_manifest():
     events list — the headless renderer dereferences these."""
     events = [
         _fill(agent_id=1, t=OPEN + timedelta(minutes=10), qty=80, price=100),
-        _fill(agent_id=2, t=OPEN + timedelta(minutes=10, seconds=15), side="sell", qty=80, price=100),
+        _fill(
+            agent_id=2, t=OPEN + timedelta(minutes=10, seconds=15), side="sell", qty=80, price=100
+        ),
     ]
     manifest = _manifest(events)
     beats = detect_beats(manifest)
@@ -346,11 +426,11 @@ def test_cli_writes_beats_next_to_manifest(tmp_path: Path, capsys: pytest.Captur
     manifest_dir.mkdir(parents=True)
     events = [
         _fill(agent_id=1, t=OPEN + timedelta(minutes=10), qty=80, price=100),
-        _fill(agent_id=2, t=OPEN + timedelta(minutes=10, seconds=15), side="sell", qty=80, price=100),
+        _fill(
+            agent_id=2, t=OPEN + timedelta(minutes=10, seconds=15), side="sell", qty=80, price=100
+        ),
     ]
-    (manifest_dir / "manifest.json").write_text(
-        json.dumps(_manifest(events)), encoding="utf-8"
-    )
+    (manifest_dir / "manifest.json").write_text(json.dumps(_manifest(events)), encoding="utf-8")
     main([session_id, "--out", str(sessions_dir)])
     beats_path = manifest_dir / "beats.json"
     assert beats_path.is_file()

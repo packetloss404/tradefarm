@@ -3,6 +3,7 @@
 Pulled out of `llm_overlay.py` so `llm_providers.py` can import them without
 a cycle (overlay imports providers; providers need LlmContext/LlmDecision).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

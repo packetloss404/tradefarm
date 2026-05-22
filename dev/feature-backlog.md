@@ -55,16 +55,19 @@ The next things to actually pick up. Cross-surface, prioritized by
 1. `[stream]` **Tick countdown ring + equity sparkline in TopTicker**
    (2.1 + 2.2). The two HUD missing pieces. Dashboard already has the
    countdown ring; the stream's `TopTicker` doesn't. Effort: S + M.
-2. `[stream]` **CSS-only CRT toggle** (5.1, css path). Instant retro
+2. `[stream][backend]` **Broadcast OS scheduler v1.** Consume
+   `broadcast_moment`, apply priority/TTL/cooldowns, and expose one active
+   slot per output type before the UI migrates off legacy events. Effort: M.
+3. `[stream]` **CSS-only CRT toggle** (5.1, css path). Instant retro
    vibe without WebGL. Effort: S.
-3. `[stream]` **Recap scene at 4pm ET** (4.5). Closes the broadcast
+4. `[stream]` **Recap scene at 4pm ET** (4.5). Closes the broadcast
    day; fifth rotator scene auto-shown after 16:00 ET. Effort: L.
-4. `[dashboard]` **Open-positions sparkline strip** above the agent
+5. `[dashboard]` **Open-positions sparkline strip** above the agent
    grid. One row per symbol with mark, P&L, qty. Effort: S. Source:
    `/positions`.
-5. `[dashboard]` **Keyboard map overlay** (`?`). Cheat sheet of every
+6. `[dashboard]` **Keyboard map overlay** (`?`). Cheat sheet of every
    shortcut. Effort: S.
-6. `[dashboard]` **API spend widget** from `/llm/stats` plus a daily
+7. `[dashboard]` **API spend widget** from `/llm/stats` plus a daily
    cap dial. Effort: S.
 
 ---

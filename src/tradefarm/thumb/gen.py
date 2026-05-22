@@ -25,13 +25,14 @@ available; otherwise omitted cleanly.
 
 System ffmpeg required (frame grab). Pillow required (overlay).
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -155,14 +156,24 @@ def _grab_frame(clip: Path, at_sec: float, out_png: Path) -> None:
     out_png.parent.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(
         [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-ss", f"{at_sec:.3f}",
-            "-i", str(clip),
-            "-vframes", "1",
-            "-q:v", "2",
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{at_sec:.3f}",
+            "-i",
+            str(clip),
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
             str(out_png),
         ],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg frame grab failed: {r.stderr.strip()[:300]}")
@@ -201,11 +212,9 @@ def _compose_thumb(
     """Render the final thumbnail: cover-fit the frame, dark gradient
     over the bottom-left, title text, optional badge."""
     try:
-        from PIL import Image, ImageDraw, ImageFilter, ImageFont
+        from PIL import Image, ImageDraw
     except ImportError as exc:  # pragma: no cover — env-dependent
-        raise RuntimeError(
-            "Pillow not installed. `uv sync --extra dev` to pick it up."
-        ) from exc
+        raise RuntimeError("Pillow not installed. `uv sync --extra dev` to pick it up.") from exc
 
     base = Image.open(frame_png).convert("RGB")
     # Cover-crop to the target aspect ratio.
@@ -261,12 +270,16 @@ def _compose_thumb(
         # Pill background.
         draw.rounded_rectangle(
             (bx0, by0, bx0 + bw, by0 + bh),
-            radius=12, fill=(20, 40, 28, 220),
-            outline=(52, 211, 153, 255), width=3,
+            radius=12,
+            fill=(20, 40, 28, 220),
+            outline=(52, 211, 153, 255),
+            width=3,
         )
         draw.text(
             (bx0 + 20, by0 + 8),
-            badge_text, font=badge_font, fill=(167, 243, 208, 255),
+            badge_text,
+            font=badge_font,
+            fill=(167, 243, 208, 255),
         )
 
     final = composed.convert("RGB")
@@ -278,6 +291,7 @@ def _load_font(size: int):
     """Pillow ImageFont — try a few well-known sans-serif paths, fall
     back to PIL's default if none are present."""
     from PIL import ImageFont
+
     candidates = (
         "C:/Windows/Fonts/segoeuib.ttf",
         "C:/Windows/Fonts/segoeui.ttf",
@@ -343,7 +357,10 @@ def make_thumbnail(
     started = time.perf_counter()
     base = sessions_dir or Path("out/sessions")
     plan = plan_thumb(
-        session_id=session_id, sessions_dir=base, width=width, height=height,
+        session_id=session_id,
+        sessions_dir=base,
+        width=width,
+        height=height,
     )
     if plan is None:
         return ThumbResult(
@@ -357,21 +374,28 @@ def make_thumbnail(
     try:
         _grab_frame(plan.source_clip, plan.grab_at_sec, tmp_png)
         _compose_thumb(
-            frame_png=tmp_png, out_path=plan.out_path,
-            title=plan.title, badge_text=plan.badge_text,
-            width=plan.width, height=plan.height, quality=quality,
+            frame_png=tmp_png,
+            out_path=plan.out_path,
+            title=plan.title,
+            badge_text=plan.badge_text,
+            width=plan.width,
+            height=plan.height,
+            quality=quality,
         )
     except Exception as exc:  # noqa: BLE001
         plan.out_path.unlink(missing_ok=True)
         return ThumbResult(
-            ok=False, plan=plan,
+            ok=False,
+            plan=plan,
             elapsed_ms=(time.perf_counter() - started) * 1000,
             error=f"{type(exc).__name__}: {exc}",
         )
     finally:
         tmp_png.unlink(missing_ok=True)
     return ThumbResult(
-        ok=True, plan=plan, out_path=plan.out_path,
+        ok=True,
+        plan=plan,
+        out_path=plan.out_path,
         elapsed_ms=(time.perf_counter() - started) * 1000,
     )
 
@@ -388,16 +412,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, default=Path("out/sessions"))
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
-    parser.add_argument("--quality", type=int, default=DEFAULT_QUALITY,
-                        help="JPEG quality 1-100 (default 88).")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print the plan without invoking ffmpeg / Pillow.")
+    parser.add_argument(
+        "--quality", type=int, default=DEFAULT_QUALITY, help="JPEG quality 1-100 (default 88)."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print the plan without invoking ffmpeg / Pillow."
+    )
     args = parser.parse_args(argv)
 
     result = make_thumbnail(
         args.session_id,
         sessions_dir=args.out,
-        width=args.width, height=args.height, quality=args.quality,
+        width=args.width,
+        height=args.height,
+        quality=args.quality,
         dry_run=args.dry_run,
     )
     if args.dry_run and result.plan is not None:
@@ -410,7 +438,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"out={p.out_path}")
         return
     if not result.ok:
-        print(f"FAIL: {result.error}", file=__import__('sys').stderr)
+        print(f"FAIL: {result.error}", file=__import__("sys").stderr)
         raise SystemExit(1)
     print(
         f"session_id={args.session_id}\n"

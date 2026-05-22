@@ -1,4 +1,5 @@
 """parse_command — happy paths + malformed inputs."""
+
 from __future__ import annotations
 
 from tradefarm.orchestrator.chat_commands import (

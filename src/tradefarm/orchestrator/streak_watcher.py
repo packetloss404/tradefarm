@@ -22,6 +22,7 @@ require that the streak be "uninterrupted from the beginning of time" — only
 the last N matter. So ``L W W W`` *does* trip the 3-wins detector. This keeps
 the predicate stable across long histories.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -66,6 +67,7 @@ def _utcnow() -> datetime:
     # timestamp — the "awake" / "quiet" gaps then measure session time,
     # not wall-clock real time.
     from tradefarm.runtime.clock import now_utc
+
     return now_utc()
 
 
@@ -92,9 +94,9 @@ def _closed_outcomes(notes: list[dict]) -> list[dict]:
     a defensive re-sort + filter).
     """
     closed = [
-        n for n in notes
-        if n.get("outcome_realized_pnl") is not None
-        and n.get("outcome_closed_at") is not None
+        n
+        for n in notes
+        if n.get("outcome_realized_pnl") is not None and n.get("outcome_closed_at") is not None
     ]
     closed.sort(key=lambda n: n.get("outcome_closed_at") or "", reverse=True)
     return closed
@@ -165,10 +167,12 @@ class StreakWatcher:
         # 100 sequential round-trips per 10s poll = real DB pressure;
         # asyncio.gather collapses them to one batch of concurrent
         # queries (SessionLocal handles its own session per call).
-        notes_results = await asyncio.gather(*[
-            journal.recent_outcomes(agent.state.id, self.history_limit)
-            for agent in self.orch.agents
-        ])
+        notes_results = await asyncio.gather(
+            *[
+                journal.recent_outcomes(agent.state.id, self.history_limit)
+                for agent in self.orch.agents
+            ]
+        )
         per_agent_notes: dict[int, list[dict]] = {
             agent.state.id: notes
             for agent, notes in zip(self.orch.agents, notes_results, strict=True)
@@ -221,32 +225,39 @@ class StreakWatcher:
         if len(closed) >= WIN_STREAK_LEN and all(
             (n["outcome_realized_pnl"] or 0.0) > 0 for n in closed[:WIN_STREAK_LEN]
         ):
-            out.append({
-                "id": f"streak-win3-{agent_id}",
-                "label": f"{name} on a heater",
-                "color": "profit",
-                "subtitle": f"{WIN_STREAK_LEN} wins straight",
-                "agent_id": agent_id,
-                "trigger": "win_streak",
-            })
+            out.append(
+                {
+                    "id": f"streak-win3-{agent_id}",
+                    "label": f"{name} on a heater",
+                    "color": "profit",
+                    "subtitle": f"{WIN_STREAK_LEN} wins straight",
+                    "agent_id": agent_id,
+                    "trigger": "win_streak",
+                }
+            )
 
         # Loss streak: last LOSS_STREAK_LEN closed outcomes all negative.
         if len(closed) >= LOSS_STREAK_LEN and all(
             (n["outcome_realized_pnl"] or 0.0) < 0 for n in closed[:LOSS_STREAK_LEN]
         ):
-            out.append({
-                "id": f"streak-loss5-{agent_id}",
-                "label": f"{name} ice cold",
-                "color": "loss",
-                "subtitle": f"{LOSS_STREAK_LEN} in a row red",
-                "agent_id": agent_id,
-                "trigger": "loss_streak",
-            })
+            out.append(
+                {
+                    "id": f"streak-loss5-{agent_id}",
+                    "label": f"{name} ice cold",
+                    "color": "loss",
+                    "subtitle": f"{LOSS_STREAK_LEN} in a row red",
+                    "agent_id": agent_id,
+                    "trigger": "loss_streak",
+                }
+            )
 
         return out
 
     def _collect_awake_macro(
-        self, agent: Any, notes: list[dict], now: datetime,
+        self,
+        agent: Any,
+        notes: list[dict],
+        now: datetime,
     ) -> dict | None:
         closed = _closed_outcomes(notes)
         if len(closed) < 2:
@@ -282,7 +293,9 @@ class StreakWatcher:
     # ------------------------------------------------------------------
 
     def _collect_day_leader_macros(
-        self, per_agent_notes: dict[int, list[dict]], now: datetime,
+        self,
+        per_agent_notes: dict[int, list[dict]],
+        now: datetime,
     ) -> list[dict]:
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         # Flatten all closed outcomes stamped today.
@@ -319,27 +332,31 @@ class StreakWatcher:
             prev = self._bigwin_leader
             if prev is None or best[2] > prev[1]:
                 self._bigwin_leader = (best[0], best[2])
-                out.append({
-                    "id": "streak-bigwin-day",
-                    "label": "Trade of the day",
-                    "color": "profit",
-                    "subtitle": f"{best[1]}: +${best[2]:.0f}",
-                    "agent_id": best[0],
-                    "trigger": "bigwin_day",
-                })
+                out.append(
+                    {
+                        "id": "streak-bigwin-day",
+                        "label": "Trade of the day",
+                        "color": "profit",
+                        "subtitle": f"{best[1]}: +${best[2]:.0f}",
+                        "agent_id": best[0],
+                        "trigger": "bigwin_day",
+                    }
+                )
 
         if worst[2] < 0:
             prev = self._bigloss_leader
             if prev is None or worst[2] < prev[1]:
                 self._bigloss_leader = (worst[0], worst[2])
-                out.append({
-                    "id": "streak-bigloss-day",
-                    "label": "Wipeout of the day",
-                    "color": "loss",
-                    "subtitle": f"{worst[1]}: −${abs(worst[2]):.0f}",
-                    "agent_id": worst[0],
-                    "trigger": "bigloss_day",
-                })
+                out.append(
+                    {
+                        "id": "streak-bigloss-day",
+                        "label": "Wipeout of the day",
+                        "color": "loss",
+                        "subtitle": f"{worst[1]}: −${abs(worst[2]):.0f}",
+                        "agent_id": worst[0],
+                        "trigger": "bigloss_day",
+                    }
+                )
 
         return out
 

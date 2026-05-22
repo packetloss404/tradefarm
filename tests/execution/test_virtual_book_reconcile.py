@@ -1,6 +1,7 @@
 """Reconciler ↔ virtual book correctness across short opens, flips,
 partial closes — the cases the previous `apply_fill_delta` got wrong.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -32,7 +33,11 @@ def test_apply_reconciled_add_to_position_does_not_book_phantom_pnl():
     assert b.positions["AAA"].avg_price == pytest.approx(96.6666666, rel=1e-4)
 
     applied = b.apply_reconciled_fill(
-        "AAA", "buy", 10, mark_price=100.0, actual_price=99.0,
+        "AAA",
+        "buy",
+        10,
+        mark_price=100.0,
+        actual_price=99.0,
         broker_order_id="o1",
     )
     assert applied
@@ -52,7 +57,11 @@ def test_apply_reconciled_buy_open_corrects_cash_and_avg_price():
     assert b.positions["AAA"].avg_price == 100.0
 
     applied = b.apply_reconciled_fill(
-        "AAA", "buy", 10, mark_price=100.0, actual_price=100.10,
+        "AAA",
+        "buy",
+        10,
+        mark_price=100.0,
+        actual_price=100.10,
         broker_order_id="o1",
     )
     assert applied
@@ -74,7 +83,11 @@ def test_apply_reconciled_short_open_was_broken_now_correct():
     assert b.positions["AAA"].avg_price == 200.0
 
     applied = b.apply_reconciled_fill(
-        "AAA", "sell", 10, mark_price=200.0, actual_price=200.10,
+        "AAA",
+        "sell",
+        10,
+        mark_price=200.0,
+        actual_price=200.10,
         broker_order_id="o1",
     )
     assert applied
@@ -101,7 +114,11 @@ def test_apply_reconciled_long_to_short_flip_in_one_fill():
     # Reconcile with actual 110.20 (paid 0.20 more per share on the
     # whole 15-qty fill, but only 10 closed and 5 opened a new short).
     applied = b.apply_reconciled_fill(
-        "AAA", "sell", 15, mark_price=110.0, actual_price=110.20,
+        "AAA",
+        "sell",
+        15,
+        mark_price=110.0,
+        actual_price=110.20,
         broker_order_id="o1",
     )
     assert applied
@@ -124,7 +141,11 @@ def test_apply_reconciled_buy_to_cover_short():
     assert b.positions["AAA"].qty == 0
 
     applied = b.apply_reconciled_fill(
-        "AAA", "buy", 10, mark_price=190.0, actual_price=189.0,
+        "AAA",
+        "buy",
+        10,
+        mark_price=190.0,
+        actual_price=189.0,
         broker_order_id="o1",
     )
     assert applied
@@ -138,11 +159,19 @@ def test_apply_reconciled_is_idempotent_on_broker_id():
     b = _book()
     b.record_fill("AAA", "buy", 10, 100.0)
     first = b.apply_reconciled_fill(
-        "AAA", "buy", 10, mark_price=100.0, actual_price=100.10,
+        "AAA",
+        "buy",
+        10,
+        mark_price=100.0,
+        actual_price=100.10,
         broker_order_id="o1",
     )
     second = b.apply_reconciled_fill(
-        "AAA", "buy", 10, mark_price=100.0, actual_price=100.10,
+        "AAA",
+        "buy",
+        10,
+        mark_price=100.0,
+        actual_price=100.10,
         broker_order_id="o1",
     )
     assert first is True
@@ -158,7 +187,11 @@ def test_apply_reconciled_no_op_when_mark_equals_actual():
     b.record_fill("AAA", "buy", 10, 100.0)
     cash_before = b.cash
     applied = b.apply_reconciled_fill(
-        "AAA", "buy", 10, mark_price=100.0, actual_price=100.0,
+        "AAA",
+        "buy",
+        10,
+        mark_price=100.0,
+        actual_price=100.0,
         broker_order_id="o1",
     )
     assert applied

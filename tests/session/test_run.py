@@ -8,6 +8,7 @@ agent waits and no fills materialize. The point is to prove the
 pipeline integrates — the manifest writes, the DB columns get the
 session_id contextvar, no exceptions leak.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,12 +46,14 @@ async def session_smoke(monkeypatch, tmp_path):
     # Tiny roster + no LLM credentials so the overlay falls back to None
     # and lstm_llm slots degrade to momentum cleanly.
     from tradefarm.config import settings
+
     monkeypatch.setattr(settings, "agent_count", 3)
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     monkeypatch.setattr(settings, "minimax_api_key", "")
 
     # Force every agent slot to momentum by making model_path always miss.
     import tradefarm.orchestrator.scheduler as scheduler_mod
+
     monkeypatch.setattr(scheduler_mod, "model_path", lambda symbol: Path("/nonexistent-models"))
 
     # Stub EODHD so no network and the orchestrator gets empty bars

@@ -9,6 +9,7 @@
 
 A third can be added by implementing the `decide(ctx) -> LlmDecision` coroutine.
 """
+
 from __future__ import annotations
 
 import json

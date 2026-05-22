@@ -13,7 +13,9 @@ BASE_MAX_POSITION_NOTIONAL_PCT = 0.25
 
 @dataclass
 class RiskLimits:
-    max_position_notional_pct: float = BASE_MAX_POSITION_NOTIONAL_PCT  # of starting capital per symbol
+    max_position_notional_pct: float = (
+        BASE_MAX_POSITION_NOTIONAL_PCT  # of starting capital per symbol
+    )
     stop_loss_pct: float = 0.03
     trailing_stop_pct: float = 0.02
     daily_loss_limit_pct: float = 0.05
@@ -33,7 +35,8 @@ class RiskDecision:
 @dataclass
 class ExitTrigger:
     """Why the RiskManager says an open position should close now."""
-    kind: str    # "stop-loss" | "take-profit" | "time-stop" | "trailing-stop"
+
+    kind: str  # "stop-loss" | "take-profit" | "time-stop" | "trailing-stop"
     reason: str  # human-readable detail with the actual numbers
 
 
@@ -69,6 +72,7 @@ class RiskManager:
         """Build RiskLimits from the live settings. Lazy-imported so the
         module stays import-safe during config bootstrap."""
         from tradefarm.config import settings
+
         return RiskLimits(
             max_position_notional_pct=BASE_MAX_POSITION_NOTIONAL_PCT,
             stop_loss_pct=settings.risk_stop_loss_pct,
@@ -81,6 +85,7 @@ class RiskManager:
     def _apply_rank_multiplier(self) -> None:
         # Lazy import keeps `risk.manager` import-safe during config bootstrap.
         from tradefarm.config import settings
+
         multiplier = settings.rank_multiplier(self.rank)
         # Audit fix (H21): when the caller passed an explicit RiskLimits
         # the position cap they supplied is authoritative — DO NOT
@@ -88,9 +93,7 @@ class RiskManager:
         # silently clobbered tests / call sites that injected a tighter
         # or looser cap. Only recompute from BASE for the implicit path.
         if not self._limits_explicit:
-            self.limits.max_position_notional_pct = (
-                BASE_MAX_POSITION_NOTIONAL_PCT * multiplier
-            )
+            self.limits.max_position_notional_pct = BASE_MAX_POSITION_NOTIONAL_PCT * multiplier
 
     def check_entry(
         self,
@@ -111,16 +114,16 @@ class RiskManager:
         # entirely. Cap is now against the *total* notional including the
         # current position at mark.
         existing = book.positions.get(symbol)
-        existing_notional = (
-            abs(existing.qty) * price if existing is not None else 0.0
-        )
+        existing_notional = abs(existing.qty) * price if existing is not None else 0.0
         total_notional = notional + existing_notional
 
         # Audit fix (H18): cap was anchored to starting_capital, so a
         # losing agent's cap stayed at 25% of starting (= 50%+ of current
         # equity at drawdown). Clamp by min(starting, current_equity).
-        equity = book.equity(marks or {}) if marks else book.cash + (
-            existing_notional if existing else 0.0
+        equity = (
+            book.equity(marks or {})
+            if marks
+            else book.cash + (existing_notional if existing else 0.0)
         )
         cap_anchor = min(self.starting_capital, max(0.0, equity))
         cap = cap_anchor * self.limits.max_position_notional_pct
@@ -171,6 +174,7 @@ class RiskManager:
             # days. A position opened Friday hitting "10 days" Monday-
             # after-next was wrong — most of those "days" were closures.
             from tradefarm.market.hours import trading_days_between
+
             try:
                 days = trading_days_between(pos.opened_at, now)
             except Exception:  # pragma: no cover — best-effort
@@ -190,9 +194,7 @@ class RiskManager:
         # so a stale-peak doesn't instantly trip the trailing-stop on
         # the new position.
         peak_seeded_at = self._peak_seeded_at.get(symbol)
-        if peak_seeded_at is None or (
-            pos.opened_at is not None and pos.opened_at > peak_seeded_at
-        ):
+        if peak_seeded_at is None or (pos.opened_at is not None and pos.opened_at > peak_seeded_at):
             self._peak[symbol] = pos.avg_price
             self._peak_seeded_at[symbol] = pos.opened_at or now
 
@@ -201,7 +203,9 @@ class RiskManager:
         if peak > 0:
             trail_pct = (mark - peak) / peak
             if trail_pct <= -trail_pct_threshold:
-                return ExitTrigger("trailing-stop", f"trailing {trail_pct:+.2%} off peak {peak:.2f}")
+                return ExitTrigger(
+                    "trailing-stop", f"trailing {trail_pct:+.2%} off peak {peak:.2f}"
+                )
 
         return None
 
@@ -225,6 +229,7 @@ class RiskManager:
                 self.limits.max_hold_days,
             )
         from tradefarm.config import settings
+
         return (
             settings.risk_stop_loss_pct,
             settings.risk_take_profit_pct,

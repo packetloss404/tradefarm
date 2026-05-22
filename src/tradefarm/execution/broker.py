@@ -22,8 +22,7 @@ class Broker(Protocol):
         agent_id: int,
         client_tag: str,
         mark: float,
-    ) -> Fill | None:
-        ...
+    ) -> Fill | None: ...
 
 
 class SimulatedBroker:
@@ -40,4 +39,6 @@ class SimulatedBroker:
         client_tag: str,
         mark: float,
     ) -> Fill | None:
-        return Fill(symbol=symbol, side=side, qty=qty, price=mark, broker_order_id=f"sim-{client_tag}")
+        return Fill(
+            symbol=symbol, side=side, qty=qty, price=mark, broker_order_id=f"sim-{client_tag}"
+        )

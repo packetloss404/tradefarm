@@ -8,9 +8,10 @@ Covers fixes for:
   - Headless renderer session_id path-traversal guard
   - auto_tick_interval_sec default flipped from 0 to 300
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -72,6 +73,7 @@ def test_streak_watcher_utcnow_honours_replay_clock():
 def test_clock_helper_falls_back_to_wall_when_no_override():
     """No leakage: when no override is set the helpers return real now."""
     from tradefarm.api.events import _now_iso
+
     before = datetime.now(timezone.utc)
     ts = datetime.fromisoformat(_now_iso())
     after = datetime.now(timezone.utc)

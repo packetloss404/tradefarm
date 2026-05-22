@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pandas as pd
 import structlog
@@ -112,6 +112,7 @@ def _safe_build_overlay() -> LlmOverlay | None:
 def _build_broker() -> Broker:
     if settings.execution_mode == "alpaca_paper":
         from tradefarm.execution.alpaca_broker import AlpacaBroker
+
         return AlpacaBroker()
     return SimulatedBroker()
 
@@ -150,6 +151,7 @@ class Orchestrator:
         # globals, and stop_background never uninstalled them).
         from tradefarm.orchestrator.broadcast_recap import BroadcastRecapLedger
         from tradefarm.orchestrator.broadcast_scheduler import BroadcastScheduler
+
         self._broadcast_ledger = BroadcastRecapLedger()
         self._broadcast_scheduler = BroadcastScheduler()
         # Auto-director — broadcasts macros based on agent/market state.
@@ -212,11 +214,15 @@ class Orchestrator:
     async def persist_initial_state(self) -> None:
         for a in self.agents:
             await repo.upsert_agent(
-                a.state.id, a.state.name, a.state.strategy, settings.agent_starting_capital,
+                a.state.id,
+                a.state.name,
+                a.state.strategy,
+                settings.agent_starting_capital,
             )
 
     async def _load_bars(self, symbols: list[str]) -> dict[str, pd.DataFrame]:
         from tradefarm.runtime.clock import today_utc
+
         end = today_utc()
         start = end - timedelta(days=180)
         out: dict[str, pd.DataFrame] = {}
@@ -245,8 +251,7 @@ class Orchestrator:
         symbols = [s for s in symbols if s]
         bars = await self._load_bars(symbols)
         marks: dict[str, float] = {
-            s: float(df["adjusted_close"].iloc[-1])
-            for s, df in bars.items() if not df.empty
+            s: float(df["adjusted_close"].iloc[-1]) for s, df in bars.items() if not df.empty
         }
         self.last_marks = marks
         # Use the injectable clock so replay sessions stamp last_tick_at
@@ -305,10 +310,7 @@ class Orchestrator:
         # something went wrong upstream and we let the next risk check
         # re-queue it rather than blocking forever.
         now_ts = now_utc.timestamp()
-        stale = [
-            k for k, ts in self._pending_exits.items()
-            if now_ts - ts > PENDING_EXIT_TTL_SEC
-        ]
+        stale = [k for k, ts in self._pending_exits.items() if now_ts - ts > PENDING_EXIT_TTL_SEC]
         for k in stale:
             self._pending_exits.pop(k, None)
 
@@ -334,7 +336,9 @@ class Orchestrator:
                 a_ref, sigs = entry
                 # Drop any brain-emitted sell for the same symbol (risk wins).
                 sigs = [s for s in sigs if not (s.symbol == sym and s.side == "sell")]
-                sigs.append(Signal(sym, "sell", round(pos.qty, 4), reason=f"risk-exit: {trig.reason}"))
+                sigs.append(
+                    Signal(sym, "sell", round(pos.qty, 4), reason=f"risk-exit: {trig.reason}")
+                )
                 results_by_id[agent.state.id] = (a_ref, sigs)
                 self._pending_exits[(agent.state.id, sym)] = now_ts
                 risk_exits_added += 1
@@ -355,14 +359,23 @@ class Orchestrator:
                     decision = agent.risk.check_entry(agent.state.book, sig.symbol, sig.qty, px)
                     if not decision.allow:
                         blocked += 1
-                        log.info("risk_blocked", agent=agent.state.name, sym=sig.symbol, reason=decision.reason)
+                        log.info(
+                            "risk_blocked",
+                            agent=agent.state.name,
+                            sym=sig.symbol,
+                            reason=decision.reason,
+                        )
                         continue
                 # Write the journal note *before* submitting, so it's durable
                 # even if the broker round-trip fails mid-flight.
                 note_content, note_meta = _note_for_signal(agent, sig, px)
                 note_kind = "entry" if sig.side == "buy" else "exit"
                 note_id = await journal.write_note(
-                    agent.state.id, note_kind, sig.symbol, note_content, note_meta,
+                    agent.state.id,
+                    note_kind,
+                    sig.symbol,
+                    note_content,
+                    note_meta,
                 )
                 if note_id is not None:
                     agent.journal_note_id = note_id
@@ -396,32 +409,54 @@ class Orchestrator:
                     self._pending_exits.pop((agent.state.id, fill.symbol), None)
                     pos = agent.state.book.positions.get(fill.symbol)
                     if pos is None or abs(pos.qty) < 1e-9:
-                        agent.risk.clear_peak(fill.symbol)
+                        # Audit fix (round 3): defensive getattr so a
+                        # stub agent in tests (with a risk stub lacking
+                        # clear_peak) can't AttributeError mid-tick and
+                        # take down the loop.
+                        clear = getattr(agent.risk, "clear_peak", None)
+                        if callable(clear):
+                            clear(fill.symbol)
                 await repo.record_trade(
-                    agent.state.id, fill.symbol, fill.side, fill.qty, fill.price, sig.reason,
+                    agent.state.id,
+                    fill.symbol,
+                    fill.side,
+                    fill.qty,
+                    fill.price,
+                    sig.reason,
                 )
                 await repo.sync_positions(agent.state.id, agent.state.book)
                 # If the fill produced non-zero realized PnL, stamp the
                 # matching entry note. Idempotent: one stamp per flat-out.
                 if realized != 0.0:
                     stamped = await journal.close_outcome(
-                        agent.state.id, fill.symbol, float(realized), trade_id=None,
+                        agent.state.id,
+                        fill.symbol,
+                        float(realized),
+                        trade_id=None,
                     )
                     if stamped is not None:
                         JOURNAL_COUNTERS["outcomes_this_tick"] += 1
                 fills += 1
                 log.info(
-                    "fill", agent=agent.state.name, sym=sig.symbol, side=sig.side,
-                    qty=sig.qty, px=px, reason=sig.reason,
+                    "fill",
+                    agent=agent.state.name,
+                    sym=sig.symbol,
+                    side=sig.side,
+                    qty=sig.qty,
+                    px=px,
+                    reason=sig.reason,
                 )
-                await publish_event("fill", {
-                    "agent_id": agent.state.id,
-                    "symbol": fill.symbol,
-                    "side": fill.side,
-                    "qty": fill.qty,
-                    "price": fill.price,
-                    "reason": sig.reason,
-                })
+                await publish_event(
+                    "fill",
+                    {
+                        "agent_id": agent.state.id,
+                        "symbol": fill.symbol,
+                        "side": fill.side,
+                        "qty": fill.qty,
+                        "price": fill.price,
+                        "reason": sig.reason,
+                    },
+                )
                 fill_moment_candidates.append(
                     _FillMomentCandidate(
                         agent_id=agent.state.id,
@@ -442,8 +477,10 @@ class Orchestrator:
             equity = agent.state.book.equity(marks)
             start = settings.agent_starting_capital
             agent.state.status = (
-                "profit" if equity > start * 1.001
-                else "loss" if equity < start * 0.999
+                "profit"
+                if equity > start * 1.001
+                else "loss"
+                if equity < start * 0.999
                 else "waiting"
             )
 
@@ -454,18 +491,29 @@ class Orchestrator:
         realized = sum(a.state.book.realized_pnl for a in self.agents)
         unrealized = sum(a.state.book.unrealized_pnl(marks) for a in self.agents)
         last_tick_iso = self.last_tick_at.isoformat()
-        await publish_event("account", {
-            "profit_ai": profit, "loss_ai": loss, "waiting_ai": waiting,
-            "total_equity": total_equity,
-            "realized_pnl": realized, "unrealized_pnl": unrealized,
-            "last_tick_at": last_tick_iso,
-            "notes_this_tick": JOURNAL_COUNTERS["notes_this_tick"],
-            "outcomes_this_tick": JOURNAL_COUNTERS["outcomes_this_tick"],
-        })
-        await publish_event("tick", {
-            "fills": fills, "blocked": blocked, "symbols": len(marks),
-            "last_tick_at": last_tick_iso,
-        })
+        await publish_event(
+            "account",
+            {
+                "profit_ai": profit,
+                "loss_ai": loss,
+                "waiting_ai": waiting,
+                "total_equity": total_equity,
+                "realized_pnl": realized,
+                "unrealized_pnl": unrealized,
+                "last_tick_at": last_tick_iso,
+                "notes_this_tick": JOURNAL_COUNTERS["notes_this_tick"],
+                "outcomes_this_tick": JOURNAL_COUNTERS["outcomes_this_tick"],
+            },
+        )
+        await publish_event(
+            "tick",
+            {
+                "fills": fills,
+                "blocked": blocked,
+                "symbols": len(marks),
+                "last_tick_at": last_tick_iso,
+            },
+        )
 
         return {"fills": fills, "blocked": blocked, "symbols": len(marks)}
 
@@ -517,7 +565,9 @@ class Orchestrator:
         if interval <= 0:
             log.info("scheduler_disabled")
             return
-        log.info("scheduler_started", interval_sec=interval, allow_off_hours=settings.tick_outside_rth)
+        log.info(
+            "scheduler_started", interval_sec=interval, allow_off_hours=settings.tick_outside_rth
+        )
         while True:
             try:
                 if not settings.ai_enabled:
@@ -557,8 +607,10 @@ class Orchestrator:
         # __init__) so unit tests that build a bare Orchestrator
         # don't silently pollute the module-global state.
         from tradefarm.orchestrator import broadcast_os as _bos
+
         _bos.install_broadcast_arbiter(
-            self._broadcast_ledger, self._broadcast_scheduler,
+            self._broadcast_ledger,
+            self._broadcast_scheduler,
         )
 
         if settings.auto_tick_interval_sec > 0 and self._task is None:
@@ -567,10 +619,12 @@ class Orchestrator:
         if settings.execution_mode == "alpaca_paper" and self._recon_task is None:
             # Lazy import to avoid pulling alpaca-py in simulated mode.
             from tradefarm.execution.alpaca_broker import AlpacaBroker
+
             if isinstance(self.broker, AlpacaBroker):
                 self._reconciler = OrderReconciler(self.broker, self._optimistic_marks)
                 self._recon_task = asyncio.create_task(
-                    self._reconcile_loop(), name="orch_reconciler",
+                    self._reconcile_loop(),
+                    name="orch_reconciler",
                 )
 
         # Phase 4 — opt-in curriculum loop (0 disables).
@@ -580,7 +634,8 @@ class Orchestrator:
         if self._auto_director is None:
             self._auto_director = AutoDirector(orch=self)
             asyncio.create_task(
-                self._auto_director.start(), name="orch_auto_director_start",
+                self._auto_director.start(),
+                name="orch_auto_director_start",
             )
 
         # Streak watcher — always on; complements auto-director with
@@ -588,14 +643,16 @@ class Orchestrator:
         if self._streak_watcher is None:
             self._streak_watcher = StreakWatcher(orch=self)
             asyncio.create_task(
-                self._streak_watcher.start(), name="orch_streak_watcher_start",
+                self._streak_watcher.start(),
+                name="orch_streak_watcher_start",
             )
 
         # Live LLM commentary — always on; Bloomberg-style one-liner every ~45s.
         if self._commentary_loop is None:
             self._commentary_loop = CommentaryLoop(orch=self)
             asyncio.create_task(
-                self._commentary_loop.start(), name="orch_commentary_loop_start",
+                self._commentary_loop.start(),
+                name="orch_commentary_loop_start",
             )
 
         # YouTube Live Chat poller — always constructed; the poller itself
@@ -603,31 +660,36 @@ class Orchestrator:
         if self._youtube_chat is None:
             self._youtube_chat = YouTubeChatPoller(orch=self)
             asyncio.create_task(
-                self._youtube_chat.start(), name="orch_youtube_chat_start",
+                self._youtube_chat.start(),
+                name="orch_youtube_chat_start",
             )
 
         # Audience predictions board — depends on agent list being final.
         if self._predictions is None:
             self._predictions = PredictionsBoard(orch=self)
             asyncio.create_task(
-                self._predictions.start(), name="orch_predictions_start",
+                self._predictions.start(),
+                name="orch_predictions_start",
             )
 
         # Audience coordinator — wires chat commands into sentiment + pins
         # + predictions. Built AFTER predictions so the link is in place.
         if self._audience is None:
             self._audience = AudienceCoordinator(
-                orch=self, predictions=self._predictions,
+                orch=self,
+                predictions=self._predictions,
             )
             asyncio.create_task(
-                self._audience.start(), name="orch_audience_start",
+                self._audience.start(),
+                name="orch_audience_start",
             )
 
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""
         if settings.academy_eval_interval_sec > 0 and self._curriculum_task is None:
             self._curriculum_task = asyncio.create_task(
-                self.run_curriculum_loop(), name="orch_curriculum",
+                self.run_curriculum_loop(),
+                name="orch_curriculum",
             )
 
     async def stop_curriculum(self) -> None:
@@ -656,6 +718,7 @@ class Orchestrator:
             return
         # Lazy-import so test fixtures can patch `curriculum` before loop runs.
         from tradefarm.academy import curriculum
+
         log.info("curriculum_loop_started", interval_sec=interval)
         while True:
             try:
@@ -686,14 +749,18 @@ class Orchestrator:
         for rf in fills:
             agent = self._agents_by_id.get(rf.agent_id)
             if agent is None:
-                log.warning("reconciled_unknown_agent", agent_id=rf.agent_id, broker_oid=rf.broker_order_id)
+                log.warning(
+                    "reconciled_unknown_agent", agent_id=rf.agent_id, broker_oid=rf.broker_order_id
+                )
                 continue
             # Derive mark from actual+delta (delta = actual - mark) and
             # use apply_reconciled_fill so the correction is correct for
             # short opens, longs→short flips, and partial closes.
             mark_price = rf.actual_price - rf.delta
             ok = agent.state.book.apply_reconciled_fill(
-                rf.symbol, rf.side, rf.qty,
+                rf.symbol,
+                rf.side,
+                rf.qty,
                 mark_price=mark_price,
                 actual_price=rf.actual_price,
                 broker_order_id=rf.broker_order_id,
@@ -713,25 +780,25 @@ class Orchestrator:
                     if agent_ref is not None:
                         existing_pos = agent_ref.state.book.positions.get(rf.symbol)
                         if existing_pos is None or abs(existing_pos.qty) < 1e-9:
-                            agent_ref.risk.clear_peak(rf.symbol)
-                await publish_event("reconcile", {
-                    "agent_id": rf.agent_id,
-                    "symbol": rf.symbol,
-                    "side": rf.side,
-                    "qty": rf.qty,
-                    "delta": rf.delta,
-                    "actual_price": rf.actual_price,
-                })
+                            # Defensive: stub agents may lack clear_peak.
+                            clear = getattr(agent_ref.risk, "clear_peak", None)
+                            if callable(clear):
+                                clear(rf.symbol)
+                await publish_event(
+                    "reconcile",
+                    {
+                        "agent_id": rf.agent_id,
+                        "symbol": rf.symbol,
+                        "side": rf.side,
+                        "qty": rf.qty,
+                        "delta": rf.delta,
+                        "actual_price": rf.actual_price,
+                    },
+                )
         return applied
 
     async def stop_background(self) -> None:
-        # Audit fix (Q): symmetric to start_background — uninstall the
-        # broadcast arbiter so publish_broadcast_moment falls back to
-        # the legacy direct-publish path on subsequent calls (relevant
-        # for FastAPI reload + tests that reuse the process).
-        from tradefarm.orchestrator import broadcast_os as _bos
-        _bos.install_broadcast_arbiter(None, None)
-
+        # Cancel the main scheduler + reconciler loops first.
         for t in (self._task, self._recon_task):
             if t is None:
                 continue
@@ -742,6 +809,9 @@ class Orchestrator:
                 pass
         self._task = None
         self._recon_task = None
+        # Then drain all sidecar coordinators. Each one may still emit
+        # broadcast moments during its `stop()` (e.g. a "stream offline"
+        # banner). Those need the arbiter to still be installed.
         await self.stop_curriculum()
         if self._auto_director is not None:
             await self._auto_director.stop()
@@ -761,3 +831,12 @@ class Orchestrator:
         if self._predictions is not None:
             await self._predictions.stop()
             self._predictions = None
+
+        # Audit fix (round 3 U): uninstall the broadcast arbiter AFTER
+        # every sidecar has stopped. Previous order (uninstall first,
+        # then stop sidecars) meant in-flight `publish_broadcast_moment`
+        # calls during stop() hit the legacy fall-through and bypassed
+        # the ledger/scheduler entirely. Symmetric to start_background.
+        from tradefarm.orchestrator import broadcast_os as _bos
+
+        _bos.install_broadcast_arbiter(None, None)

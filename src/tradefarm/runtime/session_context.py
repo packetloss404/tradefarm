@@ -14,12 +14,14 @@ them, and every downstream caller in the orchestrator. The context-var
 keeps the writeable signatures stable and gives correct asyncio task
 isolation — exactly the same reasoning as the clock.
 """
+
 from __future__ import annotations
 
 import contextvars
 
 _session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "tradefarm_session_id", default=None,
+    "tradefarm_session_id",
+    default=None,
 )
 
 

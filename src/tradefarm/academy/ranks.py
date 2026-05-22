@@ -8,6 +8,7 @@
 The tone classes below match the Phase 2 spec in ``docs/PROJECT_PLAN.md``
 (the Rank system table).
 """
+
 from __future__ import annotations
 
 import math
@@ -143,9 +144,9 @@ def _sharpe_annualized(returns: list[float]) -> float:
 async def _weeks_active(agent_id: int) -> float:
     try:
         async with SessionLocal() as session:
-            row = (await session.execute(
-                select(Agent.created_at).where(Agent.id == agent_id)
-            )).scalar_one_or_none()
+            row = (
+                await session.execute(select(Agent.created_at).where(Agent.id == agent_id))
+            ).scalar_one_or_none()
     except Exception as e:
         log.warning("ranks_weeks_active_failed", agent_id=agent_id, error=str(e))
         return 0.0
@@ -162,9 +163,9 @@ async def _weeks_active(agent_id: int) -> float:
 async def _starting_capital(agent_id: int) -> float:
     try:
         async with SessionLocal() as session:
-            row = (await session.execute(
-                select(Agent.starting_capital).where(Agent.id == agent_id)
-            )).scalar_one_or_none()
+            row = (
+                await session.execute(select(Agent.starting_capital).where(Agent.id == agent_id))
+            ).scalar_one_or_none()
     except Exception as e:
         log.warning("ranks_starting_capital_failed", agent_id=agent_id, error=str(e))
         return 0.0

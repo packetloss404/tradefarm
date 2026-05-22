@@ -3,6 +3,7 @@
 Replace with LSTM+LLM hybrid once the data + broker + orchestrator loop is
 proven. Keeping the logic trivial here on purpose — the point of the MVP is
 to get 100 agents ticking end-to-end, not to make money with SMA."""
+
 from __future__ import annotations
 
 import pandas as pd

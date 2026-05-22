@@ -86,8 +86,22 @@ async def lifespan(app: FastAPI):
     # first tick respects rank-gated caps. Missing entries default to intern.
     rank_map = await academy_repo.ranks_by_agent()
     orch = Orchestrator.build_default(rank_map=rank_map)
-    await orch.persist_initial_state()
-    orch.start_background()
+    # Audit fix (U): wrap the start sequence so a partial init
+    # (e.g. persist_initial_state DB error, start_background failing
+    # to spawn a task) cleans up instead of leaving orphaned background
+    # tasks + an installed broadcast arbiter on the next reload. Without
+    # this the lifespan's `finally: stop_background` only ran after a
+    # successful yield, so any startup exception leaked everything.
+    try:
+        await orch.persist_initial_state()
+        orch.start_background()
+    except Exception:
+        # Best-effort teardown of anything that managed to start.
+        try:
+            await orch.stop_background()
+        except Exception:
+            pass
+        raise
     app.state.orchestrator = orch
     try:
         yield
@@ -106,8 +120,8 @@ app = FastAPI(title="TradeFarm", lifespan=lifespan)
 # round is "lock the destructive surface"). /health and /market/clock
 # are also exempted. When the secret isn't set, behavior is unchanged
 # (open, as before).
-from fastapi import Request
-from fastapi.responses import JSONResponse as _JSONResponse
+from fastapi import Request  # noqa: E402  (kept beside the middleware that uses it)
+from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
 
 
 _AUTH_EXEMPT_PREFIXES = ("/health", "/market/clock", "/openapi", "/docs", "/redoc")
@@ -127,6 +141,7 @@ async def _shared_secret_guard(request: Request, call_next):
     presented = request.headers.get("x-tradefarm-token", "")
     # Constant-time compare so a timing attack can't probe the secret.
     import hmac
+
     if not hmac.compare_digest(presented.encode("utf-8"), secret.encode("utf-8")):
         return _JSONResponse(
             status_code=401,
@@ -177,6 +192,7 @@ async def health() -> dict[str, str]:
 async def llm_stats() -> dict:
     """LLM call counter since boot — useful for estimating API spend."""
     from tradefarm.agents.lstm_llm_agent import LLM_SKIPS
+
     called = LLM_SKIPS["called"]
     skipped = LLM_SKIPS["count"]
     total = called + skipped
@@ -192,7 +208,9 @@ async def llm_stats() -> dict:
 @app.get("/agents")
 async def list_agents(
     at: str | None = Query(None, description="ISO timestamp for historical state (replay mode)."),
-    session_id: str | None = Query(None, description="Session manifest to read from (replay mode)."),
+    session_id: str | None = Query(
+        None, description="Session manifest to read from (replay mode)."
+    ),
 ) -> list[dict]:
     orch: Orchestrator = app.state.orchestrator
     # Replay path: fold the manifest's events up to `at` and shape the
@@ -207,7 +225,10 @@ async def list_agents(
         snaps, marks = replay_query.fold_to(manifest, at_dt)
         meta_by_id, roster = _replay_static_meta(orch)
         return replay_query.agents_payload(
-            snaps, marks, static_meta_by_id=meta_by_id, include_silent=roster,
+            snaps,
+            marks,
+            static_meta_by_id=meta_by_id,
+            include_silent=roster,
         )
     marks = orch.last_marks
     out = []
@@ -230,28 +251,31 @@ async def list_agents(
         # Phase 3: surface the agent's pinned symbol (LSTM / LSTM+LLM agents)
         # so the frontend can ask /retrieval-preview about the right ticker.
         agent_symbol = getattr(a, "symbol", None)
-        out.append({
-            "id": a.state.id,
-            "name": a.state.name,
-            "strategy": a.state.strategy,
-            "status": a.state.status,
-            "rank": rank,
-            "symbol": agent_symbol,
-            "cash": book.cash,
-            "equity": equity,
-            "realized_pnl": book.realized_pnl,
-            "unrealized_pnl": book.unrealized_pnl(marks),
-            "positions": {
-                s: {
-                    "qty": p.qty,
-                    "avg_price": p.avg_price,
-                    "mark": marks.get(s, p.avg_price),
-                }
-                for s, p in book.positions.items() if p.qty
-            },
-            "last_lstm": last_lstm,
-            "last_decision": last_decision,
-        })
+        out.append(
+            {
+                "id": a.state.id,
+                "name": a.state.name,
+                "strategy": a.state.strategy,
+                "status": a.state.status,
+                "rank": rank,
+                "symbol": agent_symbol,
+                "cash": book.cash,
+                "equity": equity,
+                "realized_pnl": book.realized_pnl,
+                "unrealized_pnl": book.unrealized_pnl(marks),
+                "positions": {
+                    s: {
+                        "qty": p.qty,
+                        "avg_price": p.avg_price,
+                        "mark": marks.get(s, p.avg_price),
+                    }
+                    for s, p in book.positions.items()
+                    if p.qty
+                },
+                "last_lstm": last_lstm,
+                "last_decision": last_decision,
+            }
+        )
     return out
 
 
@@ -300,16 +324,19 @@ async def agent_academy(agent_id: int) -> dict:
     gaps: dict[str, float | int] = {}
     if next_rank == "junior":
         gaps["trades_needed"] = max(
-            0, settings.academy_min_trades_junior - stats.n_closed_trades,
+            0,
+            settings.academy_min_trades_junior - stats.n_closed_trades,
         )
     elif next_rank == "senior":
         gaps["trades_needed"] = max(
-            0, settings.academy_min_trades_senior - stats.n_closed_trades,
+            0,
+            settings.academy_min_trades_senior - stats.n_closed_trades,
         )
         gaps["win_rate_target"] = settings.academy_min_win_rate_senior
     elif next_rank == "principal":
         gaps["trades_needed"] = max(
-            0, settings.academy_min_trades_principal - stats.n_closed_trades,
+            0,
+            settings.academy_min_trades_principal - stats.n_closed_trades,
         )
         gaps["sharpe_target"] = settings.academy_min_sharpe_principal
         gaps["weeks_needed"] = max(0.0, 2.0 - stats.weeks_active)
@@ -342,6 +369,7 @@ async def tick() -> dict:
 async def academy_evaluate() -> dict:
     """Phase 4 — kick a curriculum pass on demand (admin "Run curriculum pass")."""
     from tradefarm.academy import curriculum
+
     orch: Orchestrator = app.state.orchestrator
     result = await curriculum.evaluate_all(orch)
     return result.to_dict()
@@ -362,7 +390,9 @@ async def agent_promotions(agent_id: int, hours: int = 24 * 30) -> list[dict]:
 @app.get("/account")
 async def account(
     at: str | None = Query(None, description="ISO timestamp for historical state (replay mode)."),
-    session_id: str | None = Query(None, description="Session manifest to read from (replay mode)."),
+    session_id: str | None = Query(
+        None, description="Session manifest to read from (replay mode)."
+    ),
 ) -> dict:
     orch: Orchestrator = app.state.orchestrator
     if session_id is not None:
@@ -387,6 +417,7 @@ async def account(
     realized = sum(a.state.book.realized_pnl for a in orch.agents)
     unrealized = sum(a.state.book.unrealized_pnl(marks) for a in orch.agents)
     from tradefarm.orchestrator.scheduler import JOURNAL_COUNTERS
+
     return {
         "profit_ai": profit,
         "loss_ai": loss,
@@ -428,7 +459,10 @@ async def pnl_daily(days: int = 30) -> list[dict]:
                     sub.c.d,
                     func.sum(PnlSnapshot.equity).label("equity"),
                 )
-                .join(sub, (PnlSnapshot.agent_id == sub.c.agent_id) & (PnlSnapshot.taken_at == sub.c.ts))
+                .join(
+                    sub,
+                    (PnlSnapshot.agent_id == sub.c.agent_id) & (PnlSnapshot.taken_at == sub.c.ts),
+                )
                 .group_by(sub.c.d)
                 .order_by(sub.c.d)
             )
@@ -461,7 +495,9 @@ async def agent_trades(
     agent_id: int,
     limit: int = 20,
     at: str | None = Query(None, description="ISO timestamp for historical trades (replay mode)."),
-    session_id: str | None = Query(None, description="Session manifest to read from (replay mode)."),
+    session_id: str | None = Query(
+        None, description="Session manifest to read from (replay mode)."
+    ),
 ) -> list[dict]:
     if session_id is not None:
         at_dt = _parse_replay_at(at)
@@ -470,19 +506,26 @@ async def agent_trades(
             at_dt = replay_query.parse_iso(manifest.get("ended_at") or manifest["started_at"])
         return replay_query.trades_for_agent(manifest, agent_id, at_dt, limit=limit)
     from tradefarm.storage.models import Trade
+
     async with SessionLocal() as session:
-        rows = (await session.execute(
-            select(Trade)
-            .where(
-                Trade.agent_id == agent_id,
-                # Audit fix: live trade-list excludes replay-tagged rows
-                # so the dashboard doesn't mix today's live fills with
-                # any prior `session.run`.
-                Trade.session_id.is_(None),
+        rows = (
+            (
+                await session.execute(
+                    select(Trade)
+                    .where(
+                        Trade.agent_id == agent_id,
+                        # Audit fix: live trade-list excludes replay-tagged rows
+                        # so the dashboard doesn't mix today's live fills with
+                        # any prior `session.run`.
+                        Trade.session_id.is_(None),
+                    )
+                    .order_by(Trade.executed_at.desc())
+                    .limit(limit)
+                )
             )
-            .order_by(Trade.executed_at.desc())
-            .limit(limit)
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
     return [
         {
             "id": t.id,
@@ -507,7 +550,9 @@ async def agent_notes(agent_id: int, limit: int = 20) -> list[dict]:
 
 @app.get("/agents/{agent_id}/retrieval-preview")
 async def agent_retrieval_preview(
-    agent_id: int, symbol: str, k: int = 3,
+    agent_id: int,
+    symbol: str,
+    k: int = 3,
 ) -> list[dict]:
     """Phase 3 — preview what the LSTM+LLM agent would see as "past similar
     setups" for ``(agent_id, symbol)``. Powers the frontend's "Drawing on"
@@ -516,6 +561,7 @@ async def agent_retrieval_preview(
     Honors ``academy_retrieval_enabled`` (returns [] when off).
     """
     from tradefarm.agents import retrieval
+
     examples = await retrieval.fetch(agent_id, symbol, k=k)
     return [ex.to_dict() for ex in examples]
 
@@ -540,6 +586,7 @@ async def list_orders(limit: int = 25) -> list[dict]:
     for o in orders[:limit]:
         cid = o.get("client_order_id") or ""
         from tradefarm.execution.alpaca_broker import AlpacaBroker
+
         agent_id = AlpacaBroker.parse_agent_id(cid)
         out.append({**o, "agent_id": agent_id})
     return out

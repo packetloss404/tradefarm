@@ -4,6 +4,7 @@ Uses a per-test in-memory SQLite DB so writes don't leak into the dev DB.
 The settings' ``database_url`` is patched to an in-process SQLite; each test
 recreates tables from scratch.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -32,8 +33,16 @@ async def journal_db(monkeypatch):
 
     # Seed one agent row so journal writes are not skipped.
     async with SessionLocal() as s:
-        s.add(Agent(id=1, name="agent-001", strategy="lstm_llm_v1",
-                    starting_capital=1000.0, cash=1000.0, status="waiting"))
+        s.add(
+            Agent(
+                id=1,
+                name="agent-001",
+                strategy="lstm_llm_v1",
+                starting_capital=1000.0,
+                cash=1000.0,
+                status="waiting",
+            )
+        )
         await s.commit()
 
     yield SessionLocal
@@ -43,6 +52,7 @@ async def journal_db(monkeypatch):
 async def test_agent_note_table_registered_after_init_db(journal_db):
     """Risk #1 smoke test: AgentNote must be registered in the metadata."""
     from tradefarm.storage.models import AgentNote, Base
+
     assert "agent_notes" in Base.metadata.tables
     assert AgentNote.__table__ is not None
 
@@ -51,7 +61,9 @@ async def test_journal_write_and_read(journal_db):
     from tradefarm.storage import journal
 
     nid = await journal.write_note(
-        agent_id=1, kind="entry", symbol="SPY",
+        agent_id=1,
+        kind="entry",
+        symbol="SPY",
         content="bought on golden cross",
         metadata={"lstm_confidence": 0.72, "size_pct": 0.2},
     )
@@ -71,8 +83,13 @@ async def test_journal_write_and_read(journal_db):
 async def test_journal_write_unknown_agent_returns_none(journal_db):
     """Backtest / no-session path: writes for unknown agent are a silent no-op."""
     from tradefarm.storage import journal
+
     nid = await journal.write_note(
-        agent_id=999, kind="entry", symbol="SPY", content="ghost", metadata=None,
+        agent_id=999,
+        kind="entry",
+        symbol="SPY",
+        content="ghost",
+        metadata=None,
     )
     assert nid is None
 
@@ -81,12 +98,18 @@ async def test_close_outcome_stamps_pnl(journal_db):
     from tradefarm.storage import journal
 
     nid = await journal.write_note(
-        agent_id=1, kind="entry", symbol="AAPL", content="bought dip",
+        agent_id=1,
+        kind="entry",
+        symbol="AAPL",
+        content="bought dip",
     )
     assert nid is not None
 
     stamped = await journal.close_outcome(
-        agent_id=1, symbol="AAPL", realized_pnl=1.23, trade_id=42,
+        agent_id=1,
+        symbol="AAPL",
+        realized_pnl=1.23,
+        trade_id=42,
     )
     assert stamped == nid
 
@@ -100,6 +123,7 @@ async def test_close_outcome_stamps_pnl(journal_db):
 
 async def test_close_outcome_idempotent_when_no_open_entry(journal_db):
     from tradefarm.storage import journal
+
     result = await journal.close_outcome(agent_id=1, symbol="MSFT", realized_pnl=5.0)
     assert result is None
 
@@ -114,7 +138,10 @@ async def test_partial_exit_does_not_double_stamp(journal_db):
     from tradefarm.storage import journal
 
     entry_id = await journal.write_note(
-        agent_id=1, kind="entry", symbol="TSLA", content="bought breakout",
+        agent_id=1,
+        kind="entry",
+        symbol="TSLA",
+        content="bought breakout",
     )
     assert entry_id is not None
 
@@ -166,7 +193,9 @@ async def test_end_to_end_roundtrip(journal_db):
     # Open a position — the entry note is written as part of the "decision".
     book.record_fill("NVDA", "buy", 5, 100.0)
     entry_id = await journal.write_note(
-        agent_id=1, kind="entry", symbol="NVDA",
+        agent_id=1,
+        kind="entry",
+        symbol="NVDA",
         content="bought NVDA on LSTM up signal",
         metadata={"lstm_probs": [0.1, 0.2, 0.7], "lstm_confidence": 0.7},
     )
@@ -177,7 +206,9 @@ async def test_end_to_end_roundtrip(journal_db):
     assert realized == pytest.approx(1.23)
 
     stamped_id = await journal.close_outcome(
-        agent_id=1, symbol="NVDA", realized_pnl=realized,
+        agent_id=1,
+        symbol="NVDA",
+        realized_pnl=realized,
     )
     assert stamped_id == entry_id
 

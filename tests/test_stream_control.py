@@ -1,4 +1,5 @@
 """Stream-control router — accept allowed types, reject unknown ones."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI

@@ -20,14 +20,16 @@ def _payloads(mock: AsyncMock, event_type: str) -> list[dict[str, Any]]:
 
 
 def test_moment_from_macro_maps_trigger_priority_and_kind():
-    moment = moment_from_macro({
-        "id": "auto-rank-3",
-        "label": "Promotion: agent-003",
-        "color": "profit",
-        "subtitle": "intern -> junior",
-        "agent_id": 3,
-        "trigger": "promotion",
-    })
+    moment = moment_from_macro(
+        {
+            "id": "auto-rank-3",
+            "label": "Promotion: agent-003",
+            "color": "profit",
+            "subtitle": "intern -> junior",
+            "agent_id": 3,
+            "trigger": "promotion",
+        }
+    )
 
     assert moment.id == "auto-rank-3"
     assert moment.kind == "rank_change"

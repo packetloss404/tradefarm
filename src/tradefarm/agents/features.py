@@ -10,6 +10,7 @@ next `horizon` trading days. The up/down threshold scales as
 BASE_THRESHOLD * sqrt(horizon) so class balance is preserved (returns scale
 roughly with sqrt(time) under a random-walk assumption).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -18,6 +19,15 @@ import pandas as pd
 UP_THRESHOLD = 0.005
 DOWN_THRESHOLD = -0.005
 _EPS = 1e-9
+
+# Number of leading rows trimmed from `featurize` output. Set by the
+# longest rolling-window dependency (mom_z_5_60 needs 5d return + 60d
+# rolling stats over those returns, so the first row with a fully-formed
+# distribution is index 5+59 = 64). Trimming up to this index keeps the
+# model from training on partial-window stats fillna'd to 0 — which the
+# network would otherwise read as legitimate "0% return / 0 vol"
+# observations rather than warmup noise.
+WARMUP_BARS = 64
 
 FEATURE_NAMES = (
     "ret_1d",
@@ -110,9 +120,7 @@ def featurize(df: pd.DataFrame, *, horizon: int = 1) -> tuple[np.ndarray, np.nda
 
     # Realized vol: 20-day std of log returns (annualization left to the model).
     log_ret = np.log(close / close.shift(1))
-    feats["realized_vol_20"] = (
-        log_ret.rolling(20, min_periods=5).std().clip(0, 0.2).fillna(0)
-    )
+    feats["realized_vol_20"] = log_ret.rolling(20, min_periods=5).std().clip(0, 0.2).fillna(0)
 
     # Self-referenced momentum: z-score of 5d return vs trailing 60d distribution.
     ret5 = close.pct_change(5)
@@ -128,14 +136,14 @@ def featurize(df: pd.DataFrame, *, horizon: int = 1) -> tuple[np.ndarray, np.nda
 
     # Rolling 20d VWAP, ratio to close - 1.
     pv = close * volume
-    vwap20 = (
-        pv.rolling(20, min_periods=5).sum() / volume.rolling(20, min_periods=5).sum().replace(0, np.nan)
+    vwap20 = pv.rolling(20, min_periods=5).sum() / volume.rolling(20, min_periods=5).sum().replace(
+        0, np.nan
     )
     feats["vwap20_ratio"] = (close / vwap20 - 1.0).clip(-0.2, 0.2).fillna(0)
 
     # Calendar encodings (deterministic; do not leak future info).
     dow = dates.dt.dayofweek.astype(float)  # 0..6
-    moy = (dates.dt.month.astype(float) - 1.0)  # 0..11
+    moy = dates.dt.month.astype(float) - 1.0  # 0..11
     feats["dow_sin"] = np.sin(2 * np.pi * dow / 7.0)
     feats["dow_cos"] = np.cos(2 * np.pi * dow / 7.0)
     feats["moy_sin"] = np.sin(2 * np.pi * moy / 12.0)
@@ -155,8 +163,18 @@ def featurize(df: pd.DataFrame, *, horizon: int = 1) -> tuple[np.ndarray, np.nda
     y[horizon_ret <= down_thr] = 0
     y[horizon_ret >= up_thr] = 2
 
+    # Trim warmup rows from the front. Without this, the surviving
+    # fillna(0) above turns the 60-bar rolling-stat warmup into literal
+    # 0% returns / 0 vol observations — a contaminated input the LSTM
+    # learns to treat as a valid market regime. Drop both X and y in
+    # lockstep so labels stay aligned with their feature rows.
     valid = ~horizon_ret.isna()
-    return feats.values[valid.values], y.values[valid.values]
+    valid_arr = valid.values.copy()
+    if len(valid_arr) > WARMUP_BARS:
+        valid_arr[:WARMUP_BARS] = False
+    else:
+        valid_arr[:] = False
+    return feats.values[valid_arr], y.values[valid_arr]
 
 
 def make_windows(

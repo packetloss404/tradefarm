@@ -17,6 +17,7 @@ to the provider's underlying client so we can swap the prompt + parser without
 touching the trade-decision path. ``AnthropicProvider.client`` and
 ``MinimaxProvider.api_key/base_url`` are the interfaces this module assumes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -274,8 +275,7 @@ class CommentaryLoop:
             for a in snap.top_agents:
                 sym = f" {a.symbol}" if a.symbol else ""
                 lines.append(
-                    f"- {a.name} ({a.strategy}{sym}): "
-                    f"{a.pnl_pct * 100:+.2f}% (${a.pnl:+.2f})"
+                    f"- {a.name} ({a.strategy}{sym}): {a.pnl_pct * 100:+.2f}% (${a.pnl:+.2f})"
                 )
         else:
             lines.append("No agent P&L data yet.")
@@ -284,9 +284,7 @@ class CommentaryLoop:
             lines.append("Recent open positions (heaviest notional):")
             for f in snap.recent_fills:
                 notional = f.qty * f.price
-                notional_str = (
-                    f"${notional:,.2f}" if notional < 10_000 else f"${notional:,.0f}"
-                )
+                notional_str = f"${notional:,.2f}" if notional < 10_000 else f"${notional:,.0f}"
                 lines.append(
                     f"- {f.agent_name} {f.side} {f.qty:g} shares {f.symbol} "
                     f"@ ${f.price:.2f} (notional ≈ {notional_str})"
@@ -406,9 +404,7 @@ async def _commentary_completion(provider: LlmProvider, user_message: str) -> st
             ],
             messages=[{"role": "user", "content": user_message}],
         )
-        return "".join(
-            b.text for b in msg.content if getattr(b, "type", None) == "text"
-        )
+        return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
     if isinstance(provider, MinimaxProvider):
         url = f"{provider.base_url}/chat/completions"
         headers = {
@@ -510,9 +506,7 @@ def _parse_magnitude(num_str: str, suffix: str) -> float:
     return n
 
 
-def _strip_hallucinated_magnitudes(
-    text: str, snap: _StateSnapshot
-) -> str | None:
+def _strip_hallucinated_magnitudes(text: str, snap: _StateSnapshot) -> str | None:
     """Validate the LLM's text against the snapshot's actual notional.
 
     Returns the text unchanged when no magnitude tokens are present, or when

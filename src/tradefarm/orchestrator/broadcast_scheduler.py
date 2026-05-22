@@ -4,6 +4,7 @@ The scheduler intentionally does not publish events or know about the live
 orchestrator. It only arbitrates which ``BroadcastMoment`` objects may occupy
 presentation outputs at a given time.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
@@ -107,7 +108,9 @@ class BroadcastScheduler:
             item = _QueueItem(moment=moment, enqueued_at=at, sequence=self._sequence)
         else:
             replaced = existing.moment
-            item = _QueueItem(moment=moment, enqueued_at=existing.enqueued_at, sequence=existing.sequence)
+            item = _QueueItem(
+                moment=moment, enqueued_at=existing.enqueued_at, sequence=existing.sequence
+            )
         self._queued[moment.id] = item
 
         dropped = self._trim_queue()
@@ -117,7 +120,9 @@ class BroadcastScheduler:
             reason = "replaced" if replaced is not None else "queued"
         return EnqueueResult(accepted, moment, reason, replaced=replaced, dropped=dropped)
 
-    def submit(self, moment: BroadcastMoment, *, now: float | None = None) -> tuple[ScheduledMoment, ...]:
+    def submit(
+        self, moment: BroadcastMoment, *, now: float | None = None
+    ) -> tuple[ScheduledMoment, ...]:
         """Enqueue a moment and return every moment that can start now."""
 
         at = self._now(now)
@@ -153,9 +158,7 @@ class BroadcastScheduler:
             return ()
 
         expired = [
-            active
-            for active in self._active_by_output.values()
-            if active.moment.id in expired_ids
+            active for active in self._active_by_output.values() if active.moment.id in expired_ids
         ]
         for output, active in list(self._active_by_output.items()):
             if active.moment.id in expired_ids:
@@ -233,8 +236,12 @@ class BroadcastScheduler:
                 self._active_by_output.pop(output, None)
         return tuple(preempted.values())
 
-    def _unique_scheduled(self, scheduled: Iterable[ScheduledMoment]) -> tuple[ScheduledMoment, ...]:
+    def _unique_scheduled(
+        self, scheduled: Iterable[ScheduledMoment]
+    ) -> tuple[ScheduledMoment, ...]:
         by_key: dict[tuple[str, float], ScheduledMoment] = {}
         for active in scheduled:
             by_key[(active.moment.id, active.started_at)] = active
-        return tuple(sorted(by_key.values(), key=lambda active: (active.started_at, active.moment.id)))
+        return tuple(
+            sorted(by_key.values(), key=lambda active: (active.started_at, active.moment.id))
+        )
