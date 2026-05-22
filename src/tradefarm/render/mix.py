@@ -40,7 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tradefarm.render.stitch import DEFAULT_XFADE_SEC, ffmpeg_info, load_reel_meta
+from tradefarm.render.stitch import DEFAULT_XFADE_SEC, ffmpeg_info, ffprobe_duration, load_reel_meta
 
 
 VO_LEAD_IN_SEC = 0.5     # delay from a beat's start before VO begins
@@ -84,26 +84,10 @@ class MixResult:
 # ----- helpers ------------------------------------------------------------
 
 
-def _ffprobe_duration(path: Path) -> float:
-    """Return media duration in seconds. Returns 0.0 on probe failure."""
-    try:
-        r = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=nw=1:nk=1",
-                str(path),
-            ],
-            capture_output=True, text=True, timeout=15, check=False,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return 0.0
-    if r.returncode != 0:
-        return 0.0
-    try:
-        return float(r.stdout.strip() or "0")
-    except ValueError:
-        return 0.0
+# Canonical ffprobe helper lives in render.stitch; kept here as a local
+# alias so tests that monkeypatch `mix._ffprobe_duration` (they exist)
+# continue to work.
+_ffprobe_duration = ffprobe_duration
 
 
 def _load_sidecars(clips_dir: Path) -> dict[str, dict[str, Any]]:

@@ -213,18 +213,30 @@ def test_xfade_command_single_clip_no_chain():
     assert "-vf" in cmd
 
 
-def test_xfade_command_includes_captions_when_font_present():
+def test_xfade_command_includes_captions_when_font_present(tmp_path: Path):
+    """Captions now use drawtext's textfile= (bypasses every ffmpeg
+    escape hazard); the command references caption .txt paths instead
+    of inlining the text. The files themselves are written to
+    plan.intermediates_dir/captions/ as a side effect of building the
+    command, so we use tmp_path to keep the test sandboxed."""
     clips = [
         ClipPlan(beat_id=f"b{i}", src=Path("x"), sidecar=Path("y"),
                  trim_start_sec=0, duration_sec=10,
                  headline=f"Headline {i}", sub=f"sub {i}", kind="big_fill")
         for i in range(2)
     ]
-    plan = _make_plan(clips, captions=True, font="/path/to/font.ttf")
+    plan = MixPlanLike = _make_plan(clips, captions=True, font="/path/to/font.ttf")
+    object.__setattr__(plan, "intermediates_dir", tmp_path / "ints")
     cmd = build_xfade_command([Path(f"i{i}.mp4") for i in range(2)], plan=plan, out_path=Path("o.mp4"))
     fc = cmd[cmd.index("-filter_complex") + 1]
     assert "drawtext" in fc
-    assert "Headline 0" in fc and "Headline 1" in fc
+    assert "textfile=" in fc
+    # Caption .txt files were written for each beat.
+    for bid in ("b0", "b1"):
+        assert (tmp_path / "ints" / "captions" / f"{bid}_head.txt").is_file()
+        assert (tmp_path / "ints" / "captions" / f"{bid}_sub.txt").is_file()
+    # And the headline text landed inside the corresponding .txt file.
+    assert (tmp_path / "ints" / "captions" / "b0_head.txt").read_text() == "Headline 0"
 
 
 def test_pairwise_commands_step_count():

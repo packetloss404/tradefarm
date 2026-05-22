@@ -131,6 +131,31 @@ def ffmpeg_info() -> tuple[bool, str]:
     return True, out_lines[0] if out_lines else ""
 
 
+def ffprobe_duration(path: Path) -> float:
+    """Return media duration in seconds; 0.0 on probe failure. Used to
+    measure the actual length of pass-1 intermediates — what beats.json
+    *asked for* and what ffmpeg's trim filter *produced* can diverge
+    when scene-ready took longer than the beat's duration."""
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=nw=1:nk=1",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return 0.0
+    if r.returncode != 0:
+        return 0.0
+    try:
+        return float(r.stdout.strip() or "0")
+    except ValueError:
+        return 0.0
+
+
 # ----- record types --------------------------------------------------------
 
 
@@ -295,28 +320,53 @@ def caption_filter(
     font_path: str | None,
     head_size: int = 56,
     sub_size: int = 28,
+    text_dir: Path | None = None,
+    beat_id: str = "beat",
 ) -> str:
     """drawtext expression(s) for one beat's caption window. Returns
-    "" if the headline is blank or no font is available."""
+    "" if the headline is blank or no font is available.
+
+    When `text_dir` is supplied, the caption strings are written to
+    `.txt` files in that directory and drawtext reads them via
+    `textfile=` — which sidesteps ffmpeg filter-graph escape hazards
+    (the `\\'` apostrophe escape doesn't actually hold inside
+    single-quoted filter values; the parser breaks out early and
+    interprets later commas as filter separators). Without `text_dir`
+    we fall back to the in-band `text=` form for compatibility with
+    pure-function tests that just inspect the returned string.
+    """
     if not headline or not font_path:
         return ""
     enable = f"between(t,{t_start:.3f},{t_end:.3f})"
     font = _ff_path(font_path)
-    head_text = _ff_text(headline)
     common_pos = "x=(w-text_w)/2"
+
+    if text_dir is not None:
+        text_dir.mkdir(parents=True, exist_ok=True)
+        head_path = text_dir / f"{beat_id}_head.txt"
+        head_path.write_text(headline, encoding="utf-8")
+        head_text_arg = f"textfile='{_ff_path(head_path)}'"
+        sub_text_arg = None
+        if sub:
+            sub_path = text_dir / f"{beat_id}_sub.txt"
+            sub_path.write_text(sub, encoding="utf-8")
+            sub_text_arg = f"textfile='{_ff_path(sub_path)}'"
+    else:
+        head_text_arg = f"text='{_ff_text(headline)}'"
+        sub_text_arg = f"text='{_ff_text(sub)}'" if sub else None
+
     head = (
-        f"drawtext=fontfile='{font}':text='{head_text}':"
+        f"drawtext=fontfile='{font}':{head_text_arg}:"
         f"fontsize={head_size}:fontcolor=white:"
         f"borderw=3:bordercolor=black@0.85:"
         f"box=1:boxcolor=black@0.55:boxborderw=24:"
         f"{common_pos}:y=h-h/4-text_h:"
         f"enable='{enable}'"
     )
-    if not sub:
+    if not sub_text_arg:
         return head
-    sub_text = _ff_text(sub)
     sub_f = (
-        f"drawtext=fontfile='{font}':text='{sub_text}':"
+        f"drawtext=fontfile='{font}':{sub_text_arg}:"
         f"fontsize={sub_size}:fontcolor=white@0.85:"
         f"borderw=2:bordercolor=black@0.85:"
         f"{common_pos}:y=h-h/4+12:"
@@ -330,10 +380,19 @@ def build_xfade_command(
     *,
     plan: StitchPlan,
     out_path: Path,
+    actual_durations: list[float] | None = None,
 ) -> list[str]:
     """Pass-2: chained xfade across normalised intermediates +
     drawtext per beat. All clips assumed normalised to identical
-    width/height/fps/pix_fmt/timebase."""
+    width/height/fps/pix_fmt/timebase.
+
+    `actual_durations` (if given) overrides each clip's planned
+    `duration_sec` for xfade offset arithmetic. Real intermediates can
+    be shorter than asked when scene-ready time exceeded the beat's
+    budget and the trim filter ran out of source content. Without
+    using the ffprobed value, the chained xfade tries to fade past EOF
+    and ffmpeg returns "no packets".
+    """
 
     n = len(intermediates)
     if n == 0:
@@ -348,6 +407,8 @@ def build_xfade_command(
                 t_start=0.0,
                 t_end=plan.clips[0].duration_sec,
                 font_path=plan.font_path,
+                text_dir=plan.intermediates_dir / "captions",
+                beat_id=plan.clips[0].beat_id,
             )
             if cap:
                 captions_filter = f",{cap}"
@@ -367,9 +428,21 @@ def build_xfade_command(
     for p in intermediates:
         args.extend(["-i", str(p)])
 
+    # Use ffprobed lengths when available; fall back to planned values.
+    durations = (
+        list(actual_durations)
+        if actual_durations and len(actual_durations) == n
+        else [c.duration_sec for c in plan.clips]
+    )
+
     # Chained xfade. Offset for fade i = sum(duration_j for j<=i) - xfade*(i+1)
     fade = plan.xfade_sec
-    durations = [c.duration_sec for c in plan.clips]
+    # An xfade transition needs at least `fade` seconds of headroom in
+    # both inputs. If an intermediate is shorter than the fade duration
+    # the offset goes negative and ffmpeg fails — clamp here so the
+    # caller gets a clean planned command rather than an opaque crash.
+    durations = [max(d, fade * 2) for d in durations]
+
     filter_parts: list[str] = []
     cumulative = 0.0
     prev_label = "0:v"
@@ -385,7 +458,9 @@ def build_xfade_command(
         prev_label = out_label
 
     # Caption pass: walk clips with cumulative time minus per-fade lap,
-    # so caption windows align with what's on screen post-xfade.
+    # so caption windows align with what's on screen post-xfade. Uses
+    # the same `durations` list as the xfade math so captions can't
+    # drift even when actual_durations override planned.
     if plan.captions and plan.font_path:
         # Per-clip on-screen window: clip i is on screen from
         #   start_i = sum(duration_j for j<i) - fade*i
@@ -400,17 +475,20 @@ def build_xfade_command(
             if i > 0:
                 t_cursor -= fade  # the fade overlaps the previous clip
             start = t_cursor
-            clean_end = start + c.duration_sec - (fade if i < last_i else 0.0)
+            dur_i = durations[i]
+            clean_end = start + dur_i - (fade if i < last_i else 0.0)
             cap = caption_filter(
                 headline=c.headline,
                 sub=c.sub,
                 t_start=start,
                 t_end=clean_end,
                 font_path=plan.font_path,
+                text_dir=plan.intermediates_dir / "captions",
+                beat_id=c.beat_id,
             )
             if cap:
                 caption_exprs.append(cap)
-            t_cursor += c.duration_sec
+            t_cursor += dur_i
         if caption_exprs:
             caption_chain = ",".join(caption_exprs)
             filter_parts.append(f"[{prev_label}]{caption_chain}[vout]")
@@ -435,19 +513,29 @@ def build_pairwise_commands(
     plan: StitchPlan,
     work_dir: Path,
     out_path: Path,
+    actual_durations: list[float] | None = None,
 ) -> list[tuple[list[str], Path]]:
     """Fallback: pairwise reduction. Stitches clips left-to-right, one
     xfade at a time, into a growing prefix mp4. Slower (re-encodes the
     prefix at each step) but recovers when the chained graph fails."""
 
     if len(intermediates) <= 1:
-        return [(build_xfade_command(intermediates, plan=plan, out_path=out_path), out_path)]
+        return [(build_xfade_command(
+            intermediates, plan=plan, out_path=out_path,
+            actual_durations=actual_durations,
+        ), out_path)]
 
     work_dir.mkdir(parents=True, exist_ok=True)
     steps: list[tuple[list[str], Path]] = []
     fade = plan.xfade_sec
+    durations = (
+        list(actual_durations)
+        if actual_durations and len(actual_durations) == len(intermediates)
+        else [c.duration_sec for c in plan.clips]
+    )
+    durations = [max(d, fade * 2) for d in durations]
     prefix = intermediates[0]
-    cumulative = plan.clips[0].duration_sec
+    cumulative = durations[0]
     for i in range(1, len(intermediates)):
         is_last = i == len(intermediates) - 1
         target = out_path if is_last else (work_dir / f"prefix_{i:02d}.mp4")
@@ -467,7 +555,7 @@ def build_pairwise_commands(
             cmd.extend(["-movflags", "+faststart"])
         cmd.append(str(target))
         steps.append((cmd, target))
-        cumulative = cumulative + plan.clips[i].duration_sec - fade
+        cumulative = cumulative + durations[i] - fade
         prefix = target
     return steps
 
@@ -601,8 +689,17 @@ def stitch_session(
             elapsed_ms=(time.perf_counter() - started) * 1000,
         )
 
+    # After pass-1: ffprobe each intermediate so pass-2's xfade math
+    # uses the actual content length, not what beats.json asked for.
+    # (When scene-ready took longer than `duration_sec`, the trim
+    # filter ran out of source and the intermediate is shorter.)
+    actual_durations = [ffprobe_duration(p) for p in intermediate_paths]
+
     # Pass 2: chained xfade. If it fails, fall back to pairwise.
-    chain_cmd = build_xfade_command(intermediate_paths, plan=plan, out_path=out_path)
+    chain_cmd = build_xfade_command(
+        intermediate_paths, plan=plan, out_path=out_path,
+        actual_durations=actual_durations,
+    )
     ok, err = _run_one(chain_cmd, cleanup_on_fail=out_path)
     if ok:
         _write_reel_meta(plan)
@@ -616,6 +713,7 @@ def stitch_session(
         intermediate_paths, plan=plan,
         work_dir=intermediates_dir / "pairwise",
         out_path=out_path,
+        actual_durations=actual_durations,
     )
     for cmd, target in pairwise_steps:
         ok, err = _run_one(cmd, cleanup_on_fail=target)

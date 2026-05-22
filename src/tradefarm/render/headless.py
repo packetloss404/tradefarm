@@ -58,6 +58,11 @@ DEFAULT_STREAM_BASE = "http://localhost:5180/"
 DEFAULT_VIEWPORT = (1920, 1080)
 DEFAULT_REPLAY_SPEED = 60.0
 DEFAULT_SCENE_READY_TIMEOUT_MS = 15_000
+# Seconds of additional sleep after `duration_sec` finishes — bigger
+# than you'd think because Playwright's webm muxer can drop the last
+# 1-2s on context.close(). Without enough margin, the trimmed
+# intermediate ends up shorter than the stitcher's xfade math assumes.
+TAIL_BUFFER_SEC = 2.0
 # Wait this long for the WS handshake + first REST snapshot before
 # giving up on a beat. Generous; most beats are ready in <3s.
 DEFAULT_GOTO_TIMEOUT_MS = 30_000
@@ -287,10 +292,12 @@ async def _render_one(
         # Measured from navigation start (not context creation) so the
         # stitcher's trim point matches what was actually on screen.
         scene_ready_ms = (time.perf_counter() - nav_started) * 1000
-        # Hold the scene for the requested duration. Tiny tail-slack
-        # reduces the chance the last animation frame is mid-transition
-        # when the recorder cuts.
-        await asyncio.sleep(job.duration_sec + 0.25)
+        # Hold the scene for the requested duration plus tail-buffer.
+        # Playwright's video recorder routinely loses the last 1-2s on
+        # `context.close()` codec flush, so we need real margin —
+        # the previous 0.25s wasn't enough and short beats came out
+        # shorter than `duration_sec`, breaking stitcher xfade math.
+        await asyncio.sleep(job.duration_sec + TAIL_BUFFER_SEC)
     except asyncio.CancelledError:
         # Operator hit Ctrl-C. Tear down the context and re-raise so the
         # outer loop's bare `except Exception` doesn't swallow this and
