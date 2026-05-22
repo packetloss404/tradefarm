@@ -174,6 +174,14 @@ export default function App() {
 
   return (
     <>
+      {/* Audit fix (H10): every layout (rotator OR v1-broadcast OR
+          pre-roll) needs to signal `data-scene-ready` for the headless
+          renderer's wait-for-selector to resolve. SceneRotator publishes
+          the attribute on its own wrapper; v1-broadcast and PreRoll
+          previously didn't, so headless captures would hang forever
+          under those modes. App-level wrapper carries the attribute
+          for all three. */}
+      <div data-scene-ready="true" style={{ display: "contents" }}>
       <AnimatePresence mode="wait">
         {showPreroll ? (
           <PreRollScene
@@ -203,6 +211,7 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+      </div>
 
       {/* Audience overlays sit at the App level so they render across ALL
           layouts — V1 broadcast, scene rotator, and even the pre-roll splash

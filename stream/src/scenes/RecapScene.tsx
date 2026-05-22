@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { StreamSnapshot } from "../hooks/useStreamData";
+import { replayNow } from "../shared/replayMode";
 import {
   useRecap,
   type RecapBiggestFill,
@@ -60,7 +61,7 @@ function fmtSignedPct(pct: number, frac = 2): string {
 function fmtRelative(iso: string): string {
   const then = Date.parse(iso);
   if (!Number.isFinite(then)) return "";
-  const deltaSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const deltaSec = Math.max(0, Math.floor((replayNow() - then) / 1000));
   if (deltaSec < 60) return `${deltaSec}s ago`;
   if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`;
   const h = Math.floor(deltaSec / 3600);

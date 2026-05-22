@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { api, type AccountSummary, type AdminConfig } from "../shared/api";
+import { replayNow } from "../shared/replayMode";
 
 const SPARK_BUFFER_SIZE = 30;
 const ADMIN_CONFIG_REFRESH_MS = 60_000;
@@ -17,7 +18,7 @@ function fmtSign(n: number, frac = 2): string {
 
 function tickAge(iso: string | null): string {
   if (!iso) return "never";
-  const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  const sec = Math.max(0, Math.round((replayNow() - new Date(iso).getTime()) / 1000));
   if (sec < 60) return `${sec}s ago`;
   if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
   return `${Math.round(sec / 3600)}h ago`;
@@ -175,9 +176,9 @@ function TickCountdownRing({ lastTickIso }: { lastTickIso: string | null }) {
   });
   const intervalSec = cfg?.auto_tick_interval_sec ?? 0;
 
-  const [now, setNow] = useState<number>(() => Date.now());
+  const [now, setNow] = useState<number>(() => replayNow());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(replayNow()), 1000);
     return () => clearInterval(id);
   }, []);
 

@@ -174,6 +174,34 @@ def moment_from_macro(
     )
 
 
+# Audit fix (C15): module-level ledger + scheduler so every producer
+# automatically gets recap-history + slot-arbitration without each one
+# having to plumb them in. The Orchestrator wires its own instances at
+# boot (see _broadcast_ledger / _broadcast_scheduler attrs) and routes
+# moments through here; if the caller forgot to install them, fall
+# back to the legacy direct-publish path so today's behavior is
+# preserved.
+_broadcast_ledger: "Any | None" = None
+_broadcast_scheduler: "Any | None" = None
+
+
+def install_broadcast_arbiter(ledger: Any, scheduler: Any) -> None:
+    """Called by Orchestrator.__init__ to register the ledger + slot
+    scheduler. Subsequent publish_broadcast_moment calls route through
+    them, recording recap history + multiplexing onto UI output slots."""
+    global _broadcast_ledger, _broadcast_scheduler
+    _broadcast_ledger = ledger
+    _broadcast_scheduler = scheduler
+
+
+def get_broadcast_ledger() -> Any | None:
+    return _broadcast_ledger
+
+
+def get_broadcast_scheduler() -> Any | None:
+    return _broadcast_scheduler
+
+
 async def publish_broadcast_moment(
     moment: BroadcastMoment,
     *,
@@ -185,7 +213,37 @@ async def publish_broadcast_moment(
     ``broadcast_moment`` is the source-of-truth event. The legacy fan-out keeps
     the existing stream app alive while it migrates from ad-hoc macro events to
     the broadcast OS contract.
+
+    Audit fix (C15): if a ledger + scheduler have been installed via
+    install_broadcast_arbiter(), the moment is recorded for recap and
+    arbitrated against in-flight UI slots — multiple producers can no
+    longer trample the same output. Without the arbiter installed,
+    behavior matches the legacy direct-publish path.
     """
+
+    if _broadcast_ledger is not None:
+        try:
+            _broadcast_ledger.record(moment)
+        except Exception:
+            pass
+    if _broadcast_scheduler is not None:
+        try:
+            scheduled = _broadcast_scheduler.submit(moment)
+        except Exception:
+            scheduled = ()
+        # If the scheduler decided this moment is preempted or queued,
+        # publish a `broadcast_slot` event so the dashboard can show
+        # the queue depth. Always publish the canonical moment too.
+        for sm in scheduled:
+            try:
+                await publish("broadcast_slot", {
+                    "moment_id": sm.moment.id,
+                    "kind": sm.moment.kind,
+                    "outputs": list(sm.moment.outputs),
+                    "state": getattr(sm, "state", "active"),
+                })
+            except Exception:
+                pass
 
     await publish("broadcast_moment", moment.to_payload())
     if not emit_legacy:

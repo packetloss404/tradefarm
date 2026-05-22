@@ -103,9 +103,11 @@ stream/              # Tauri 2 broadcast app (1920x1080 multi-scene rotator
 tests/               # pytest — virtual book, journal, ranks, retrieval,
                      #   curriculum, risk-exits
 scripts/             # make_favicon.py
-docs/                # plan_product.md, plan_tech.md, PROJECT_PLAN.md
-                     #   (Agent Academy 4-phase synthesis)
-dev/                 # design notes — feature-backlog.md (cross-surface)
+docs/                # vod-build-roadmap.md, vod-pivot.md,
+                     #   session-runner-spec.md, screenshots/
+dev/                 # design notes — feature-backlog.md, audit-findings.md,
+                     #   _archive/ (plan_product.md, plan_tech.md,
+                     #   PROJECT_PLAN.md)
 ```
 
 **Decision flow per tick**:
@@ -141,6 +143,14 @@ EODHD bars → features (19) → LSTM(30, seq_len=30)
 - Optional (for the broadcast app): Rust 1.77+ via
   [rustup](https://rustup.rs/), plus the Microsoft WebView2 runtime (already
   installed on Windows 11)
+- **For the VOD pipeline** (`tradefarm.session.*`, `tradefarm.render.*`,
+  `tradefarm.tts.*`, `tradefarm.thumb.*`, `tradefarm.yt.*`):
+  - **ffmpeg** on PATH (stitcher + mixer + thumbnail frame-grab all shell
+    out to it). Windows: `winget install Gyan.FFmpeg`. macOS: `brew install
+    ffmpeg`. Linux: distro package.
+  - **`vod` extra** (`uv sync --extra ml --extra dev --extra vod`) which
+    pulls Playwright.
+  - **Chromium**: `uv run playwright install chromium` (one-time, ~150 MB).
 
 ## Setup
 
@@ -148,7 +158,10 @@ EODHD bars → features (19) → LSTM(30, seq_len=30)
 git clone git@github.com:packetloss404/tradefarm.git
 cd tradefarm
 
-# Python deps
+# Root deps (concurrently launcher for `npm run dev`)
+npm install
+
+# Python deps. Add --extra vod for the VOD pipeline (see prereqs above).
 uv sync --extra ml --extra dev
 
 # Copy and fill env
@@ -279,13 +292,21 @@ overlay (Ctrl+I) to point at a separate trading host.
 
 - [CHANGELOG.md](./CHANGELOG.md) — release history grouped by date.
 - [ROADMAP.md](./ROADMAP.md) — what's next, by horizon (now / next / later).
-- [docs/PROJECT_PLAN.md](./docs/PROJECT_PLAN.md) — 4-phase Agent Academy
-  delivery plan (already shipped, kept as design archive).
-- [docs/plan_tech.md](./docs/plan_tech.md) — engineering planning doc.
-- [docs/plan_product.md](./docs/plan_product.md) — UX planning doc.
+- [docs/vod-build-roadmap.md](./docs/vod-build-roadmap.md) — VOD pipeline
+  build plan (Sessions 1-10, mostly shipped).
+- [docs/vod-pivot.md](./docs/vod-pivot.md) — narrative behind the
+  pivot from live broadcast to daily VOD.
+- [dev/_archive/PROJECT_PLAN.md](./dev/_archive/PROJECT_PLAN.md) —
+  4-phase Agent Academy delivery plan (shipped; kept as design archive).
+- [dev/_archive/plan_tech.md](./dev/_archive/plan_tech.md) — engineering
+  planning archive.
+- [dev/_archive/plan_product.md](./dev/_archive/plan_product.md) — UX
+  planning archive.
 - [dev/feature-backlog.md](./dev/feature-backlog.md) — single
   cross-surface backlog (stream + dashboard) with shipped log, active
   queue, and idea pool.
+- [dev/audit-findings.md](./dev/audit-findings.md) — most recent
+  20-agent codebase audit + status of every finding.
 - [CLAUDE.md](./CLAUDE.md) — coding conventions, gotchas, and run
   commands for AI assistants working in this repo.
 

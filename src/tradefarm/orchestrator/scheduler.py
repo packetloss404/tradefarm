@@ -143,6 +143,17 @@ class Orchestrator:
         # PENDING_EXIT_TTL_SEC.
         self._pending_exits: dict[tuple[int, str], float] = {}
         self._curriculum_task: asyncio.Task | None = None
+        # Audit fix (C15): wire the broadcast ledger + slot scheduler so
+        # every producer goes through the same arbiter. publish_broadcast_moment
+        # picks them up via the module-level install_broadcast_arbiter call.
+        from tradefarm.orchestrator.broadcast_recap import BroadcastRecapLedger
+        from tradefarm.orchestrator.broadcast_scheduler import BroadcastScheduler
+        from tradefarm.orchestrator import broadcast_os as _bos
+        self._broadcast_ledger = BroadcastRecapLedger()
+        self._broadcast_scheduler = BroadcastScheduler()
+        _bos.install_broadcast_arbiter(
+            self._broadcast_ledger, self._broadcast_scheduler,
+        )
         # Auto-director — broadcasts macros based on agent/market state.
         self._auto_director: AutoDirector | None = None
         # Streak watcher — broadcasts macros based on trade-history patterns.

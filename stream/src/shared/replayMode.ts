@@ -53,3 +53,39 @@ export function withReplayParams(path: string): string {
   if (REPLAY.at) parts.push(`at=${encodeURIComponent(REPLAY.at)}`);
   return `${path}${sep}${parts.join("&")}`;
 }
+
+// ─── replayNow() shim ────────────────────────────────────────────────
+// Audit fix (H11): banner TTLs, "X seconds ago" formatters, recap
+// eligibility, chapter labels — all of these were calling Date.now()
+// directly, which means a replay capture rendered them with wall-clock
+// today instead of the replayed timestamp. Result: a 2024 session's
+// recap card would say "2 years ago" and a banner would expire in
+// real-time while the replayed events were time-compressed.
+//
+// `replayNow()` returns the replayed timestamp when active, else
+// `Date.now()`. Drop-in replacement at every wall-clock callsite.
+//
+// `REPLAY.at` is the start of the replay window; with `speed > 1` the
+// effective "now" advances faster than wall time. We approximate the
+// effective now as `at + (real_now - replay_started_at) * speed`,
+// where replay_started_at is captured once at module load. Cheap and
+// gives the UI a coherent monotonic clock across the run.
+
+const _wallStartAtModuleLoad = Date.now();
+const _replayStartParsed: number | null = (() => {
+  if (!REPLAY.active || !REPLAY.at) return null;
+  const t = Date.parse(REPLAY.at);
+  return Number.isFinite(t) ? t : null;
+})();
+
+export function replayNow(): number {
+  if (!REPLAY.active || _replayStartParsed === null) return Date.now();
+  const elapsed = Date.now() - _wallStartAtModuleLoad;
+  return _replayStartParsed + elapsed * REPLAY.speed;
+}
+
+/** Replayable Date() factory: returns a fresh Date object that
+ *  reflects the replayed clock when active, else wall now. */
+export function replayDate(): Date {
+  return new Date(replayNow());
+}

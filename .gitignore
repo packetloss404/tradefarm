@@ -45,3 +45,14 @@ web/*.tsbuildinfo
 .idea/
 .vscode/
 Thumbs.db
+
+# Audit fix (H31): VOD pipeline scratch directories — never commit.
+out/
+intermediates/
+
+# Stray log files in working tree (CLAUDE.md gotcha #1: backend cwd matters)
+.backend.log
+.web.log
+.stream.log
+.backend.pid
+.web.pid

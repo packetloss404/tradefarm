@@ -33,11 +33,14 @@ def test_format_beat_includes_id_kind_t_and_headline():
         "metadata": {},
     }
     s = format_beat_for_prompt(beat)
-    assert "id=b_open" in s
-    assert "kind=open" in s
+    # Now wrapped in <beat>…</beat> with repr()-quoted ids per the
+    # audit fix for prompt-injection (H16).
+    assert "id='b_open'" in s
+    assert "kind='open'" in s
     assert "2026-05-21T13:30:00+00:00" in s
     assert "Market open" in s
     assert "100 agents" in s
+    assert s.startswith("<beat ") and s.endswith("</beat>")
 
 
 def test_format_beat_only_emits_facts_with_known_keys():

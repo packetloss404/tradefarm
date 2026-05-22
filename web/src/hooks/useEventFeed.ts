@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountSummary } from "../api";
 import { useLiveEvents, type LiveEvent, type LiveStatus } from "./useLiveEvents";
 
@@ -91,5 +91,16 @@ export function useEventFeed(mutators: FeedMutators = {}): EventFeed {
   }, []);
 
   const status = useLiveEvents(handler);
+
+  // Audit fix (H13): clear sticky `account` snapshot on WS disconnect
+  // so the dashboard falls through to the fresh SWR-fetched value.
+  // Without this, equity / PnL displayed last-seen-pre-disconnect
+  // until the backend emitted a new `account` event.
+  useEffect(() => {
+    if (status === "closed") {
+      setAccount(null);
+    }
+  }, [status]);
+
   return { status, account, lastTick, fills, buffer, promotionEvents };
 }

@@ -337,6 +337,11 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           });
           break;
         }
+        case "broadcast_moment":
+          // Canonical Broadcast OS event. Current visuals are still driven by
+          // the legacy fan-out events (`stream_macro_fired`, `stream_banner`)
+          // so this branch intentionally observes without rendering.
+          break;
         case "stream_commentary": {
           const p = ev.payload;
           if (typeof p.id !== "string" || p.id.length === 0) break;
