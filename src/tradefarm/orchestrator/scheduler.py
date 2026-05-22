@@ -38,6 +38,12 @@ from tradefarm.storage import journal, repo
 log = structlog.get_logger()
 
 RECONCILE_INTERVAL_SEC = 10
+# How long a pending risk-exit blocks a re-queue of the same
+# (agent, symbol). Beyond this the scheduler assumes the broker dropped
+# the order and lets the next risk check re-queue. 60s is generous for
+# Alpaca paper (usually <1s) but accommodates the 10s reconciler poll
+# plus broker-side queueing.
+PENDING_EXIT_TTL_SEC: float = 60.0
 
 # In-memory counters for the dashboard. Reset at the start of each tick so
 # the UI can display "notes this tick" alongside the existing LLM_SKIPS.
@@ -125,6 +131,17 @@ class Orchestrator:
         self._agents_by_id = {a.state.id: a for a in agents}
         # Phase 4 — curriculum loop gates on this to avoid mid-tick rank flips.
         self._tick_in_progress: bool = False
+        # Audit fix (C9): replace polling-on-flag with a real lock so the
+        # curriculum can't run concurrently with tick_once, and two
+        # concurrent /tick calls can't interleave.
+        self._tick_lock: asyncio.Lock = asyncio.Lock()
+        # Audit fix (H17 / scheduler double-submit): track risk exits
+        # queued this tick by (agent_id, symbol) so a second tick that
+        # arrives before Alpaca fills the first exit doesn't queue a
+        # duplicate sell of the (still-open) full position. The set is
+        # pruned when the reconciler reports the exit as filled OR after
+        # PENDING_EXIT_TTL_SEC.
+        self._pending_exits: dict[tuple[int, str], float] = {}
         self._curriculum_task: asyncio.Task | None = None
         # Auto-director — broadcasts macros based on agent/market state.
         self._auto_director: AutoDirector | None = None
@@ -268,9 +285,30 @@ class Orchestrator:
         now_utc = _runtime_clock_now_utc()
         risk_exits_added = 0
         results_by_id = {a.state.id: (a, sigs) for a, sigs in results}
+        # Audit fix (scheduler double-submit): prune pending exits older
+        # than PENDING_EXIT_TTL_SEC — Alpaca paper fills are usually
+        # near-instant; if an exit is still pending after this window
+        # something went wrong upstream and we let the next risk check
+        # re-queue it rather than blocking forever.
+        now_ts = now_utc.timestamp()
+        stale = [
+            k for k, ts in self._pending_exits.items()
+            if now_ts - ts > PENDING_EXIT_TTL_SEC
+        ]
+        for k in stale:
+            self._pending_exits.pop(k, None)
+
         for agent in self.agents:
             for sym, pos in list(agent.state.book.positions.items()):
                 if pos.qty <= 0:
+                    continue
+                # Audit fix (H17 / scheduler double-submit): if a risk
+                # exit for this (agent, symbol) is still pending from a
+                # prior tick (broker hasn't filled yet), don't queue
+                # another full-qty sell — that's how a position flips
+                # short under alpaca_paper while the original exit is
+                # in flight.
+                if (agent.state.id, sym) in self._pending_exits:
                     continue
                 mark = marks.get(sym, pos.avg_price)
                 trig = agent.risk.should_exit(sym, pos, mark, now_utc)
@@ -284,6 +322,7 @@ class Orchestrator:
                 sigs = [s for s in sigs if not (s.symbol == sym and s.side == "sell")]
                 sigs.append(Signal(sym, "sell", round(pos.qty, 4), reason=f"risk-exit: {trig.reason}"))
                 results_by_id[agent.state.id] = (a_ref, sigs)
+                self._pending_exits[(agent.state.id, sym)] = now_ts
                 risk_exits_added += 1
         if risk_exits_added:
             log.info("risk_exits_queued", count=risk_exits_added)
@@ -607,11 +646,32 @@ class Orchestrator:
             if agent is None:
                 log.warning("reconciled_unknown_agent", agent_id=rf.agent_id, broker_oid=rf.broker_order_id)
                 continue
-            ok = agent.state.book.apply_fill_delta(
-                rf.symbol, rf.side, rf.qty, rf.delta, rf.broker_order_id,
+            # Derive mark from actual+delta (delta = actual - mark) and
+            # use apply_reconciled_fill so the correction is correct for
+            # short opens, longs→short flips, and partial closes.
+            mark_price = rf.actual_price - rf.delta
+            ok = agent.state.book.apply_reconciled_fill(
+                rf.symbol, rf.side, rf.qty,
+                mark_price=mark_price,
+                actual_price=rf.actual_price,
+                broker_order_id=rf.broker_order_id,
             )
             if ok:
                 applied += 1
+                # If this fill was a sell, clear the pending-exit guard
+                # so the next tick can issue a fresh exit if the agent
+                # opens a new position.
+                if rf.side == "sell":
+                    self._pending_exits.pop((rf.agent_id, rf.symbol), None)
+                    # Audit fix (H19): also clear the RiskManager's
+                    # trailing peak when the position has been fully
+                    # closed, so a re-entry starts fresh rather than
+                    # inheriting the prior cycle's peak.
+                    agent_ref = self._agents_by_id.get(rf.agent_id)
+                    if agent_ref is not None:
+                        existing_pos = agent_ref.state.book.positions.get(rf.symbol)
+                        if existing_pos is None or abs(existing_pos.qty) < 1e-9:
+                            agent_ref.risk.clear_peak(rf.symbol)
                 await publish_event("reconcile", {
                     "agent_id": rf.agent_id,
                     "symbol": rf.symbol,

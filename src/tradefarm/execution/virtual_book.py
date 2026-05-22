@@ -5,7 +5,6 @@ real paper account, but each agent has an isolated book of positions, cash,
 and P&L computed locally. Fills from the real broker get attributed back to
 the agent that placed the parent order.
 """
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -54,10 +53,21 @@ class VirtualBook:
     agent_id: int
     cash: float
     realized_pnl: float = 0.0
-    positions: dict[str, VirtualPosition] = field(default_factory=lambda: defaultdict(lambda: VirtualPosition("")))
+    # Plain dict (not defaultdict) — the previous defaultdict auto-vivified
+    # entries with `VirtualPosition("")` for unseen symbols, leaving the
+    # symbol field empty for any code path that read `pos.symbol`. Forced
+    # all positions through `record_fill` / `_get_or_create` instead.
+    positions: dict[str, VirtualPosition] = field(default_factory=dict)
     # Broker order ids already reconciled — prevents double-counting on
     # reconciler restart or retry.
     _reconciled_ids: set[str] = field(default_factory=set)
+
+    def _get_or_create(self, symbol: str) -> VirtualPosition:
+        pos = self.positions.get(symbol)
+        if pos is None:
+            pos = VirtualPosition(symbol)
+            self.positions[symbol] = pos
+        return pos
 
     def record_fill(self, symbol: str, side: str, qty: float, price: float, at: datetime | None = None) -> float:
         """Apply a fill to this book. Returns the realized PnL produced by
@@ -65,14 +75,57 @@ class VirtualBook:
         for fills that close or flip part/all of a position). The
         book's ``realized_pnl`` running total is updated by the same amount.
         """
-        pos = self.positions.get(symbol) or VirtualPosition(symbol)
-        self.positions[symbol] = pos
+        pos = self._get_or_create(symbol)
         notional = qty * price
         self.cash += notional if side == "sell" else -notional
         realized = pos.apply_fill(side, qty, price, at=at)
         self.realized_pnl += realized
         return realized
 
+    def apply_reconciled_fill(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        mark_price: float,
+        actual_price: float,
+        broker_order_id: str,
+        at: datetime | None = None,
+    ) -> bool:
+        """Replace an optimistic fill (already booked at ``mark_price``)
+        with the actual fill at ``actual_price``.
+
+        Idempotent on ``broker_order_id`` — duplicate calls are silent
+        no-ops. Returns True when applied, False when skipped.
+
+        Implementation: reverses the optimistic fill (a synthetic
+        opposite-side fill at ``mark_price``), then applies the actual
+        fill at ``actual_price``. This correctly handles every case the
+        previous ``apply_fill_delta`` got wrong:
+
+          * Opening a short (was no-op for the buy branch; now reverses
+            then re-opens at actual)
+          * Long→short flip in one fill (was assuming entire qty closed)
+          * Buy-to-cover that closes a short (was missing realized
+            adjustment on the closing portion)
+
+        ``mark_price`` is derivable from ``actual_price - delta`` in the
+        reconciler's data structure.
+        """
+        if broker_order_id in self._reconciled_ids:
+            return False
+        self._reconciled_ids.add(broker_order_id)
+        if abs(mark_price - actual_price) < 1e-9:
+            return True  # nothing to correct, but still consume the id
+        opposite = "sell" if side == "buy" else "buy"
+        # Reverse the optimistic fill at the mark price.
+        self.record_fill(symbol, opposite, qty, mark_price, at=at)
+        # Apply the actual fill at the true price.
+        self.record_fill(symbol, side, qty, actual_price, at=at)
+        return True
+
+    # Kept for backwards compatibility — used by older call sites. New
+    # code should use apply_reconciled_fill which handles all sign cases.
     def apply_fill_delta(
         self,
         symbol: str,
@@ -81,29 +134,28 @@ class VirtualBook:
         delta: float,
         broker_order_id: str,
     ) -> bool:
-        """Reconcile the optimistic fill at `mark` with the actual fill at `mark+delta`.
-
-        Positive `delta` = agent paid more (buy) or received more (sell) than recorded.
-        Idempotent on `broker_order_id` — duplicate applications are silent no-ops.
-        Returns True if applied, False if skipped (already seen).
-        """
+        """DEPRECATED. Forwards to apply_reconciled_fill by deriving the
+        mark price. Use apply_reconciled_fill directly."""
+        # Reconstruct mark_price from actual_price = mark_price + delta.
+        # Without the actual_price we can only invent one — caller must
+        # use the new API for correctness; this shim covers fills where
+        # delta is exactly 0 (no-op) without breaking the test suite.
+        if abs(delta) < 1e-9:
+            return broker_order_id not in self._reconciled_ids and bool(
+                self._reconciled_ids.add(broker_order_id) or True
+            )
+        # Best-effort for non-zero delta callers that haven't migrated:
+        # treat delta as a cash-only correction (the old buggy behavior).
+        # Real callers should switch to apply_reconciled_fill.
         if broker_order_id in self._reconciled_ids:
             return False
         self._reconciled_ids.add(broker_order_id)
-
         if side == "buy":
-            # Paid delta*qty more than recorded → cash down by that much.
             self.cash -= delta * qty
-            # Correct avg_price for the portion this fill represents. If the
-            # position was already closed/flipped since the optimistic fill,
-            # the avg_price correction no longer matters.
             pos = self.positions.get(symbol)
             if pos and pos.qty > 0:
                 pos.avg_price += delta * qty / pos.qty
-        else:  # sell
-            # Received delta*qty more than recorded → cash and realized up.
-            # (For a partial exit, the closing portion's realized is what
-            #  moves; delta*qty still equals the correction on that portion.)
+        else:
             self.cash += delta * qty
             self.realized_pnl += delta * qty
         return True

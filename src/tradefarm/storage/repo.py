@@ -81,11 +81,16 @@ async def sync_positions(agent_id: int, book: VirtualBook) -> None:
 
 async def strategy_summary() -> list[dict]:
     """Per-strategy attribution: aggregates latest pnl snapshot per agent, then
-    groups by strategy. 'today' is UTC (midnight UTC boundary)."""
+    groups by strategy. 'today' is UTC (midnight UTC boundary).
+
+    Filters out replay-session rows (session_id IS NOT NULL) so the live
+    dashboard doesn't inflate after the operator runs `session.run`. The
+    replay-aware REST paths short-circuit elsewhere via manifest reads."""
     async with SessionLocal() as session:
-        # Latest snapshot timestamp per agent
+        # Latest LIVE snapshot timestamp per agent.
         latest = (
             select(PnlSnapshot.agent_id, func.max(PnlSnapshot.taken_at).label("ts"))
+            .where(PnlSnapshot.session_id.is_(None))
             .group_by(PnlSnapshot.agent_id)
             .subquery()
         )
@@ -103,6 +108,7 @@ async def strategy_summary() -> list[dict]:
             select(Agent.strategy, func.count(Trade.id))
             .join(Trade, Trade.agent_id == Agent.id)
             .where(Trade.executed_at >= midnight_utc)
+            .where(Trade.session_id.is_(None))   # live only
             .group_by(Agent.strategy)
         )).all()
         trades_today_by_strat = {s: int(c) for s, c in trade_rows}
@@ -141,7 +147,11 @@ async def strategy_summary() -> list[dict]:
 
 
 async def strategy_equity_timeseries(days: int = 7) -> list[dict]:
-    """For each (day, strategy), sum of each agent's last snapshot that day. UTC day boundary."""
+    """For each (day, strategy), sum of each agent's last snapshot that day. UTC day boundary.
+
+    Live-only (session_id IS NULL) — replay-session snapshots are
+    excluded so a `session.run` doesn't contaminate the dashboard's
+    multi-day chart."""
     cutoff = now_utc().date() - timedelta(days=days)
     async with SessionLocal() as session:
         sub = (
@@ -151,6 +161,7 @@ async def strategy_equity_timeseries(days: int = 7) -> list[dict]:
                 func.max(PnlSnapshot.taken_at).label("ts"),
             )
             .where(func.date(PnlSnapshot.taken_at) >= cutoff)
+            .where(PnlSnapshot.session_id.is_(None))   # live only
             .group_by(PnlSnapshot.agent_id, func.date(PnlSnapshot.taken_at))
             .subquery()
         )

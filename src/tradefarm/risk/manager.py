@@ -58,6 +58,11 @@ class RiskManager:
         self.rank = rank
         self._apply_rank_multiplier()
         self._peak: dict[str, float] = {}
+        # Audit fix (H19): when a position reopens after being closed,
+        # the previous peak is stale. Track when each peak was seeded so
+        # `should_exit` can detect a fresh `opened_at` > seeded_at and
+        # reset rather than dragging the old peak forward.
+        self._peak_seeded_at: dict[str, datetime] = {}
 
     @staticmethod
     def _limits_from_settings() -> RiskLimits:
@@ -77,16 +82,54 @@ class RiskManager:
         # Lazy import keeps `risk.manager` import-safe during config bootstrap.
         from tradefarm.config import settings
         multiplier = settings.rank_multiplier(self.rank)
-        # Recompute from the *base* cap each call so repeated rank changes
-        # don't compound. `limits.max_position_notional_pct` stores the
-        # effective (post-multiplier) cap.
-        self.limits.max_position_notional_pct = BASE_MAX_POSITION_NOTIONAL_PCT * multiplier
+        # Audit fix (H21): when the caller passed an explicit RiskLimits
+        # the position cap they supplied is authoritative — DO NOT
+        # overwrite it with the base × multiplier. Previously this
+        # silently clobbered tests / call sites that injected a tighter
+        # or looser cap. Only recompute from BASE for the implicit path.
+        if not self._limits_explicit:
+            self.limits.max_position_notional_pct = (
+                BASE_MAX_POSITION_NOTIONAL_PCT * multiplier
+            )
 
-    def check_entry(self, book: VirtualBook, symbol: str, qty: float, price: float) -> RiskDecision:
+    def check_entry(
+        self,
+        book: VirtualBook,
+        symbol: str,
+        qty: float,
+        price: float,
+        marks: dict[str, float] | None = None,
+    ) -> RiskDecision:
+        # Audit fix: reject zero / negative inputs at the boundary so a
+        # bad signal can't reach the broker.
+        if qty <= 0 or price <= 0:
+            return RiskDecision(False, "invalid order qty/price")
         notional = abs(qty * price)
-        cap = self.starting_capital * self.limits.max_position_notional_pct
-        if notional > cap:
-            return RiskDecision(False, f"size {notional:.0f} exceeds per-symbol cap {cap:.0f}")
+
+        # Audit fix (H17): per-symbol cap was per-trade, so an agent that
+        # added to an existing position repeatedly could bypass the cap
+        # entirely. Cap is now against the *total* notional including the
+        # current position at mark.
+        existing = book.positions.get(symbol)
+        existing_notional = (
+            abs(existing.qty) * price if existing is not None else 0.0
+        )
+        total_notional = notional + existing_notional
+
+        # Audit fix (H18): cap was anchored to starting_capital, so a
+        # losing agent's cap stayed at 25% of starting (= 50%+ of current
+        # equity at drawdown). Clamp by min(starting, current_equity).
+        equity = book.equity(marks or {}) if marks else book.cash + (
+            existing_notional if existing else 0.0
+        )
+        cap_anchor = min(self.starting_capital, max(0.0, equity))
+        cap = cap_anchor * self.limits.max_position_notional_pct
+        if total_notional > cap:
+            return RiskDecision(
+                False,
+                f"size {total_notional:.0f} (incl. existing {existing_notional:.0f}) "
+                f"exceeds per-symbol cap {cap:.0f}",
+            )
         if book.cash - notional < 0:
             return RiskDecision(False, "insufficient cash")
         return RiskDecision(True)
@@ -124,11 +167,35 @@ class RiskManager:
             return ExitTrigger("take-profit", f"take-profit {unrealized_pct:+.2%}")
 
         if pos.opened_at is not None:
-            days = (now - pos.opened_at).total_seconds() / 86400.0
+            # Audit fix (H20): days-held uses trading days, not wall-clock
+            # days. A position opened Friday hitting "10 days" Monday-
+            # after-next was wrong — most of those "days" were closures.
+            from tradefarm.market.hours import trading_days_between
+            try:
+                days = trading_days_between(pos.opened_at, now)
+            except Exception:  # pragma: no cover — best-effort
+                # If the calendar lookup ever throws, fall back to wall
+                # clock — closing too aggressively is safer than not
+                # closing at all.
+                days = (now - pos.opened_at).total_seconds() / 86400.0
             if days >= max_hold_days:
-                return ExitTrigger("time-stop", f"held {days:.1f}d >= {max_hold_days}d")
+                return ExitTrigger(
+                    "time-stop",
+                    f"held {days:.1f} trading days >= {max_hold_days}d",
+                )
 
-        # Trailing stop — peak tracked per (agent × symbol) via _peak.
+        # Audit fix (H19): if `opened_at` is later than the cached peak's
+        # timestamp, the position has been closed + reopened since we
+        # last tracked a peak. Reset the peak to the new entry's avg_price
+        # so a stale-peak doesn't instantly trip the trailing-stop on
+        # the new position.
+        peak_seeded_at = self._peak_seeded_at.get(symbol)
+        if peak_seeded_at is None or (
+            pos.opened_at is not None and pos.opened_at > peak_seeded_at
+        ):
+            self._peak[symbol] = pos.avg_price
+            self._peak_seeded_at[symbol] = pos.opened_at or now
+
         peak = max(self._peak.get(symbol, pos.avg_price), mark)
         self._peak[symbol] = peak
         if peak > 0:
@@ -137,6 +204,14 @@ class RiskManager:
                 return ExitTrigger("trailing-stop", f"trailing {trail_pct:+.2%} off peak {peak:.2f}")
 
         return None
+
+    def clear_peak(self, symbol: str) -> None:
+        """Reset the trailing peak for a symbol — called when the position
+        has been fully closed so a re-entry starts fresh. The seeded-at
+        check in should_exit covers the case automatically too, but
+        explicit callers can shed the entry early."""
+        self._peak.pop(symbol, None)
+        self._peak_seeded_at.pop(symbol, None)
 
     def _effective_thresholds(self) -> tuple[float, float, float, int]:
         """If the caller injected explicit RiskLimits (tests), use those.

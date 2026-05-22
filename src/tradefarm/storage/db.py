@@ -31,6 +31,11 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("trades", "session_id", "VARCHAR(64)"),
     ("pnl_snapshots", "session_id", "VARCHAR(64)"),
     ("agent_notes", "session_id", "VARCHAR(64)"),
+    # Audit fix: Trade.broker_order_id for reconciler dedupe at the DB
+    # layer. The UNIQUE constraint comes via create_all on fresh DBs;
+    # this ADD COLUMN handles pre-existing DBs (the constraint is added
+    # via a partial unique index since SQLite can't ALTER ADD CONSTRAINT).
+    ("trades", "broker_order_id", "VARCHAR(64)"),
 )
 
 # (table, column) — indexes to ensure on existing DBs. create_all builds
@@ -58,6 +63,26 @@ async def _ensure_indexes(conn) -> None:
         await conn.execute(
             text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})")
         )
+    # Audit fix: partial unique index on Trade.broker_order_id for
+    # existing DBs (fresh DBs get the constraint via create_all).
+    # Partial-WHERE so the multitude of NULL rows (live trades pre-
+    # reconciler + simulated fills) don't all collide on UNIQUE.
+    await conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_broker_order_id "
+        "ON trades(broker_order_id) WHERE broker_order_id IS NOT NULL"
+    ))
+    # Audit fix: hot-path indexes flagged by storage subagent (`/agents/{id}/trades`
+    # ordered by executed_at DESC was a full-table scan).
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_trades_agent_id ON trades(agent_id)"
+    ))
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_trades_executed_at ON trades(executed_at)"
+    ))
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_agent_notes_outcome_closed_at "
+        "ON agent_notes(outcome_closed_at)"
+    ))
 
 
 async def init_db() -> None:

@@ -121,6 +121,13 @@ async def close_outcome(
     """
     try:
         async with SessionLocal() as session:
+            # Scope to the same session_id as the close. Live closes only
+            # see live entries (session_id IS NULL); replay closes only
+            # see replay entries from the same session. Without this, a
+            # live closing fill could stamp a replay's entry note and
+            # vice versa — the race the audit flagged.
+            from tradefarm.runtime.session_context import current_session_id
+            sid = current_session_id()
             stmt = (
                 select(AgentNote)
                 .where(
@@ -128,9 +135,15 @@ async def close_outcome(
                     AgentNote.symbol == symbol,
                     AgentNote.kind == "entry",
                     AgentNote.outcome_closed_at.is_(None),
+                    AgentNote.session_id.is_(None) if sid is None
+                    else AgentNote.session_id == sid,
                 )
                 .order_by(AgentNote.created_at.asc(), AgentNote.id.asc())
                 .limit(1)
+                # Best-effort row lock — no-op on SQLite, real on Postgres.
+                # Closes the SELECT+UPDATE race two concurrent close_outcome
+                # calls would otherwise have for the same agent+symbol.
+                .with_for_update(skip_locked=True)
             )
             note = (await session.execute(stmt)).scalar_one_or_none()
             if note is None:

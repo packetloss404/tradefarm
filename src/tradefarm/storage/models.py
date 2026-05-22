@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -48,20 +48,31 @@ class Trade(Base):
     __tablename__ = "trades"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"))
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     symbol: Mapped[str] = mapped_column(String(16))
     side: Mapped[str] = mapped_column(String(8))
     qty: Mapped[float] = mapped_column(Float)
     price: Mapped[float] = mapped_column(Float)
-    executed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    executed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     reason: Mapped[str] = mapped_column(String(256), default="")
     # NULL for live trading; set by the session runner to tag every fill
     # produced by a replay so downstream beat detection can pull a single
     # session's worth of activity. Indexed for the "all trades in session
     # X" query pattern.
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Reconciler dedupe — the Alpaca reconciler attributes fills back to
+    # virtual books on broker_order_id; pairing the column with a UNIQUE
+    # constraint at the DB layer means a duplicate reconciler call can't
+    # write duplicate Trade rows even if apply_reconciled_fill's
+    # in-memory idempotency check missed (e.g. process restart). NULL
+    # for sim-broker fills (no broker_order_id) and pre-reconciler rows.
+    broker_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     agent: Mapped[Agent] = relationship(back_populates="trades")
+
+    __table_args__ = (
+        UniqueConstraint("broker_order_id", name="uq_trades_broker_order_id"),
+    )
 
 
 class PnlSnapshot(Base):
@@ -98,7 +109,7 @@ class AgentNote(Base):
     # Outcome fields (nullable; stamped on close).
     outcome_trade_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outcome_realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
-    outcome_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    outcome_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     # NULL for live notes; set by the session runner. See Trade.session_id.
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
@@ -122,3 +133,14 @@ class AcademyPromotion(Base):
     # JSON-serialized RankStats; TEXT for SQLite + Postgres portability.
     stats_snapshot: Mapped[str] = mapped_column(Text, default="")
     at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        # Dedupe: two overlapping curriculum passes (or a process
+        # restart + replay) could otherwise write two identical
+        # promotion rows for the same threshold crossing, doubling the
+        # WS event and the dashboard's promotion-history list.
+        UniqueConstraint(
+            "agent_id", "from_rank", "to_rank", "at",
+            name="uq_academy_promotions_unique_crossing",
+        ),
+    )
