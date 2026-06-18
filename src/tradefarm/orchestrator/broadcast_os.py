@@ -234,12 +234,13 @@ async def publish_broadcast_moment(
             pass
     if _broadcast_scheduler is not None:
         try:
-            scheduled = _broadcast_scheduler.submit(moment)
+            scheduled = _broadcast_scheduler.submit_slots(moment)
         except Exception:
             scheduled = ()
-        # If the scheduler decided this moment is preempted or queued,
-        # publish a `broadcast_slot` event so the dashboard can show
-        # the queue depth. Always publish the canonical moment too.
+        # The scheduler tells us, per moment, whether it went live, was
+        # queued behind a higher-priority slot, or got preempted. Fan each
+        # out as a `broadcast_slot` event so the dashboard's queue/preemption
+        # indicator reflects reality. Always publish the canonical moment too.
         for sm in scheduled:
             try:
                 await publish(
@@ -248,7 +249,7 @@ async def publish_broadcast_moment(
                         "moment_id": sm.moment.id,
                         "kind": sm.moment.kind,
                         "outputs": list(sm.moment.outputs),
-                        "state": getattr(sm, "state", "active"),
+                        "state": sm.state,
                     },
                 )
             except Exception:

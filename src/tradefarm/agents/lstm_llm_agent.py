@@ -9,6 +9,7 @@ from tradefarm.agents import retrieval
 from tradefarm.agents.base import Agent, Signal
 from tradefarm.agents.features import WARMUP_BARS, featurize, latest_window
 from tradefarm.agents.llm_overlay import LlmContext, LlmDecision, LlmOverlay
+from tradefarm.agents.llm_overlay_types import LlmParseError
 from tradefarm.agents.lstm_model import FittedModel, load
 from tradefarm.config import settings
 
@@ -156,6 +157,36 @@ class LstmLlmAgent(Agent):
         try:
             LLM_SKIPS["called"] += 1
             decision = await self._overlay.decide(ctx)
+        except LlmParseError as e:
+            # Distinct from a transport/SDK failure: the call succeeded but the
+            # model returned a malformed/out-of-schema reply (bad JSON, missing
+            # key, out-of-enum value). Log + publish under a separate event so
+            # the operator can tell "Claude returned prose" from "LLM stopped".
+            # Same safe fallback as the generic path (LSTM-only, no signal).
+            from tradefarm.api.events import publish_event
+
+            log.warning(
+                "llm_parse_failed",
+                agent_id=self.state.id,
+                symbol=self.symbol,
+                err_type=type(e).__name__,
+                err=str(e)[:200],
+            )
+            try:
+                await publish_event(
+                    "llm_error",
+                    {
+                        "agent_id": self.state.id,
+                        "symbol": self.symbol,
+                        "err_type": type(e).__name__,
+                        "err": str(e)[:200],
+                        "kind": "parse",
+                    },
+                )
+            except Exception:  # noqa: BLE001 — never let WS errors mask the parse error
+                pass
+            self.last_decision = None
+            return []
         except Exception as e:
             # Audit fix (round 4): log + publish so the operator can
             # tell "LLM stopped" from "Claude returned prose". The

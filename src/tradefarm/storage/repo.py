@@ -18,6 +18,7 @@ log = structlog.get_logger(__name__)
 __all__ = [
     "upsert_agent",
     "record_trade",
+    "record_fill_atomic",
     "snapshot_pnl",
     "sync_positions",
     "strategy_summary",
@@ -132,6 +133,75 @@ async def sync_positions(agent_id: int, book: VirtualBook) -> None:
                     Position(agent_id=agent_id, symbol=sym, qty=vp.qty, avg_price=vp.avg_price)
                 )
         await session.commit()
+
+
+async def record_fill_atomic(
+    agent_id: int,
+    book: VirtualBook,
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float,
+    reason: str,
+    broker_order_id: str | None = None,
+) -> None:
+    """Persist a Trade row AND re-sync this agent's positions in ONE transaction.
+
+    Issue #8c: the in-tick fill path previously called ``record_trade`` then
+    ``sync_positions`` in two separate ``SessionLocal()`` sessions. A crash
+    between them left the DB with a trade row but stale positions (or vice
+    versa). This commits both writes together — they land atomically or not
+    at all.
+
+    Dedupe semantics match ``record_trade`` (CLAUDE.md gotcha #7): a duplicate
+    ``broker_order_id`` hits the UNIQUE constraint and we swallow the
+    IntegrityError. In that case the fill was already recorded by a prior
+    write, so we do NOT re-sync positions here — the original atomic write
+    already persisted the matching position state, and the in-memory ``book``
+    passed in is the source of truth the live caller keeps current regardless.
+    ``None`` ``broker_order_id`` skips dedupe (SQLite treats NULLs as distinct).
+    """
+    async with SessionLocal() as session:
+        try:
+            session.add(
+                Trade(
+                    agent_id=agent_id,
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    price=price,
+                    reason=reason,
+                    session_id=current_session_id(),
+                    broker_order_id=broker_order_id,
+                )
+            )
+            # Flush the Trade insert NOW so a duplicate broker_order_id raises
+            # here (inside the try) rather than via the autoflush triggered by
+            # the Position SELECT below — that autoflush would escape this
+            # guard and surface as an unhandled IntegrityError.
+            await session.flush()
+            # Replace this agent's positions table with current book state, in
+            # the same unit of work as the Trade insert.
+            existing = (
+                (await session.execute(select(Position).where(Position.agent_id == agent_id)))
+                .scalars()
+                .all()
+            )
+            for p in existing:
+                await session.delete(p)
+            for sym, vp in book.positions.items():
+                if vp.qty != 0:
+                    session.add(
+                        Position(agent_id=agent_id, symbol=sym, qty=vp.qty, avg_price=vp.avg_price)
+                    )
+            await session.commit()
+        except IntegrityError:
+            # UNIQUE(broker_order_id) — fill already recorded by an earlier
+            # atomic write (optimistic-then-reconcile, or a restart replay).
+            # The whole transaction (trade + position sync) rolls back; the
+            # prior write's positions stand. Idempotent.
+            await session.rollback()
+            log.info("fill_already_recorded", broker_order_id=broker_order_id, symbol=symbol)
 
 
 async def strategy_summary() -> list[dict]:

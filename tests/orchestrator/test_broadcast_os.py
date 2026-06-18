@@ -5,9 +5,11 @@ from unittest.mock import AsyncMock
 
 from tradefarm.orchestrator.broadcast_os import (
     BroadcastMoment,
+    install_broadcast_arbiter,
     moment_from_macro,
     publish_broadcast_moment,
 )
+from tradefarm.orchestrator.broadcast_scheduler import BroadcastScheduler
 
 
 def _payloads(mock: AsyncMock, event_type: str) -> list[dict[str, Any]]:
@@ -69,3 +71,38 @@ async def test_publish_broadcast_moment_emits_canonical_and_legacy_events():
         "ttl_sec": 8,
         "subtitle": "Quiet tape",
     }
+
+
+async def test_publish_broadcast_moment_emits_queued_slot_state():
+    """A moment blocked behind a higher-priority slot must report 'queued',
+    not the old always-'active' value."""
+
+    clock = iter([0.0, 1.0])
+    scheduler = BroadcastScheduler(clock=lambda: next(clock))
+    publish = AsyncMock()
+    install_broadcast_arbiter(None, scheduler)
+    try:
+        active = BroadcastMoment(
+            id="breaking",
+            kind="market_move",
+            title="Breaking",
+            priority=90,
+            outputs=("lower_third",),
+            ttl_sec=30,
+        )
+        ambient = BroadcastMoment(
+            id="ambient",
+            kind="activity",
+            title="Ambient",
+            priority=20,
+            outputs=("lower_third",),
+            ttl_sec=10,
+        )
+        await publish_broadcast_moment(active, publish=publish, emit_legacy=False)
+        await publish_broadcast_moment(ambient, publish=publish, emit_legacy=False)
+    finally:
+        install_broadcast_arbiter(None, None)
+
+    slots = _payloads(publish, "broadcast_slot")
+    by_id = {slot["moment_id"]: slot["state"] for slot in slots}
+    assert by_id == {"breaking": "active", "ambient": "queued"}

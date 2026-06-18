@@ -34,7 +34,12 @@ type LiveExtras = {
 
 export type SessionData = VodMock & LiveExtras;
 
-function scBtn(color?: string): CSSProperties {
+// Coming-soon affordance for the session controls. Pause / abort imply
+// DESTRUCTIVE actions but have no backend wiring yet, so they render
+// dimmed + non-interactive to keep an operator from trusting them.
+const COMING_SOON_TITLE = "Coming soon — session control not wired yet";
+
+function scBtn(color?: string, disabled = false): CSSProperties {
   return {
     fontFamily: T.mono,
     fontSize: 11,
@@ -45,7 +50,8 @@ function scBtn(color?: string): CSSProperties {
     background: "transparent",
     color: color || T.text,
     borderRadius: 4,
-    cursor: "pointer",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.45 : 1,
   };
 }
 
@@ -176,8 +182,16 @@ function SessionHeader({
         mono
       />
       <div style={{ width: 1, height: 22, background: T.border }} />
-      <button style={scBtn()}>⏸ pause</button>
-      <button style={{ ...scBtn(T.err), color: T.err, borderColor: T.err }}>■ abort</button>
+      <button disabled title={COMING_SOON_TITLE} style={scBtn(undefined, true)}>
+        ⏸ pause
+      </button>
+      <button
+        disabled
+        title={COMING_SOON_TITLE}
+        style={{ ...scBtn(T.err, true), color: T.err, borderColor: T.err }}
+      >
+        ■ abort
+      </button>
     </div>
   );
 }

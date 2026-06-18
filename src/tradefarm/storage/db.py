@@ -9,14 +9,23 @@ ignores duplicates gracefully via a pre-check on `PRAGMA table_info`.
 
 from __future__ import annotations
 
+import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tradefarm.config import settings
 from tradefarm.storage.models import Base
 
+log = structlog.get_logger(__name__)
+
 engine = create_async_engine(settings.database_url, echo=False)
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+# Bumped whenever a hand-rolled migration (a new entry in _COLUMN_MIGRATIONS /
+# _INDEX_MIGRATIONS) lands. Recorded in the `schema_version` table on every
+# successful init for observability — it is NOT a gate (migrations stay
+# idempotent and self-detecting), just a breadcrumb of what code last ran.
+SCHEMA_VERSION = 1
 
 
 # (table, column, sqlite DDL fragment — just the "type + defaults" part)
@@ -49,25 +58,35 @@ _INDEX_MIGRATIONS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _dialect_name(conn) -> str:
+    """Best-effort dialect name for an async connection.
+
+    Reads it off the bound engine's `dialect.name` — the single source of
+    truth SQLAlchemy already carries — instead of the fragile triple-nested
+    attribute probing the prior code used. Falls back to "sqlite" only if no
+    dialect can be resolved at all, which is the conservative default for this
+    repo (every supported backend is SQLite or Postgres).
+    """
+    dialect = getattr(getattr(conn, "engine", None), "dialect", None)
+    name = getattr(dialect, "name", None)
+    if name in ("sqlite", "postgresql"):
+        return name
+    if name:
+        # Unknown dialect: route through the SQLite path (PRAGMA), which is the
+        # only check-then-add path that can't raise on a missing table.
+        log.warning("db_unknown_dialect", dialect=name, fallback="sqlite")
+        return "sqlite"
+    return "sqlite"
+
+
 async def _table_columns(conn, table: str) -> set[str]:
     """Return {column_name,...} for `table`, or empty set if the table is missing.
 
-    Round-5 audit fix (DD): dialect-dispatch. SQLite uses PRAGMA
-    table_info; Postgres uses information_schema.columns. The rest
-    of the migration loop is already idempotent across dialects.
+    Dialect-dispatch: SQLite uses PRAGMA table_info; Postgres uses
+    information_schema.columns. Both return an empty set for a missing table
+    (rather than raising), which the migration loop relies on to no-op safely.
     """
-    dialect = conn.engine.dialect.name if hasattr(conn, "engine") else "sqlite"
-    # `conn.engine` is on async connections too via the underlying
-    # SyncConnection; fall through to sqlite if introspection fails.
-    try:
-        dialect = conn.sync_engine.dialect.name  # type: ignore[attr-defined]
-    except AttributeError:
-        try:
-            dialect = conn.engine.dialect.name  # type: ignore[attr-defined]
-        except AttributeError:
-            dialect = "sqlite"
-
-    if dialect == "postgresql":
+    if _dialect_name(conn) == "postgresql":
         rows = (
             await conn.execute(
                 text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
@@ -75,14 +94,19 @@ async def _table_columns(conn, table: str) -> set[str]:
             )
         ).all()
         return {r[0] for r in rows}
-    # SQLite (and unknown dialects — PRAGMA is a no-op on Postgres
-    # anyway, so a wrong dispatch is at worst an empty set and a
-    # full re-add of every column, which the ALTER guards make safe).
+    # SQLite path. PRAGMA table_info on an unknown table yields zero rows
+    # (never an error), so a misdetected dialect degrades to "table missing"
+    # and the column-add is skipped rather than raising on boot.
     rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).all()
     return {r[1] for r in rows}
 
 
 async def _ensure_columns(conn) -> None:
+    # Two layers of idempotency so a re-run or a wrong-dialect dispatch can
+    # never raise on boot: (1) check-then-add against introspected columns,
+    # and (2) ADD COLUMN IF NOT EXISTS on Postgres (SQLite has no such clause,
+    # but the check-then-add already covers it).
+    if_not_exists = "IF NOT EXISTS " if _dialect_name(conn) == "postgresql" else ""
     for table, column, ddl in _COLUMN_MIGRATIONS:
         existing = await _table_columns(conn, table)
         if not existing:
@@ -91,7 +115,7 @@ async def _ensure_columns(conn) -> None:
             continue
         if column in existing:
             continue
-        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {if_not_exists}{column} {ddl}"))
 
 
 async def _ensure_indexes(conn) -> None:
@@ -158,8 +182,41 @@ async def _ensure_indexes(conn) -> None:
         )
 
 
+async def _ensure_schema_version(conn) -> None:
+    """Create the `schema_version` table (idempotent) and stamp SCHEMA_VERSION.
+
+    Pure observability: a single-row-per-version ledger of what migration code
+    last ran, written only after create_all + the ALTER/index passes succeed.
+    Raw DDL (not an ORM model) so it stays decoupled from `models.py`. The
+    timestamp default is dialect-portable — CURRENT_TIMESTAMP exists in both
+    SQLite and Postgres.
+    """
+    await conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_version ("
+            "version INTEGER PRIMARY KEY, "
+            "applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    # Idempotent stamp: INSERT only if this version isn't already recorded, so
+    # a clean re-boot doesn't append duplicate rows.
+    already = (
+        await conn.execute(
+            text("SELECT 1 FROM schema_version WHERE version = :v"),
+            {"v": SCHEMA_VERSION},
+        )
+    ).first()
+    if already is None:
+        await conn.execute(
+            text("INSERT INTO schema_version (version) VALUES (:v)"),
+            {"v": SCHEMA_VERSION},
+        )
+        log.info("schema_version_recorded", version=SCHEMA_VERSION)
+
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
         await _ensure_indexes(conn)
+        await _ensure_schema_version(conn)

@@ -155,7 +155,7 @@ async def lifespan(app: FastAPI):
     # successful yield, so any startup exception leaked everything.
     try:
         await orch.persist_initial_state()
-        orch.start_background()
+        await orch.start_background()
     except Exception:
         # Best-effort teardown of anything that managed to start.
         try:

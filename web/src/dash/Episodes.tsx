@@ -7,6 +7,10 @@ import { useTheme } from "./ThemeContext";
 import { EPISODES, type Episode } from "./mockData";
 import { fmtPct } from "../vod/widgets";
 
+// Controls whose backend wiring isn't built yet render dimmed +
+// non-interactive so an operator can't mistake them for live.
+const COMING_SOON_TITLE = "Coming soon — episodes endpoint not wired yet";
+
 function DayShapeSpark({
   shape,
   width = 200,
@@ -342,11 +346,13 @@ function FeaturedEpisode({ ep }: { ep: Episode }) {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button
+            disabled
+            title={COMING_SOON_TITLE}
             style={{
               flex: 1,
               padding: "12px",
               borderRadius: 4,
-              cursor: "pointer",
+              cursor: "not-allowed",
               background: T.accent,
               color: "#1a1408",
               border: "none",
@@ -354,6 +360,7 @@ function FeaturedEpisode({ ep }: { ep: Episode }) {
               fontSize: 12,
               fontWeight: 700,
               letterSpacing: 0.5,
+              opacity: 0.5,
             }}
           >
             ▸ watch on youtube
@@ -553,19 +560,22 @@ function DummyMenu({ label }: { label: string }) {
   const { T } = useTheme();
   return (
     <button
+      disabled
+      title={COMING_SOON_TITLE}
       style={{
         fontFamily: "JetBrains Mono, monospace",
         fontSize: 11,
         fontWeight: 600,
         padding: "8px 12px",
         borderRadius: 4,
-        cursor: "pointer",
+        cursor: "not-allowed",
         background: T.panel,
         border: `1px solid ${T.border}`,
         color: T.text,
         display: "flex",
         alignItems: "center",
         gap: 8,
+        opacity: 0.5,
       }}
     >
       {label} <span style={{ color: T.text3 }}>▾</span>

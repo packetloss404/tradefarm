@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Protocol, TypeVar
 
 import pandas as pd
 import structlog
@@ -49,6 +51,22 @@ PENDING_EXIT_TTL_SEC: float = 60.0
 # the UI can display "notes this tick" alongside the existing LLM_SKIPS.
 JOURNAL_COUNTERS: dict[str, int] = {"notes_this_tick": 0, "outcomes_this_tick": 0}
 FILL_OF_TICK_MIN_NOTIONAL: float = 50.0
+
+
+class _Sidecar(Protocol):
+    """Minimal contract for an always-on background coordinator.
+
+    Every sidecar's ``start()`` is a short coroutine that kicks off its own
+    internal loop task and returns; awaiting it surfaces any boot-time
+    exception instead of stranding it on a discarded ``create_task``.
+    """
+
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+
+_SidecarT = TypeVar("_SidecarT", bound=_Sidecar)
 
 
 @dataclass(frozen=True)
@@ -416,8 +434,13 @@ class Orchestrator:
                         clear = getattr(agent.risk, "clear_peak", None)
                         if callable(clear):
                             clear(fill.symbol)
-                await repo.record_trade(
+                # Issue #8c: persist the trade row + the position sync in a
+                # single transaction so a crash between them can't leave the
+                # DB inconsistent. Dedupe on broker_order_id is preserved
+                # inside record_fill_atomic.
+                await repo.record_fill_atomic(
                     agent.state.id,
+                    agent.state.book,
                     fill.symbol,
                     fill.side,
                     fill.qty,
@@ -425,7 +448,6 @@ class Orchestrator:
                     sig.reason,
                     broker_order_id=fill.broker_order_id or None,
                 )
-                await repo.sync_positions(agent.state.id, agent.state.book)
                 # If the fill produced non-zero realized PnL, stamp the
                 # matching entry note. Idempotent: one stamp per flat-out.
                 if realized != 0.0:
@@ -603,7 +625,50 @@ class Orchestrator:
             return {"provider": None, "model": None}
         return dict(new.info)
 
-    def start_background(self) -> None:
+    @staticmethod
+    def _spawn_loop(coro: Awaitable[None], *, name: str) -> asyncio.Task:
+        """Spawn a long-running loop task with an exception-logging callback.
+
+        Issue #6: the returned task is stored by the caller, but its
+        completion is also observed via a done-callback so a crash (rather
+        than a clean cancel) is logged instead of surfacing as a bare
+        "Task exception was never retrieved" warning.
+        """
+        task = asyncio.ensure_future(coro)
+        task.set_name(name)
+
+        def _on_done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                log.error("background_loop_crashed", name=name, error=str(exc))
+
+        task.add_done_callback(_on_done)
+        return task
+
+    async def _start_sidecar(
+        self,
+        current: _SidecarT | None,
+        factory: Callable[[], _SidecarT],
+    ) -> _SidecarT:
+        """Construct (if absent) and start one always-on sidecar.
+
+        Issue #6: each ``start()`` is AWAITED directly rather than wrapped in
+        a discarded ``asyncio.create_task``. The old pattern swallowed any
+        exception raised before the sidecar's inner loop spawned ("Task
+        exception was never retrieved") and left that sidecar silently dead;
+        awaiting lets the error propagate out of ``start_background`` at boot.
+        ``start()`` itself only kicks off the internal loop task, so awaiting
+        does not block on the loop body.
+        """
+        if current is not None:
+            return current
+        sidecar = factory()
+        await sidecar.start()
+        return sidecar
+
+    async def start_background(self) -> None:
         # Audit fix (Q): install the broadcast arbiter here (not in
         # __init__) so unit tests that build a bare Orchestrator
         # don't silently pollute the module-global state.
@@ -615,7 +680,7 @@ class Orchestrator:
         )
 
         if settings.auto_tick_interval_sec > 0 and self._task is None:
-            self._task = asyncio.create_task(self.run_scheduled(), name="orch_scheduler")
+            self._task = self._spawn_loop(self.run_scheduled(), name="orch_scheduler")
 
         if settings.execution_mode == "alpaca_paper" and self._recon_task is None:
             # Lazy import to avoid pulling alpaca-py in simulated mode.
@@ -623,7 +688,7 @@ class Orchestrator:
 
             if isinstance(self.broker, AlpacaBroker):
                 self._reconciler = OrderReconciler(self.broker, self._optimistic_marks)
-                self._recon_task = asyncio.create_task(
+                self._recon_task = self._spawn_loop(
                     self._reconcile_loop(),
                     name="orch_reconciler",
                 )
@@ -631,59 +696,34 @@ class Orchestrator:
         # Phase 4 — opt-in curriculum loop (0 disables).
         self.start_curriculum()
 
-        # Auto-director — always on; it's a presentation layer, not execution.
-        if self._auto_director is None:
-            self._auto_director = AutoDirector(orch=self)
-            asyncio.create_task(
-                self._auto_director.start(),
-                name="orch_auto_director_start",
-            )
-
-        # Streak watcher — always on; complements auto-director with
-        # journal-driven pattern detection.
-        if self._streak_watcher is None:
-            self._streak_watcher = StreakWatcher(orch=self)
-            asyncio.create_task(
-                self._streak_watcher.start(),
-                name="orch_streak_watcher_start",
-            )
-
-        # Live LLM commentary — always on; Bloomberg-style one-liner every ~45s.
-        if self._commentary_loop is None:
-            self._commentary_loop = CommentaryLoop(orch=self)
-            asyncio.create_task(
-                self._commentary_loop.start(),
-                name="orch_commentary_loop_start",
-            )
-
+        # Always-on presentation/interactivity sidecars. Awaited (not
+        # fire-and-forget) so a start() failure surfaces at boot instead of
+        # being swallowed. Predictions is built before the audience
+        # coordinator so the latter can link to it.
+        self._auto_director = await self._start_sidecar(
+            self._auto_director, lambda: AutoDirector(orch=self)
+        )
+        self._streak_watcher = await self._start_sidecar(
+            self._streak_watcher, lambda: StreakWatcher(orch=self)
+        )
+        self._commentary_loop = await self._start_sidecar(
+            self._commentary_loop, lambda: CommentaryLoop(orch=self)
+        )
         # YouTube Live Chat poller — always constructed; the poller itself
         # checks ``settings.youtube_chat_enabled`` and stays dormant when off.
-        if self._youtube_chat is None:
-            self._youtube_chat = YouTubeChatPoller(orch=self)
-            asyncio.create_task(
-                self._youtube_chat.start(),
-                name="orch_youtube_chat_start",
-            )
-
+        self._youtube_chat = await self._start_sidecar(
+            self._youtube_chat, lambda: YouTubeChatPoller(orch=self)
+        )
         # Audience predictions board — depends on agent list being final.
-        if self._predictions is None:
-            self._predictions = PredictionsBoard(orch=self)
-            asyncio.create_task(
-                self._predictions.start(),
-                name="orch_predictions_start",
-            )
-
+        self._predictions = await self._start_sidecar(
+            self._predictions, lambda: PredictionsBoard(orch=self)
+        )
         # Audience coordinator — wires chat commands into sentiment + pins
         # + predictions. Built AFTER predictions so the link is in place.
-        if self._audience is None:
-            self._audience = AudienceCoordinator(
-                orch=self,
-                predictions=self._predictions,
-            )
-            asyncio.create_task(
-                self._audience.start(),
-                name="orch_audience_start",
-            )
+        self._audience = await self._start_sidecar(
+            self._audience,
+            lambda: AudienceCoordinator(orch=self, predictions=self._predictions),
+        )
 
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""

@@ -18,6 +18,11 @@ import {
 import { fmtMoney, ScoreCircle, stratColor, SubLabel } from "./widgets";
 import type { VodMock } from "./useVodMock";
 
+// Render / re-detect / regenerate-caption have no backend wiring yet,
+// so they render dimmed + non-interactive to keep an operator from
+// trusting them.
+const COMING_SOON_TITLE = "Coming soon — render pipeline not wired yet";
+
 // --- Preview pane --------------------------------------------------------
 
 function SceneVignette({ beat }: { beat: Beat }) {
@@ -779,6 +784,9 @@ function btnBP(color?: string): CSSProperties {
   };
 }
 
+// Layered onto btnBP() for not-yet-wired actions.
+const DISABLED_STYLE: CSSProperties = { cursor: "not-allowed", opacity: 0.45 };
+
 function BeatDetailCard({ vod, beat }: { vod: VodMock; beat: Beat }) {
   const meta = BEAT_KIND_META[beat.kind];
   const involved = beat.agents
@@ -832,10 +840,10 @@ function BeatDetailCard({ vod, beat }: { vod: VodMock; beat: Beat }) {
       </div>
 
       <div>
-        <SubLabel>caption · editable</SubLabel>
+        <SubLabel>caption · editing coming soon</SubLabel>
         <div
-          contentEditable
-          suppressContentEditableWarning
+          title={COMING_SOON_TITLE}
+          aria-disabled
           style={{
             fontFamily: T.font,
             fontSize: 13,
@@ -847,6 +855,8 @@ function BeatDetailCard({ vod, beat }: { vod: VodMock; beat: Beat }) {
             padding: "8px 10px",
             minHeight: 56,
             outline: "none",
+            cursor: "not-allowed",
+            opacity: 0.6,
           }}
         >
           {beat.sub}
@@ -964,7 +974,9 @@ function BeatDetailCard({ vod, beat }: { vod: VodMock; beat: Beat }) {
         >
           {vod.selectedBeats.has(beat.id) ? "✓ included" : "+ include"}
         </button>
-        <button style={btnBP()}>↻ regenerate caption</button>
+        <button disabled title={COMING_SOON_TITLE} style={{ ...btnBP(), ...DISABLED_STYLE }}>
+          ↻ regenerate caption
+        </button>
       </div>
     </div>
   );
@@ -1046,13 +1058,22 @@ function BeatHeader({ vod }: { vod: VodMock }) {
       <Pill label="beats in master" value={`${vod.selectedBeats.size} / ${vod.beats.length}`} />
       <Pill label="target" value="08:00–12:00" subtle />
       <div style={{ width: 1, height: 24, background: T.border }} />
-      <button style={{ ...btnBP(), flex: "none" }}>↻ re-detect</button>
       <button
+        disabled
+        title={COMING_SOON_TITLE}
+        style={{ ...btnBP(), flex: "none", ...DISABLED_STYLE }}
+      >
+        ↻ re-detect
+      </button>
+      <button
+        disabled
+        title={COMING_SOON_TITLE}
         style={{
           ...btnBP(T.accent),
           background: T.accent,
           color: "#1a1408",
           flex: "none",
+          ...DISABLED_STYLE,
         }}
       >
         ▸ render selected
