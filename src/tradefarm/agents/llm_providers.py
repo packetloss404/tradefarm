@@ -12,13 +12,27 @@ A third can be added by implementing the `decide(ctx) -> LlmDecision` coroutine.
 
 from __future__ import annotations
 
-import json
 from typing import Protocol
 
 import httpx
 from anthropic import AsyncAnthropic
 
-from tradefarm.agents.llm_overlay_types import LlmContext, LlmDecision, SYSTEM_PROMPT, user_message
+from tradefarm.agents.llm_overlay_types import (
+    LlmContext,
+    LlmDecision,
+    LlmParseError,
+    SYSTEM_PROMPT,
+    parse_decision,
+    user_message,
+)
+
+__all__ = [
+    "AnthropicProvider",
+    "LlmParseError",
+    "LlmProvider",
+    "MinimaxProvider",
+    "build_provider",
+]
 
 DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MINIMAX_MODEL = "M2.7-highspeed"
@@ -32,20 +46,12 @@ class LlmProvider(Protocol):
 
 
 def _parse_decision_json(raw: str) -> LlmDecision:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-    data = json.loads(raw)
-    return LlmDecision(
-        bias=data["bias"],
-        predictive=data["predictive"],
-        stance=data["stance"],
-        size_pct=float(data.get("size_pct", 0.0)),
-        reason=str(data.get("reason", ""))[:120],
-    )
+    """Validate a raw model reply into an :class:`LlmDecision`.
+
+    Thin wrapper over :func:`parse_decision`; malformed replies raise
+    :class:`LlmParseError` so callers distinguish them from call failures.
+    """
+    return parse_decision(raw)
 
 
 class AnthropicProvider:

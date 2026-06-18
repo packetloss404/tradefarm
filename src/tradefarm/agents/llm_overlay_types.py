@@ -6,11 +6,19 @@ a cycle (overlay imports providers; providers need LlmContext/LlmDecision).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+
 Bias = Literal["long", "short", "flat"]
 Stance = Literal["trade", "wait"]
+
+# Hard ceiling on the fraction of agent capital a single LLM decision may risk.
+# The schema advertises 0..0.25; we clamp into this band rather than reject so a
+# model that overshoots still produces a usable (capped) decision.
+SIZE_PCT_CAP = 0.25
 
 SYSTEM_PROMPT = """You are a disciplined trading agent for a US equities paper-trading sandbox.
 
@@ -44,6 +52,80 @@ class LlmDecision:
     stance: Stance
     size_pct: float
     reason: str
+
+
+class LlmParseError(ValueError):
+    """A model response could not be validated into an :class:`LlmDecision`.
+
+    Distinct from network/SDK failures so callers can log a malformed reply
+    (bad JSON, missing key, out-of-enum value) separately from "the LLM call
+    itself failed". See ``lstm_llm_agent`` for the divergent error paths.
+    """
+
+
+class _LlmDecisionModel(BaseModel):
+    """Pydantic v2 shape used to validate a raw LLM JSON reply.
+
+    Enums are constrained via ``Literal`` so an unknown value (e.g.
+    ``bias="garbage"``) is rejected; ``size_pct`` is clamped into
+    ``0..SIZE_PCT_CAP`` and ``reason`` is truncated to 120 chars.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    bias: Bias
+    predictive: Bias
+    stance: Stance
+    size_pct: float = 0.0
+    reason: str = ""
+
+    @field_validator("size_pct", mode="before")
+    @classmethod
+    def _coerce_size(cls, v: Any) -> float:
+        """Coerce to float then clamp into the advertised 0..cap band."""
+        try:
+            f = float(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"size_pct not a number: {v!r}") from e
+        return max(0.0, min(f, SIZE_PCT_CAP))
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _trim_reason(cls, v: Any) -> str:
+        """Coerce to str and cap length so prompts/logs stay bounded."""
+        return str(v if v is not None else "")[:120]
+
+
+def parse_decision(raw: str) -> LlmDecision:
+    """Validate a raw LLM reply into an :class:`LlmDecision`.
+
+    Strips Markdown code fences, parses JSON, then runs the pydantic schema
+    (Literal enums + clamped ``size_pct``). Any malformed input raises
+    :class:`LlmParseError` so it is never conflated with a call failure.
+    """
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise LlmParseError(f"invalid JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise LlmParseError(f"expected JSON object, got {type(data).__name__}")
+    try:
+        model = _LlmDecisionModel.model_validate(data)
+    except ValidationError as e:
+        raise LlmParseError(f"schema validation failed: {e}") from e
+    return LlmDecision(
+        bias=model.bias,
+        predictive=model.predictive,
+        stance=model.stance,
+        size_pct=model.size_pct,
+        reason=model.reason,
+    )
 
 
 @dataclass

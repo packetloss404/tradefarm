@@ -1,7 +1,22 @@
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# Money columns store exact Decimal (asdecimal=True). Precision 20 / scale 6
+# comfortably covers 100 agents × low-thousands capital plus fractional
+# shares; SQLite stores NUMERIC affinity, Postgres a real NUMERIC(20, 6).
+_MONEY = Numeric(20, 6, asdecimal=True)
 
 
 class Base(DeclarativeBase):
@@ -14,8 +29,8 @@ class Agent(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True)
     strategy: Mapped[str] = mapped_column(String(64))
-    starting_capital: Mapped[float] = mapped_column(Float)
-    cash: Mapped[float] = mapped_column(Float)
+    starting_capital: Mapped[Decimal] = mapped_column(_MONEY)
+    cash: Mapped[Decimal] = mapped_column(_MONEY)
     status: Mapped[str] = mapped_column(String(16), default="waiting")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     # Phase 2 (Agent Academy): rank-gated capital. `server_default` ensures
@@ -43,8 +58,8 @@ class Position(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"))
     symbol: Mapped[str] = mapped_column(String(16))
-    qty: Mapped[float] = mapped_column(Float)
-    avg_price: Mapped[float] = mapped_column(Float)
+    qty: Mapped[Decimal] = mapped_column(_MONEY)
+    avg_price: Mapped[Decimal] = mapped_column(_MONEY)
     opened_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     agent: Mapped[Agent] = relationship(back_populates="positions")
@@ -57,8 +72,8 @@ class Trade(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
     symbol: Mapped[str] = mapped_column(String(16))
     side: Mapped[str] = mapped_column(String(8))
-    qty: Mapped[float] = mapped_column(Float)
-    price: Mapped[float] = mapped_column(Float)
+    qty: Mapped[Decimal] = mapped_column(_MONEY)
+    price: Mapped[Decimal] = mapped_column(_MONEY)
     executed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     reason: Mapped[str] = mapped_column(String(256), default="")
     # NULL for live trading; set by the session runner to tag every fill
@@ -84,9 +99,9 @@ class PnlSnapshot(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
-    equity: Mapped[float] = mapped_column(Float)
-    realized_pnl: Mapped[float] = mapped_column(Float)
-    unrealized_pnl: Mapped[float] = mapped_column(Float)
+    equity: Mapped[Decimal] = mapped_column(_MONEY)
+    realized_pnl: Mapped[Decimal] = mapped_column(_MONEY)
+    unrealized_pnl: Mapped[Decimal] = mapped_column(_MONEY)
     taken_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     # NULL for live snapshots; set by the session runner. See Trade.session_id.
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -112,7 +127,7 @@ class AgentNote(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     # Outcome fields (nullable; stamped on close).
     outcome_trade_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    outcome_realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    outcome_realized_pnl: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     outcome_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     # NULL for live notes; set by the session runner. See Trade.session_id.
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

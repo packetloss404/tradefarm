@@ -201,9 +201,9 @@ async def test_end_to_end_roundtrip(journal_db):
     )
     assert entry_id is not None
 
-    # Close the position — VirtualBook returns the realized PnL.
+    # Close the position — VirtualBook returns the realized PnL (Decimal).
     realized = book.record_fill("NVDA", "sell", 5, 100.246)
-    assert realized == pytest.approx(1.23)
+    assert float(realized) == pytest.approx(1.23)
 
     stamped_id = await journal.close_outcome(
         agent_id=1,

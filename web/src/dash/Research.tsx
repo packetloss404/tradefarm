@@ -23,6 +23,11 @@ import {
 import { fmtMoney, fmtPct, stratColor } from "../vod/widgets";
 import type { VodSessionLive } from "../vod/useVodSessionLive";
 
+// The multi-day range selector is presentational only — the storyline /
+// history endpoints are net-new, so the buttons render non-interactive
+// to avoid implying the range can be changed live.
+const COMING_SOON_TITLE = "Coming soon — multi-day range not wired yet";
+
 function ResearchHeader() {
   const { T } = useTheme();
   return (
@@ -73,15 +78,18 @@ function RangeMenu() {
       {["7D", "14D", "30D", "90D", "ALL"].map((r) => (
         <button
           key={r}
+          disabled
+          title={COMING_SOON_TITLE}
           style={{
             fontFamily: "JetBrains Mono, monospace",
             fontSize: 11,
             fontWeight: 600,
             padding: "8px 12px",
-            cursor: "pointer",
+            cursor: "not-allowed",
             background: r === "14D" ? T.panel3 : "transparent",
             border: "none",
             color: r === "14D" ? T.text : T.text2,
+            opacity: r === "14D" ? 1 : 0.5,
           }}
         >
           {r}

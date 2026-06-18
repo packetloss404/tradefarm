@@ -60,6 +60,37 @@ packages = ["src/tradefarm"]
 line-length = 100
 target-version = "py312"
 
+[tool.mypy]
+# Pragmatic, non-strict baseline — a foundation gate, not a strict cleanup.
+# The bar is `mypy src/tradefarm` exits 0 on the current tree so CI can
+# enforce it going forward. Tighten incrementally (e.g. flip on
+# disallow_untyped_defs per-module) as the codebase gains coverage.
+files = ["src/tradefarm"]
+python_version = "3.12"
+# Third-party libs (alpaca-py, torch, anthropic, pandas, …) ship partial or
+# no stubs; don't fail on their missing imports.
+ignore_missing_imports = true
+# Don't descend into the venv / site-packages.
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+warn_redundant_casts = true
+
+# Per-module scope-outs: these modules wrestle with loosely-typed third-party
+# SDK return values (alpaca-py's `Order | dict` / `TradeAccount | dict`
+# unions, the anthropic SDK's 12-member content-block union, torch's
+# untyped `Dataset`). The runtime code is correct; the friction is purely
+# at the stub boundary. Scoped out rather than littering call sites with
+# casts; revisit if upstream stubs improve.
+[[tool.mypy.overrides]]
+module = [
+    "tradefarm.execution.alpaca_broker",
+    "tradefarm.agents.llm_providers",
+    "tradefarm.agents.lstm_train",
+    "tradefarm.orchestrator.commentary_loop",
+]
+disable_error_code = ["union-attr", "arg-type", "attr-defined"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

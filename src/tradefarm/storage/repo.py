@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
+import structlog
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from tradefarm.execution.virtual_book import VirtualBook
 from tradefarm.runtime.clock import now_utc
+from tradefarm.runtime.money import D
 from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import Agent, PnlSnapshot, Position, Trade
 
+log = structlog.get_logger(__name__)
+
 __all__ = [
     "upsert_agent",
     "record_trade",
+    "record_fill_atomic",
     "snapshot_pnl",
     "sync_positions",
     "strategy_summary",
@@ -22,7 +29,9 @@ __all__ = [
 ]
 
 
-async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital: float) -> None:
+async def upsert_agent(
+    agent_id: int, name: str, strategy: str, starting_capital: float | Decimal
+) -> None:
     async with SessionLocal() as session:
         existing = (
             await session.execute(select(Agent).where(Agent.id == agent_id))
@@ -41,13 +50,14 @@ async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital
             if dirty:
                 await session.commit()
             return
+        capital = D(starting_capital)
         session.add(
             Agent(
                 id=agent_id,
                 name=name,
                 strategy=strategy,
-                starting_capital=starting_capital,
-                cash=starting_capital,
+                starting_capital=capital,
+                cash=capital,
                 status="waiting",
             )
         )
@@ -55,21 +65,47 @@ async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital
 
 
 async def record_trade(
-    agent_id: int, symbol: str, side: str, qty: float, price: float, reason: str
+    agent_id: int,
+    symbol: str,
+    side: str,
+    qty: float | Decimal,
+    price: float | Decimal,
+    reason: str,
+    broker_order_id: str | None = None,
 ) -> None:
+    """Persist one Trade row.
+
+    ``broker_order_id`` is written so the DB-level UNIQUE constraint
+    (``uq_trades_broker_order_id``) becomes the restart-safe dedupe for
+    reconciled/broker fills (CLAUDE.md gotcha #7). A second write with the
+    same id hits that constraint; we swallow the IntegrityError and treat
+    the trade as already recorded rather than raising. ``None`` (sim fills
+    with no broker id, or callers that pass nothing) skips dedupe — SQLite
+    treats NULLs as distinct under UNIQUE, so NULL ``broker_order_id`` rows
+    are never deduped (matching db.py's partial index, which is scoped
+    ``WHERE broker_order_id IS NOT NULL``).
+    """
     async with SessionLocal() as session:
         session.add(
             Trade(
                 agent_id=agent_id,
                 symbol=symbol,
                 side=side,
-                qty=qty,
-                price=price,
+                qty=D(qty),
+                price=D(price),
                 reason=reason,
                 session_id=current_session_id(),
+                broker_order_id=broker_order_id,
             )
         )
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # UNIQUE(broker_order_id) violation — this fill was already
+            # recorded (e.g. optimistic write then reconcile, or a
+            # process restart replaying the reconcile path). Idempotent.
+            await session.rollback()
+            log.info("trade_already_recorded", broker_order_id=broker_order_id, symbol=symbol)
 
 
 async def snapshot_pnl(agent_id: int, book: VirtualBook, marks: dict[str, float]) -> None:
@@ -102,6 +138,75 @@ async def sync_positions(agent_id: int, book: VirtualBook) -> None:
                     Position(agent_id=agent_id, symbol=sym, qty=vp.qty, avg_price=vp.avg_price)
                 )
         await session.commit()
+
+
+async def record_fill_atomic(
+    agent_id: int,
+    book: VirtualBook,
+    symbol: str,
+    side: str,
+    qty: float | Decimal,
+    price: float | Decimal,
+    reason: str,
+    broker_order_id: str | None = None,
+) -> None:
+    """Persist a Trade row AND re-sync this agent's positions in ONE transaction.
+
+    Issue #8c: the in-tick fill path previously called ``record_trade`` then
+    ``sync_positions`` in two separate ``SessionLocal()`` sessions. A crash
+    between them left the DB with a trade row but stale positions (or vice
+    versa). This commits both writes together — they land atomically or not
+    at all.
+
+    Dedupe semantics match ``record_trade`` (CLAUDE.md gotcha #7): a duplicate
+    ``broker_order_id`` hits the UNIQUE constraint and we swallow the
+    IntegrityError. In that case the fill was already recorded by a prior
+    write, so we do NOT re-sync positions here — the original atomic write
+    already persisted the matching position state, and the in-memory ``book``
+    passed in is the source of truth the live caller keeps current regardless.
+    ``None`` ``broker_order_id`` skips dedupe (SQLite treats NULLs as distinct).
+    """
+    async with SessionLocal() as session:
+        try:
+            session.add(
+                Trade(
+                    agent_id=agent_id,
+                    symbol=symbol,
+                    side=side,
+                    qty=D(qty),
+                    price=D(price),
+                    reason=reason,
+                    session_id=current_session_id(),
+                    broker_order_id=broker_order_id,
+                )
+            )
+            # Flush the Trade insert NOW so a duplicate broker_order_id raises
+            # here (inside the try) rather than via the autoflush triggered by
+            # the Position SELECT below — that autoflush would escape this
+            # guard and surface as an unhandled IntegrityError.
+            await session.flush()
+            # Replace this agent's positions table with current book state, in
+            # the same unit of work as the Trade insert.
+            existing = (
+                (await session.execute(select(Position).where(Position.agent_id == agent_id)))
+                .scalars()
+                .all()
+            )
+            for p in existing:
+                await session.delete(p)
+            for sym, vp in book.positions.items():
+                if vp.qty != 0:
+                    session.add(
+                        Position(agent_id=agent_id, symbol=sym, qty=vp.qty, avg_price=vp.avg_price)
+                    )
+            await session.commit()
+        except IntegrityError:
+            # UNIQUE(broker_order_id) — fill already recorded by an earlier
+            # atomic write (optimistic-then-reconcile, or a restart replay).
+            # The whole transaction (trade + position sync) rolls back; the
+            # prior write's positions stand. Idempotent.
+            await session.rollback()
+            log.info("fill_already_recorded", broker_order_id=broker_order_id, symbol=symbol)
 
 
 async def strategy_summary() -> list[dict]:

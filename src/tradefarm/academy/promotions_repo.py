@@ -21,7 +21,9 @@ log = structlog.get_logger()
 
 def stats_to_json(stats: Any) -> str:
     try:
-        return json.dumps(asdict(stats) if is_dataclass(stats) else dict(stats), default=str)
+        if is_dataclass(stats) and not isinstance(stats, type):
+            return json.dumps(asdict(stats), default=str)
+        return json.dumps(dict(stats), default=str)
     except Exception:
         return ""
 

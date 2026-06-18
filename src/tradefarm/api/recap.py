@@ -298,7 +298,7 @@ def _predictions_for_recap(orchestrator: Any) -> list[dict[str, Any]]:
     board = getattr(orchestrator, "_predictions", None)
     if board is None:
         return []
-    raw = []
+    raw: list[dict[str, Any]] = []
     try:
         raw = board.snapshot() or []
     except Exception as e:  # pragma: no cover — defensive

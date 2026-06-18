@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 from tradefarm.execution.virtual_book import VirtualBook, VirtualPosition
 from tradefarm.runtime.clock import now_utc
@@ -99,12 +100,14 @@ class RiskManager:
         self,
         book: VirtualBook,
         symbol: str,
-        qty: float,
+        qty: float | Decimal,
         price: float,
         marks: dict[str, float] | None = None,
     ) -> RiskDecision:
         # Audit fix: reject zero / negative inputs at the boundary so a
-        # bad signal can't reach the broker.
+        # bad signal can't reach the broker. ``qty`` may arrive as Decimal
+        # (signal sizing); risk math is float-based, so coerce here.
+        qty = float(qty)
         if qty <= 0 or price <= 0:
             return RiskDecision(False, "invalid order qty/price")
         notional = abs(qty * price)
@@ -114,16 +117,20 @@ class RiskManager:
         # entirely. Cap is now against the *total* notional including the
         # current position at mark.
         existing = book.positions.get(symbol)
-        existing_notional = abs(existing.qty) * price if existing is not None else 0.0
+        existing_notional = abs(float(existing.qty)) * price if existing is not None else 0.0
         total_notional = notional + existing_notional
 
         # Audit fix (H18): cap was anchored to starting_capital, so a
         # losing agent's cap stayed at 25% of starting (= 50%+ of current
         # equity at drawdown). Clamp by min(starting, current_equity).
+        # Book money is Decimal; risk math is %-based on floats, so convert
+        # at this boundary (the book's exactness isn't load-bearing for a
+        # threshold comparison).
+        cash = float(book.cash)
         equity = (
-            book.equity(marks or {})
+            float(book.equity(marks or {}))
             if marks
-            else book.cash + (existing_notional if existing else 0.0)
+            else cash + (existing_notional if existing else 0.0)
         )
         cap_anchor = min(self.starting_capital, max(0.0, equity))
         cap = cap_anchor * self.limits.max_position_notional_pct
@@ -133,7 +140,7 @@ class RiskManager:
                 f"size {total_notional:.0f} (incl. existing {existing_notional:.0f}) "
                 f"exceeds per-symbol cap {cap:.0f}",
             )
-        if book.cash - notional < 0:
+        if cash - notional < 0:
             return RiskDecision(False, "insufficient cash")
         return RiskDecision(True)
 
@@ -161,7 +168,11 @@ class RiskManager:
 
         sl_pct, tp_pct, trail_pct_threshold, max_hold_days = self._effective_thresholds()
 
-        unrealized_pct = (mark - pos.avg_price) / pos.avg_price
+        # Book money is Decimal; risk is %-based on float marks. Convert
+        # avg_price here so the trailing-peak dict (also float, shared with
+        # should_stop_out) stays homogeneous.
+        avg_price = float(pos.avg_price)
+        unrealized_pct = (mark - avg_price) / avg_price
 
         if unrealized_pct <= -sl_pct:
             return ExitTrigger("stop-loss", f"stop-loss {unrealized_pct:+.2%}")
@@ -195,10 +206,10 @@ class RiskManager:
         # the new position.
         peak_seeded_at = self._peak_seeded_at.get(symbol)
         if peak_seeded_at is None or (pos.opened_at is not None and pos.opened_at > peak_seeded_at):
-            self._peak[symbol] = pos.avg_price
+            self._peak[symbol] = avg_price
             self._peak_seeded_at[symbol] = pos.opened_at or now
 
-        peak = max(self._peak.get(symbol, pos.avg_price), mark)
+        peak = max(self._peak.get(symbol, avg_price), mark)
         self._peak[symbol] = peak
         if peak > 0:
             trail_pct = (mark - peak) / peak
@@ -252,7 +263,7 @@ class RiskManager:
         return RiskDecision(True)
 
     def check_daily_loss(self, book: VirtualBook, marks: dict[str, float]) -> RiskDecision:
-        equity = book.equity(marks)
+        equity = float(book.equity(marks))
         dd = (equity - self.starting_capital) / self.starting_capital
         if dd <= -self.limits.daily_loss_limit_pct:
             return RiskDecision(False, f"daily loss {dd:.2%} breached")

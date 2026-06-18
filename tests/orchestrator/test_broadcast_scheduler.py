@@ -117,6 +117,33 @@ def test_enqueue_replaces_existing_queued_item_by_id() -> None:
     assert [active.moment.title for active in scheduled] == ["new title"]
 
 
+def test_submit_slots_marks_active_then_queued() -> None:
+    scheduler = BroadcastScheduler()
+    active = scheduler.submit_slots(_moment("breaking", priority=90, ttl_sec=5), now=0.0)
+
+    assert [(sm.moment.id, sm.state) for sm in active] == [("breaking", "active")]
+
+    blocked = scheduler.submit_slots(_moment("ambient", priority=20, ttl_sec=4), now=1.0)
+
+    assert [(sm.moment.id, sm.state) for sm in blocked] == [("ambient", "queued")]
+
+
+def test_submit_slots_marks_preempted_moment() -> None:
+    scheduler = BroadcastScheduler()
+    scheduler.submit_slots(
+        _moment("ambient", priority=20, outputs=("lower_third", "ticker"), ttl_sec=20),
+        now=0.0,
+    )
+
+    slots = scheduler.submit_slots(
+        _moment("urgent", priority=95, outputs=("lower_third",), ttl_sec=5),
+        now=2.0,
+    )
+
+    by_id = {sm.moment.id: sm.state for sm in slots}
+    assert by_id == {"urgent": "active", "ambient": "preempted"}
+
+
 def test_queue_capacity_drops_lowest_priority_newest_item() -> None:
     scheduler = BroadcastScheduler(max_queue_size=2)
     first = _moment("first", priority=10)

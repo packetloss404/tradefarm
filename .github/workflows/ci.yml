@@ -33,6 +33,12 @@ jobs:
         # CI; run `uv run ruff format .` locally to fix.
         run: uv run ruff format --check .
 
+      - name: Mypy (type-check)
+        # Pragmatic, non-strict baseline (config in pyproject.toml's
+        # [tool.mypy]). Treated as a hard gate now that the tree is green;
+        # run `uv run mypy src/tradefarm` locally to reproduce.
+        run: uv run mypy src/tradefarm
+
       - name: Pytest
         # Tests are deterministic (no network, no real LLM); env-gated
         # integration paths skip-by-default.
@@ -57,12 +63,20 @@ jobs:
         run: npm ci
         working-directory: web
 
+      - name: ESLint (dashboard)
+        run: npm run lint
+        working-directory: web
+
       - name: Typecheck + build (dashboard)
         run: npm run build
         working-directory: web
 
       - name: Install (stream)
         run: npm ci
+        working-directory: stream
+
+      - name: ESLint (stream)
+        run: npm run lint
         working-directory: stream
 
       - name: Typecheck + build (stream)

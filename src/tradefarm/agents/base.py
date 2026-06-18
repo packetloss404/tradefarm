@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Literal
 
 import pandas as pd
@@ -16,7 +17,10 @@ Side = Literal["buy", "sell"]
 class Signal:
     symbol: str
     side: Side
-    qty: float
+    # Quantity is exact (Decimal) — agents size positions against the
+    # Decimal book cash. The scheduler converts to float at the broker /
+    # WS boundary (`float(sig.qty)`).
+    qty: Decimal
     reason: str = ""
 
 
@@ -47,9 +51,12 @@ class Agent(ABC):
         self, bars: dict[str, pd.DataFrame], marks: dict[str, float]
     ) -> list[Signal]: ...
 
-    def on_fill(self, symbol: str, side: Side, qty: float, price: float) -> float:
+    def on_fill(self, symbol: str, side: Side, qty: float, price: float) -> Decimal:
         """Apply the fill to the agent's virtual book. Returns the realized
         PnL from this fill (zero for openings, non-zero when the fill closes
         or flips part/all of the position).
+
+        ``qty``/``price`` arrive as float from the broker fill; the book
+        coerces them to Decimal internally and the realized PnL is Decimal.
         """
         return self.state.book.record_fill(symbol, side, qty, price)

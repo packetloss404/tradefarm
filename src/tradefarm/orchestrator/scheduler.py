@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -23,16 +24,12 @@ from tradefarm.execution.broker import Broker, SimulatedBroker
 from tradefarm.execution.virtual_book import VirtualBook
 from tradefarm.market.hours import is_market_open
 from tradefarm.risk.manager import RiskManager
+from tradefarm.runtime.money import D, quantize_qty
 from tradefarm.api.events import publish_event
 from tradefarm.execution.order_reconciler import OrderReconciler, ReconciledFill
-from tradefarm.orchestrator.audience import AudienceCoordinator
-from tradefarm.orchestrator.auto_director import AutoDirector
 from tradefarm.orchestrator.broadcast_os import BroadcastMoment, publish_broadcast_moment
-from tradefarm.orchestrator.commentary_loop import CommentaryLoop
+from tradefarm.orchestrator.broadcast_suite import BroadcastSuite, attach_crash_logger
 from tradefarm.orchestrator.decision_feed import build_decisions_batch
-from tradefarm.orchestrator.predictions import PredictionsBoard
-from tradefarm.orchestrator.streak_watcher import StreakWatcher
-from tradefarm.orchestrator.youtube_chat import YouTubeChatPoller
 from tradefarm.storage import journal, repo
 
 log = structlog.get_logger()
@@ -73,7 +70,7 @@ def _note_for_signal(agent: Agent, sig, px: float) -> tuple[str, dict]:
     meta: dict = {
         "strategy": agent.state.strategy,
         "side": sig.side,
-        "qty": sig.qty,
+        "qty": float(sig.qty),  # JSON boundary (note_metadata is serialized)
         "mark": px,
         "signal_reason": sig.reason,
     }
@@ -144,29 +141,40 @@ class Orchestrator:
         # PENDING_EXIT_TTL_SEC.
         self._pending_exits: dict[tuple[int, str], float] = {}
         self._curriculum_task: asyncio.Task | None = None
-        # Audit fix (C15): broadcast ledger + slot scheduler are
-        # constructed here but only INSTALLED as module globals when
-        # start_background() runs. Installing in __init__ caused test
-        # pollution (every Orchestrator(...) silently overwrote the
-        # globals, and stop_background never uninstalled them).
-        from tradefarm.orchestrator.broadcast_recap import BroadcastRecapLedger
-        from tradefarm.orchestrator.broadcast_scheduler import BroadcastScheduler
+        # Issue #6: the presentation/interactivity layer (auto-director,
+        # streak watcher, commentary, youtube chat, predictions, audience)
+        # plus the broadcast ledger/scheduler arbiter is owned by a single
+        # BroadcastSuite. The orchestrator delegates to it as a unit. The
+        # suite constructs the ledger/scheduler here but only INSTALLS them
+        # as module globals on start() (audit fix C15 — installing at
+        # construction polluted test globals).
+        self._broadcast_suite = BroadcastSuite(self)
 
-        self._broadcast_ledger = BroadcastRecapLedger()
-        self._broadcast_scheduler = BroadcastScheduler()
-        # Auto-director — broadcasts macros based on agent/market state.
-        self._auto_director: AutoDirector | None = None
-        # Streak watcher — broadcasts macros based on trade-history patterns.
-        self._streak_watcher: StreakWatcher | None = None
-        # Live LLM commentary — Bloomberg-style one-liner every ~45s.
-        self._commentary_loop: CommentaryLoop | None = None
-        # YouTube Live Chat poller — surfaces real audience messages on the WS.
-        # Self-disables when credentials are absent; safe to always construct.
-        self._youtube_chat: YouTubeChatPoller | None = None
-        # Audience interactivity — sentiment + pin requests + predictions.
-        # Both are always-on (in-memory only, no external deps).
-        self._audience: AudienceCoordinator | None = None
-        self._predictions: PredictionsBoard | None = None
+    # ------------------------------------------------------------------
+    # Backward-compatible delegators. External consumers (api/audience.py,
+    # api/recap.py, youtube_chat.py, audit-regression tests) still read
+    # these attrs off the orchestrator directly; ownership now lives in the
+    # BroadcastSuite, so expose them as read-only views into the suite.
+    # ------------------------------------------------------------------
+    @property
+    def _broadcast_ledger(self):  # noqa: ANN202 — opaque suite-owned object
+        return self._broadcast_suite.ledger
+
+    @property
+    def _broadcast_scheduler(self):  # noqa: ANN202 — opaque suite-owned object
+        return self._broadcast_suite.scheduler
+
+    @property
+    def _audience(self):  # noqa: ANN202 — opaque suite-owned object
+        return self._broadcast_suite.audience
+
+    @property
+    def _predictions(self):  # noqa: ANN202 — opaque suite-owned object
+        return self._broadcast_suite.predictions
+
+    @property
+    def _commentary_loop(self):  # noqa: ANN202 — opaque suite-owned object
+        return self._broadcast_suite.commentary_loop
 
     @classmethod
     def build_default(cls, rank_map: dict[int, str] | None = None) -> "Orchestrator":
@@ -187,7 +195,7 @@ class Orchestrator:
         agents: list[Agent] = []
         for i in range(settings.agent_count):
             symbol = universe[i % len(universe)]
-            book = VirtualBook(agent_id=i, cash=settings.agent_starting_capital)
+            book = VirtualBook(agent_id=i, cash=D(settings.agent_starting_capital))
             agent_rank = rank_map.get(i, "intern")
             risk = RiskManager(
                 starting_capital=settings.agent_starting_capital,
@@ -247,8 +255,13 @@ class Orchestrator:
 
     async def _tick_once_inner(self) -> dict:
         tick_id = uuid.uuid4().hex[:12]
-        symbols = sorted({getattr(a, "symbol", None) for a in self.agents if hasattr(a, "symbol")})
-        symbols = [s for s in symbols if s]
+        symbols = sorted(
+            {
+                sym
+                for a in self.agents
+                if (sym := getattr(a, "symbol", None)) is not None and isinstance(sym, str)
+            }
+        )
         bars = await self._load_bars(symbols)
         marks: dict[str, float] = {
             s: float(df["adjusted_close"].iloc[-1]) for s, df in bars.items() if not df.empty
@@ -326,7 +339,7 @@ class Orchestrator:
                 # in flight.
                 if (agent.state.id, sym) in self._pending_exits:
                     continue
-                mark = marks.get(sym, pos.avg_price)
+                mark = float(marks.get(sym, pos.avg_price))
                 trig = agent.risk.should_exit(sym, pos, mark, now_utc)
                 if trig is None:
                     continue
@@ -337,7 +350,7 @@ class Orchestrator:
                 # Drop any brain-emitted sell for the same symbol (risk wins).
                 sigs = [s for s in sigs if not (s.symbol == sym and s.side == "sell")]
                 sigs.append(
-                    Signal(sym, "sell", round(pos.qty, 4), reason=f"risk-exit: {trig.reason}")
+                    Signal(sym, "sell", quantize_qty(pos.qty), reason=f"risk-exit: {trig.reason}")
                 )
                 results_by_id[agent.state.id] = (a_ref, sigs)
                 self._pending_exits[(agent.state.id, sym)] = now_ts
@@ -388,7 +401,7 @@ class Orchestrator:
                 fill = await self.broker.submit_market(
                     symbol=sig.symbol,
                     side=sig.side,
-                    qty=sig.qty,
+                    qty=float(sig.qty),  # broker/market boundary is float
                     agent_id=agent.state.id,
                     client_tag=client_tag,
                     mark=px,
@@ -416,15 +429,20 @@ class Orchestrator:
                         clear = getattr(agent.risk, "clear_peak", None)
                         if callable(clear):
                             clear(fill.symbol)
-                await repo.record_trade(
+                # Issue #8c: persist the trade row + the position sync in a
+                # single transaction so a crash between them can't leave the
+                # DB inconsistent. Dedupe on broker_order_id is preserved
+                # inside record_fill_atomic.
+                await repo.record_fill_atomic(
                     agent.state.id,
+                    agent.state.book,
                     fill.symbol,
                     fill.side,
                     fill.qty,
                     fill.price,
                     sig.reason,
+                    broker_order_id=fill.broker_order_id or None,
                 )
-                await repo.sync_positions(agent.state.id, agent.state.book)
                 # If the fill produced non-zero realized PnL, stamp the
                 # matching entry note. Idempotent: one stamp per flat-out.
                 if realized != 0.0:
@@ -442,7 +460,7 @@ class Orchestrator:
                     agent=agent.state.name,
                     sym=sig.symbol,
                     side=sig.side,
-                    qty=sig.qty,
+                    qty=float(sig.qty),
                     px=px,
                     reason=sig.reason,
                 )
@@ -474,7 +492,7 @@ class Orchestrator:
         # Snapshot + status update happens after all agents have processed signals.
         for agent in self.agents:
             await repo.snapshot_pnl(agent.state.id, agent.state.book, marks)
-            equity = agent.state.book.equity(marks)
+            equity = float(agent.state.book.equity(marks))
             start = settings.agent_starting_capital
             agent.state.status = (
                 "profit"
@@ -487,9 +505,11 @@ class Orchestrator:
         profit = sum(1 for a in self.agents if a.state.status == "profit")
         loss = sum(1 for a in self.agents if a.state.status == "loss")
         waiting = sum(1 for a in self.agents if a.state.status == "waiting")
-        total_equity = sum(a.state.book.equity(marks) for a in self.agents)
-        realized = sum(a.state.book.realized_pnl for a in self.agents)
-        unrealized = sum(a.state.book.unrealized_pnl(marks) for a in self.agents)
+        # Book money is Decimal; convert each book's value to float at this
+        # WS-output boundary before summing so the payload is a JSON number.
+        total_equity = sum(float(a.state.book.equity(marks)) for a in self.agents)
+        realized = sum(float(a.state.book.realized_pnl) for a in self.agents)
+        unrealized = sum(float(a.state.book.unrealized_pnl(marks)) for a in self.agents)
         last_tick_iso = self.last_tick_at.isoformat()
         await publish_event(
             "account",
@@ -602,19 +622,26 @@ class Orchestrator:
             return {"provider": None, "model": None}
         return dict(new.info)
 
-    def start_background(self) -> None:
-        # Audit fix (Q): install the broadcast arbiter here (not in
-        # __init__) so unit tests that build a bare Orchestrator
-        # don't silently pollute the module-global state.
-        from tradefarm.orchestrator import broadcast_os as _bos
+    @staticmethod
+    def _spawn_loop(coro: Awaitable[None], *, name: str) -> asyncio.Task:
+        """Spawn a long-running loop task with an exception-logging callback.
 
-        _bos.install_broadcast_arbiter(
-            self._broadcast_ledger,
-            self._broadcast_scheduler,
-        )
+        Issue #6: the returned task is stored by the caller, but its
+        completion is also observed via a done-callback so a crash (rather
+        than a clean cancel) is logged instead of surfacing as a bare
+        "Task exception was never retrieved" warning.
+        """
+        task = asyncio.ensure_future(coro)
+        task.set_name(name)
+        # Issue #6: route through the shared crash-logger so scheduler /
+        # reconciler core loops are supervised identically to the suite's
+        # sidecar loops.
+        attach_crash_logger(task, name=name)
+        return task
 
+    async def start_background(self) -> None:
         if settings.auto_tick_interval_sec > 0 and self._task is None:
-            self._task = asyncio.create_task(self.run_scheduled(), name="orch_scheduler")
+            self._task = self._spawn_loop(self.run_scheduled(), name="orch_scheduler")
 
         if settings.execution_mode == "alpaca_paper" and self._recon_task is None:
             # Lazy import to avoid pulling alpaca-py in simulated mode.
@@ -622,7 +649,7 @@ class Orchestrator:
 
             if isinstance(self.broker, AlpacaBroker):
                 self._reconciler = OrderReconciler(self.broker, self._optimistic_marks)
-                self._recon_task = asyncio.create_task(
+                self._recon_task = self._spawn_loop(
                     self._reconcile_loop(),
                     name="orch_reconciler",
                 )
@@ -630,59 +657,12 @@ class Orchestrator:
         # Phase 4 — opt-in curriculum loop (0 disables).
         self.start_curriculum()
 
-        # Auto-director — always on; it's a presentation layer, not execution.
-        if self._auto_director is None:
-            self._auto_director = AutoDirector(orch=self)
-            asyncio.create_task(
-                self._auto_director.start(),
-                name="orch_auto_director_start",
-            )
-
-        # Streak watcher — always on; complements auto-director with
-        # journal-driven pattern detection.
-        if self._streak_watcher is None:
-            self._streak_watcher = StreakWatcher(orch=self)
-            asyncio.create_task(
-                self._streak_watcher.start(),
-                name="orch_streak_watcher_start",
-            )
-
-        # Live LLM commentary — always on; Bloomberg-style one-liner every ~45s.
-        if self._commentary_loop is None:
-            self._commentary_loop = CommentaryLoop(orch=self)
-            asyncio.create_task(
-                self._commentary_loop.start(),
-                name="orch_commentary_loop_start",
-            )
-
-        # YouTube Live Chat poller — always constructed; the poller itself
-        # checks ``settings.youtube_chat_enabled`` and stays dormant when off.
-        if self._youtube_chat is None:
-            self._youtube_chat = YouTubeChatPoller(orch=self)
-            asyncio.create_task(
-                self._youtube_chat.start(),
-                name="orch_youtube_chat_start",
-            )
-
-        # Audience predictions board — depends on agent list being final.
-        if self._predictions is None:
-            self._predictions = PredictionsBoard(orch=self)
-            asyncio.create_task(
-                self._predictions.start(),
-                name="orch_predictions_start",
-            )
-
-        # Audience coordinator — wires chat commands into sentiment + pins
-        # + predictions. Built AFTER predictions so the link is in place.
-        if self._audience is None:
-            self._audience = AudienceCoordinator(
-                orch=self,
-                predictions=self._predictions,
-            )
-            asyncio.create_task(
-                self._audience.start(),
-                name="orch_audience_start",
-            )
+        # Issue #6: the broadcast presentation layer (sidecars + arbiter)
+        # starts as a single unit. The suite installs the arbiter, then
+        # constructs + awaits each sidecar's start() in dependency order
+        # (predictions before audience). Awaiting (not fire-and-forget) so a
+        # boot-time start() failure surfaces here instead of being swallowed.
+        await self._broadcast_suite.start()
 
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""
@@ -767,6 +747,24 @@ class Orchestrator:
             )
             if ok:
                 applied += 1
+                # Persist the reconciled fill keyed on broker_order_id. The
+                # UNIQUE constraint dedupes this against the optimistic write
+                # the scheduler made at submit time — so a normal run inserts
+                # nothing here, but after a process restart (when the
+                # in-memory optimistic row never happened) this is the row
+                # that records the fill. Either way broker_order_id ends up
+                # persisted exactly once: the documented restart-safe guard
+                # (CLAUDE.md gotcha #7) is now live.
+                await repo.record_trade(
+                    rf.agent_id,
+                    rf.symbol,
+                    rf.side,
+                    rf.qty,
+                    rf.actual_price,
+                    "reconciled_fill",
+                    broker_order_id=rf.broker_order_id or None,
+                )
+                await repo.sync_positions(rf.agent_id, agent.state.book)
                 # If this fill was a sell, clear the pending-exit guard
                 # so the next tick can issue a fresh exit if the agent
                 # opens a new position.
@@ -809,37 +807,12 @@ class Orchestrator:
                 pass
         self._task = None
         self._recon_task = None
-        # Then drain all sidecar coordinators. Each one may still emit
-        # broadcast moments during its `stop()` (e.g. a "stream offline"
-        # banner). Those need the arbiter to still be installed.
         await self.stop_curriculum()
-        if self._auto_director is not None:
-            await self._auto_director.stop()
-            self._auto_director = None
-        if self._streak_watcher is not None:
-            await self._streak_watcher.stop()
-            self._streak_watcher = None
-        if self._commentary_loop is not None:
-            await self._commentary_loop.stop()
-            self._commentary_loop = None
-        if self._youtube_chat is not None:
-            await self._youtube_chat.stop()
-            self._youtube_chat = None
-        if self._audience is not None:
-            await self._audience.stop()
-            self._audience = None
-        if self._predictions is not None:
-            await self._predictions.stop()
-            self._predictions = None
-
-        # Audit fix (round 3 U): uninstall the broadcast arbiter AFTER
-        # every sidecar has stopped. Previous order (uninstall first,
-        # then stop sidecars) meant in-flight `publish_broadcast_moment`
-        # calls during stop() hit the legacy fall-through and bypassed
-        # the ledger/scheduler entirely. Symmetric to start_background.
-        from tradefarm.orchestrator import broadcast_os as _bos
-
-        _bos.install_broadcast_arbiter(None, None)
+        # Issue #6: drain the broadcast presentation layer as a unit. The
+        # suite stops every sidecar first (they may still emit broadcast
+        # moments during stop(), so the arbiter must still be installed),
+        # then uninstalls the arbiter last — symmetric to start_background.
+        await self._broadcast_suite.stop()
 
         # Round-5 audit fix (AA): close the shared httpx client so the
         # event-loop doesn't carry an unclosed-connection warning into

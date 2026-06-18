@@ -91,6 +91,7 @@ def patched_persistence(monkeypatch):
         return 1  # pretend a note id
 
     monkeypatch.setattr(repo_mod, "record_trade", _noop)
+    monkeypatch.setattr(repo_mod, "record_fill_atomic", _noop)
     monkeypatch.setattr(repo_mod, "snapshot_pnl", _noop)
     monkeypatch.setattr(repo_mod, "sync_positions", _noop)
     monkeypatch.setattr(repo_mod, "upsert_agent", _noop)

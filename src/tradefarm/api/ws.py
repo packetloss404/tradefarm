@@ -131,8 +131,10 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
     raw_at = frame.get("at") or manifest.get("started_at")
     raw_until = frame.get("until") or manifest.get("ended_at")
     try:
+        if not isinstance(raw_at, str):
+            raise TypeError("missing 'at' timestamp")
         at_dt = replay_query.parse_iso(raw_at)
-        until_dt = replay_query.parse_iso(raw_until) if raw_until else None
+        until_dt = replay_query.parse_iso(raw_until) if isinstance(raw_until, str) else None
     except (ValueError, TypeError):
         await ws.send_json(
             {

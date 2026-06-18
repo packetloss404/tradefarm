@@ -10,10 +10,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from time import monotonic
+from typing import Literal
 
 from tradefarm.orchestrator.broadcast_os import BroadcastMoment, BroadcastOutput
 
 Clock = Callable[[], float]
+
+MomentState = Literal["active", "queued", "preempted"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,13 +32,20 @@ class EnqueueResult:
 
 @dataclass(frozen=True, slots=True)
 class ScheduledMoment:
-    """A moment currently occupying one or more presentation outputs."""
+    """A moment occupying (or contending for) one or more presentation outputs.
+
+    ``state`` distinguishes a moment that is live (``"active"``), one that was
+    enqueued but blocked by an equal-or-higher-priority slot (``"queued"``), and
+    one that was bumped off its output by a higher-priority moment
+    (``"preempted"``). The dashboard's slot/queue indicator reads this directly.
+    """
 
     moment: BroadcastMoment
     outputs: tuple[BroadcastOutput, ...]
     started_at: float
     expires_at: float
     preempted: tuple[BroadcastMoment, ...] = ()
+    state: MomentState = "active"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +139,50 @@ class BroadcastScheduler:
         self.enqueue(moment, now=at)
         return self.drain(now=at)
 
+    def submit_slots(
+        self, moment: BroadcastMoment, *, now: float | None = None
+    ) -> tuple[ScheduledMoment, ...]:
+        """Submit a moment and return every slot-state change it caused.
+
+        Returns the newly ``"active"`` moments (with their ``preempted`` lists),
+        a ``"preempted"`` entry per bumped moment, and a ``"queued"`` entry for
+        ``moment`` itself if it could not start now. This is what the broadcast
+        layer fans out as ``broadcast_slot`` events so the dashboard reflects
+        the real queue/preemption state instead of always reporting active.
+        """
+
+        at = self._now(now)
+        activated = self.submit(moment, now=at)
+        slots: list[ScheduledMoment] = list(activated)
+
+        seen_preempted: set[str] = set()
+        for active in activated:
+            for bumped in active.preempted:
+                if bumped.id in seen_preempted:
+                    continue
+                seen_preempted.add(bumped.id)
+                slots.append(
+                    ScheduledMoment(
+                        moment=bumped,
+                        outputs=_outputs(bumped),
+                        started_at=at,
+                        expires_at=at,
+                        state="preempted",
+                    )
+                )
+
+        if self._is_queued(moment.id):
+            slots.append(
+                ScheduledMoment(
+                    moment=moment,
+                    outputs=_outputs(moment),
+                    started_at=at,
+                    expires_at=at,
+                    state="queued",
+                )
+            )
+        return tuple(slots)
+
     def drain(self, *, now: float | None = None) -> tuple[ScheduledMoment, ...]:
         """Start all queued moments whose output slots are available."""
 
@@ -189,6 +243,9 @@ class BroadcastScheduler:
 
     def _is_active(self, moment_id: str) -> bool:
         return any(active.moment.id == moment_id for active in self._active_by_output.values())
+
+    def _is_queued(self, moment_id: str) -> bool:
+        return moment_id in self._queued
 
     def _next_ready_item(self) -> _QueueItem | None:
         for item in self._ordered_queue():

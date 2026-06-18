@@ -26,11 +26,13 @@ without code changes to ``agents/backtest.py``.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any
 
 import structlog
 from sqlalchemy import select
 
+from tradefarm.runtime.money import D
 from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import Agent, AgentNote
@@ -66,7 +68,10 @@ def _row_to_dict(n: AgentNote) -> dict:
         "metadata": _decode_meta(n.note_metadata),
         "created_at": n.created_at.isoformat() if n.created_at else None,
         "outcome_trade_id": n.outcome_trade_id,
-        "outcome_realized_pnl": n.outcome_realized_pnl,
+        # Numeric column → Decimal; convert at this JSON/REST boundary.
+        "outcome_realized_pnl": (
+            float(n.outcome_realized_pnl) if n.outcome_realized_pnl is not None else None
+        ),
         "outcome_closed_at": n.outcome_closed_at.isoformat() if n.outcome_closed_at else None,
     }
 
@@ -113,7 +118,7 @@ async def write_note(
 async def close_outcome(
     agent_id: int,
     symbol: str,
-    realized_pnl: float,
+    realized_pnl: float | Decimal,
     trade_id: int | None = None,
 ) -> int | None:
     """Stamp the oldest unstamped ``entry`` note for ``(agent_id, symbol)``
@@ -146,7 +151,7 @@ async def close_outcome(
                 return None
             from tradefarm.runtime.clock import now_utc
 
-            note.outcome_realized_pnl = float(realized_pnl)
+            note.outcome_realized_pnl = D(realized_pnl)
             note.outcome_trade_id = trade_id
             note.outcome_closed_at = now_utc()
             await session.commit()

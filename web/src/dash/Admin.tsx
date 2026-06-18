@@ -28,6 +28,11 @@ function looksMasked(v: unknown): boolean {
 
 const PATCH_DEBOUNCE_MS = 600;
 
+// Shared affordance for controls whose backend wiring isn't built yet.
+// These render dimmed + non-interactive so an operator can't mistake
+// them for live (some imply destructive actions).
+const COMING_SOON_TITLE = "Coming soon — backend pipeline not wired yet";
+
 function mergeFromLive(local: DashAdminConfig, live: LiveConfig): DashAdminConfig {
   return {
     ...local,
@@ -459,16 +464,20 @@ function Select({
   value,
   onChange,
   options,
+  disabled = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
+  disabled?: boolean;
 }) {
   const { T } = useTheme();
   return (
     <select
       value={value}
       onChange={(e: ChangeEvent<HTMLSelectElement>) => onChange(e.target.value)}
+      disabled={disabled}
+      title={disabled ? COMING_SOON_TITLE : undefined}
       style={{
         fontFamily: "JetBrains Mono, monospace",
         fontSize: 13,
@@ -477,8 +486,9 @@ function Select({
         border: `1px solid ${T.border}`,
         borderRadius: 4,
         color: T.text,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         outline: "none",
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       {options.map((o) => (
@@ -494,30 +504,35 @@ function Segment({
   value,
   onChange,
   options,
+  disabled = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
+  disabled?: boolean;
 }) {
   const { T } = useTheme();
   return (
     <div
+      title={disabled ? COMING_SOON_TITLE : undefined}
       style={{
         display: "flex",
         background: T.bg,
         border: `1px solid ${T.border}`,
         borderRadius: 4,
         padding: 2,
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       {options.map((o) => (
         <button
           key={o.value}
           onClick={() => onChange(o.value)}
+          disabled={disabled}
           style={{
             padding: "6px 14px",
             border: "none",
-            cursor: "pointer",
+            cursor: disabled ? "not-allowed" : "pointer",
             fontFamily: "JetBrains Mono, monospace",
             fontSize: 12,
             fontWeight: 600,
@@ -533,19 +548,31 @@ function Segment({
   );
 }
 
-function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
   const { T } = useTheme();
   return (
     <button
       onClick={() => onChange(!value)}
+      disabled={disabled}
+      aria-disabled={disabled}
+      title={disabled ? COMING_SOON_TITLE : undefined}
       style={{
         display: "flex",
         alignItems: "center",
         gap: 10,
         background: "transparent",
         border: "none",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         padding: 0,
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       <span
@@ -583,6 +610,7 @@ function Slider({
   step = 0.01,
   onChange,
   format,
+  disabled = false,
 }: {
   value: number;
   min: number;
@@ -590,10 +618,14 @@ function Slider({
   step?: number;
   onChange: (v: number) => void;
   format?: (v: number) => string;
+  disabled?: boolean;
 }) {
   const { T } = useTheme();
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+    <div
+      title={disabled ? COMING_SOON_TITLE : undefined}
+      style={{ display: "flex", alignItems: "center", gap: 14, opacity: disabled ? 0.5 : 1 }}
+    >
       <input
         type="range"
         min={min}
@@ -601,7 +633,8 @@ function Slider({
         step={step}
         value={value}
         onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(parseFloat(e.target.value))}
-        style={{ flex: 1, accentColor: T.accent }}
+        disabled={disabled}
+        style={{ flex: 1, accentColor: T.accent, cursor: disabled ? "not-allowed" : "pointer" }}
       />
       <span
         style={{
@@ -730,7 +763,7 @@ function DangerZone() {
           DANGER ZONE
         </div>
         <div style={{ fontFamily: '"Helvetica Neue"', fontSize: 12, color: T.text2, marginTop: 4 }}>
-          irreversible. confirm twice from the CLI.
+          irreversible. not wired yet — run these from the CLI for now.
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -742,17 +775,20 @@ function DangerZone() {
         ].map((b) => (
           <button
             key={b.label}
+            disabled
+            title={COMING_SOON_TITLE}
             style={{
               fontFamily: '"Helvetica Neue"',
               fontSize: 12,
               fontWeight: 600,
               padding: "10px 14px",
               borderRadius: 4,
-              cursor: "pointer",
+              cursor: "not-allowed",
               background: "transparent",
               color: T.text,
               border: `1px solid ${T.border}`,
               textAlign: "left",
+              opacity: 0.5,
             }}
           >
             <div>{b.label}</div>
@@ -951,20 +987,32 @@ export function AdminPage() {
               />
             </Field>
           </AdminSection>
-          <AdminSection title="VOD PIPELINE" sub="Local-only — backend pipeline endpoints land next.">
+          <AdminSection
+            title="VOD PIPELINE"
+            sub="Coming soon — backend pipeline endpoints land next. Controls preview only."
+          >
             <Field label="Auto-render at close" inline>
-              <Toggle value={true} onChange={() => {}} />
+              <Toggle value={true} onChange={() => {}} disabled />
             </Field>
             <Field label="Auto-publish to YouTube" inline>
-              <Toggle value={false} onChange={() => {}} />
+              <Toggle value={false} onChange={() => {}} disabled />
             </Field>
             <Field label="Target episode length">
-              <Slider value={10} min={3} max={20} step={1} onChange={() => {}} format={(v) => `${v} min`} />
+              <Slider
+                value={10}
+                min={3}
+                max={20}
+                step={1}
+                onChange={() => {}}
+                format={(v) => `${v} min`}
+                disabled
+              />
             </Field>
             <Field label="TTS voice">
               <Select
                 value="daniel"
                 onChange={() => {}}
+                disabled
                 options={[
                   { value: "daniel", label: "Daniel · eleven flash-v2" },
                   { value: "rachel", label: "Rachel · eleven flash-v2" },
@@ -977,6 +1025,7 @@ export function AdminPage() {
               <Segment
                 value="unlisted"
                 onChange={() => {}}
+                disabled
                 options={[
                   { value: "public", label: "Public" },
                   { value: "unlisted", label: "Unlisted" },
