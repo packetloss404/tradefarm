@@ -13,6 +13,7 @@ import pandas as pd
 from tradefarm.agents.base import Agent, Signal
 from tradefarm.agents.features import WARMUP_BARS, featurize, latest_window
 from tradefarm.agents.lstm_model import FittedModel, load
+from tradefarm.runtime.money import D, quantize_qty
 
 DIR_NAMES = ("down", "flat", "up")
 
@@ -69,18 +70,18 @@ class LstmAgent(Agent):
         # Use max class prob as the trigger; confidence head is a noisy auxiliary.
         max_prob = max(pred.direction_probs)
         if pred.direction == 2 and max_prob >= self.enter_conf and not has_long:
-            qty = round(self.state.book.cash * self.size_pct / px, 4)
+            qty = quantize_qty(self.state.book.cash * D(self.size_pct) / D(px))
             if qty <= 0:
                 return []
             return [
                 Signal(self.symbol, "buy", qty, reason=f"lstm up p={pred.direction_probs[2]:.2f}")
             ]
-        if pred.direction == 0 and max_prob >= self.exit_conf and has_long:
+        if pred.direction == 0 and max_prob >= self.exit_conf and has_long and pos is not None:
             return [
                 Signal(
                     self.symbol,
                     "sell",
-                    round(pos.qty, 4),
+                    quantize_qty(pos.qty),
                     reason=f"lstm down p={pred.direction_probs[0]:.2f}",
                 )
             ]

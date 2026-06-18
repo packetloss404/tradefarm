@@ -84,6 +84,13 @@ class AutoDirector:
             return
         self._snapshot_ranks()
         self._task = asyncio.create_task(self._run(), name="orch_auto_director")
+        # Issue #6: supervise the fire-and-forget inner loop so a hard crash
+        # logs `background_loop_crashed` instead of a bare "Task exception
+        # was never retrieved" warning. Lazy import to avoid a module-load
+        # cycle (broadcast_suite imports this module).
+        from tradefarm.orchestrator.broadcast_suite import attach_crash_logger
+
+        attach_crash_logger(self._task, name="orch_auto_director")
         log.info("auto_director_started", interval_sec=self.poll_interval_sec)
 
     async def stop(self) -> None:
@@ -143,7 +150,7 @@ class AutoDirector:
             book = getattr(agent.state, "book", None)
             if book is None or starting <= 0:
                 continue
-            equity = book.equity(marks)
+            equity = float(book.equity(marks))
             pct = (equity - starting) / starting
             symbol = getattr(agent, "symbol", None)
             if pct >= BIG_WIN_PCT:

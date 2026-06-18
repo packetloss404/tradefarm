@@ -42,7 +42,7 @@ _RANK_TONE: dict[Rank, str] = {
 
 
 def rank_tone(rank: str) -> str:
-    return _RANK_TONE.get(rank, "text-zinc-400")  # type: ignore[arg-type]
+    return _RANK_TONE.get(rank, "text-zinc-400")  # type: ignore[call-overload]
 
 
 @dataclass

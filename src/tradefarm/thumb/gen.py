@@ -229,7 +229,7 @@ def _compose_thumb(
         new_h = int(base.width / target_ratio)
         y0 = (base.height - new_h) // 2
         base = base.crop((0, y0, base.width, y0 + new_h))
-    base = base.resize((width, height), Image.LANCZOS)
+    base = base.resize((width, height), Image.Resampling.LANCZOS)
 
     # Dark gradient over bottom 55% so white text reads.
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))

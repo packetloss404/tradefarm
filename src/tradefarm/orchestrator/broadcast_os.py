@@ -146,9 +146,10 @@ def moment_from_macro(
     trigger = str(macro.get("trigger") or "")
     kind = KIND_BY_TRIGGER.get(trigger, default_kind)
     priority = PRIORITY_BY_TRIGGER.get(trigger, 50)
-    color = macro.get("color")
-    if color not in ("profit", "loss", "neutral"):
-        color = "neutral"
+    color: BroadcastColor = "neutral"
+    raw_color = macro.get("color")
+    if raw_color in ("profit", "loss", "neutral"):
+        color = raw_color
     agent_id = macro.get("agent_id")
     if not isinstance(agent_id, int):
         agent_id = None

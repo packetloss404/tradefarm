@@ -478,7 +478,7 @@ export function WorkflowFlowchart() {
               key={s.id}
               type="button"
               onClick={() => setActive(s.id)}
-              aria-selected={isActive}
+              aria-pressed={isActive}
               className={[
                 "rounded-sm border px-2.5 py-1 text-[11px] font-mono transition-colors",
                 isActive

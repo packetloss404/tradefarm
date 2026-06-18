@@ -128,6 +128,13 @@ class AudienceCoordinator:
         if self._task is not None:
             return
         self._task = asyncio.create_task(self._run(), name="orch_audience")
+        # Issue #6: supervise the fire-and-forget inner loop so a hard crash
+        # logs `background_loop_crashed` instead of a bare "Task exception
+        # was never retrieved" warning. Lazy import to avoid a module-load
+        # cycle (broadcast_suite imports this module).
+        from tradefarm.orchestrator.broadcast_suite import attach_crash_logger
+
+        attach_crash_logger(self._task, name="orch_audience")
         log.info("audience_started", heartbeat_sec=self.heartbeat_sec)
 
     async def stop(self) -> None:

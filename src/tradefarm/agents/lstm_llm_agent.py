@@ -12,6 +12,7 @@ from tradefarm.agents.llm_overlay import LlmContext, LlmDecision, LlmOverlay
 from tradefarm.agents.llm_overlay_types import LlmParseError
 from tradefarm.agents.lstm_model import FittedModel, load
 from tradefarm.config import settings
+from tradefarm.runtime.money import D, quantize_qty
 
 log = structlog.get_logger()
 
@@ -78,7 +79,8 @@ class LstmLlmAgent(Agent):
             return []
         pos = self.state.book.positions.get(self.symbol)
         has_long = pos is not None and pos.qty > 0
-        held_qty = pos.qty if pos else 0.0
+        # LlmContext.held_qty is a float boundary (rendered into the prompt).
+        held_qty = float(pos.qty) if pos else 0.0
 
         # Cost gate: skip the LLM call entirely when the LSTM signal is weak
         # (flat bias OR max class prob < threshold). Pre-empts a Claude call
@@ -98,7 +100,7 @@ class LstmLlmAgent(Agent):
             )
             return []
 
-        equity = self.state.book.equity(marks)
+        equity = float(self.state.book.equity(marks))
         day_pnl_pct = (
             (equity - settings.agent_starting_capital) / settings.agent_starting_capital * 100
         )
@@ -231,12 +233,18 @@ class LstmLlmAgent(Agent):
         if decision.stance == "wait" or decision.size_pct <= 0:
             return []
         if decision.predictive == "long" and not has_long:
-            qty = round(self.state.book.cash * min(decision.size_pct, 0.25) / px, 4)
+            size_pct = D(min(decision.size_pct, 0.25))
+            qty = quantize_qty(self.state.book.cash * size_pct / D(px))
             if qty <= 0:
                 return []
             return [Signal(self.symbol, "buy", qty, reason=f"llm:{decision.reason[:60]}")]
-        if decision.predictive in ("short", "flat") and has_long:
+        if decision.predictive in ("short", "flat") and has_long and pos is not None:
             return [
-                Signal(self.symbol, "sell", round(pos.qty, 4), reason=f"llm:{decision.reason[:60]}")
+                Signal(
+                    self.symbol,
+                    "sell",
+                    quantize_qty(pos.qty),
+                    reason=f"llm:{decision.reason[:60]}",
+                )
             ]
         return []

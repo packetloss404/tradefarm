@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 import structlog
 from sqlalchemy import func, select
@@ -8,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from tradefarm.execution.virtual_book import VirtualBook
 from tradefarm.runtime.clock import now_utc
+from tradefarm.runtime.money import D
 from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
@@ -27,7 +29,9 @@ __all__ = [
 ]
 
 
-async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital: float) -> None:
+async def upsert_agent(
+    agent_id: int, name: str, strategy: str, starting_capital: float | Decimal
+) -> None:
     async with SessionLocal() as session:
         existing = (
             await session.execute(select(Agent).where(Agent.id == agent_id))
@@ -46,13 +50,14 @@ async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital
             if dirty:
                 await session.commit()
             return
+        capital = D(starting_capital)
         session.add(
             Agent(
                 id=agent_id,
                 name=name,
                 strategy=strategy,
-                starting_capital=starting_capital,
-                cash=starting_capital,
+                starting_capital=capital,
+                cash=capital,
                 status="waiting",
             )
         )
@@ -63,8 +68,8 @@ async def record_trade(
     agent_id: int,
     symbol: str,
     side: str,
-    qty: float,
-    price: float,
+    qty: float | Decimal,
+    price: float | Decimal,
     reason: str,
     broker_order_id: str | None = None,
 ) -> None:
@@ -86,8 +91,8 @@ async def record_trade(
                 agent_id=agent_id,
                 symbol=symbol,
                 side=side,
-                qty=qty,
-                price=price,
+                qty=D(qty),
+                price=D(price),
                 reason=reason,
                 session_id=current_session_id(),
                 broker_order_id=broker_order_id,
@@ -140,8 +145,8 @@ async def record_fill_atomic(
     book: VirtualBook,
     symbol: str,
     side: str,
-    qty: float,
-    price: float,
+    qty: float | Decimal,
+    price: float | Decimal,
     reason: str,
     broker_order_id: str | None = None,
 ) -> None:
@@ -168,8 +173,8 @@ async def record_fill_atomic(
                     agent_id=agent_id,
                     symbol=symbol,
                     side=side,
-                    qty=qty,
-                    price=price,
+                    qty=D(qty),
+                    price=D(price),
                     reason=reason,
                     session_id=current_session_id(),
                     broker_order_id=broker_order_id,

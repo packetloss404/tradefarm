@@ -222,12 +222,13 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
             if not 0 <= val <= 10:
                 raise HTTPException(400, "academy_retrieval_k out of range (0..10)")
         if key == "disabled_strategies":
-            unknown = [s for s in val if s not in KNOWN_STRATEGIES]
+            strategies = list(val) if isinstance(val, (list, tuple, set)) else []
+            unknown = [s for s in strategies if s not in KNOWN_STRATEGIES]
             if unknown:
                 raise HTTPException(400, f"unknown strategies: {unknown}")
             # Store as CSV internally; API shows as list.
-            setattr(settings, key, ",".join(sorted(set(val))))
-            changes[key] = sorted(set(val))
+            setattr(settings, key, ",".join(sorted(set(strategies))))
+            changes[key] = sorted(set(strategies))
             continue
 
         setattr(settings, key, val)

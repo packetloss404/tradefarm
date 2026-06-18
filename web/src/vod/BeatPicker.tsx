@@ -1086,9 +1086,12 @@ function BeatHeader({ vod }: { vod: VodMock }) {
 
 export function BeatPicker({ vod }: { vod: VodMock }) {
   const fallbackBeat = vod.beats[0];
-  if (!fallbackBeat) return null;
-  const initial = vod.beats.find((b) => vod.selectedBeats.has(b.id))?.id ?? fallbackBeat.id;
+  // Hooks must run unconditionally — derive the initial id defensively (empty
+  // string when there are no beats) so the useState call stays above any early
+  // return and keeps a `string` type (react-hooks/rules-of-hooks).
+  const initial = vod.beats.find((b) => vod.selectedBeats.has(b.id))?.id ?? fallbackBeat?.id ?? "";
   const [currentId, setCurrentId] = useState(initial);
+  if (!fallbackBeat) return null;
   const current = vod.beats.find((b) => b.id === currentId) ?? fallbackBeat;
   return (
     <div

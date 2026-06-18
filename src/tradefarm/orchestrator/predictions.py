@@ -116,6 +116,13 @@ class PredictionsBoard:
             return
         self._seed_session(_now_et())
         self._task = asyncio.create_task(self._run(), name="orch_predictions")
+        # Issue #6: supervise the fire-and-forget inner loop so a hard crash
+        # logs `background_loop_crashed` instead of a bare "Task exception
+        # was never retrieved" warning. Lazy import to avoid a module-load
+        # cycle (broadcast_suite imports this module).
+        from tradefarm.orchestrator.broadcast_suite import attach_crash_logger
+
+        attach_crash_logger(self._task, name="orch_predictions")
         log.info("predictions_started", interval_sec=self.poll_interval_sec)
 
     async def stop(self) -> None:

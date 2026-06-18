@@ -173,8 +173,11 @@ async def _build_events_from_db(session_id: str) -> tuple[list[SessionEvent], in
                     payload={
                         "symbol": trade.symbol,
                         "side": trade.side,
-                        "qty": trade.qty,
-                        "price": trade.price,
+                        # DB Numeric columns are Decimal; the manifest is a
+                        # JSON-number contract (replay_query / frontend), so
+                        # convert at this serialization boundary.
+                        "qty": float(trade.qty),
+                        "price": float(trade.price),
                         "notional": notional,
                         "reason": trade.reason,
                     },

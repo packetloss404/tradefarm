@@ -181,6 +181,52 @@ async def test_extended_hours_flag_flows_to_market_order_request():
         assert kwargs["extended_hours"] is True
 
 
+async def test_run_loop_awaits_poll_once():
+    """REGRESSION: ``run()`` called ``self.poll_once()`` without ``await``,
+    so ``fills`` was a coroutine — ``if fills:`` was always truthy and
+    ``len(fills)`` raised. This drives one loop iteration (breaking out
+    via a sleep that raises) and asserts the broker was actually polled
+    and no exception escaped the loop body.
+    """
+    now = datetime.now(timezone.utc)
+    broker = _StubBroker(
+        orders=[
+            {
+                "broker_order_id": "ord-run-1",
+                "client_order_id": "agent3-tag",
+                "symbol": "SPY",
+                "side": "buy",
+                "qty": 2.0,
+                "filled_qty": 2.0,
+                "filled_avg_price": 100.0,
+                "status": "filled",
+                "submitted_at": now.isoformat(),
+                "filled_at": now.isoformat(),
+            }
+        ]
+    )
+    recon = _recon(broker, marks={"agent3-tag": 100.0})
+
+    class _StopLoop(Exception):
+        pass
+
+    async def _fake_sleep(_seconds: float) -> None:
+        raise _StopLoop
+
+    # The run loop swallows generic Exceptions inside the try; _StopLoop is
+    # raised by the sleep that runs *after* the try, so it cleanly breaks
+    # out without masking a real poll error.
+    with patch("tradefarm.execution.order_reconciler.asyncio.sleep", _fake_sleep):
+        with pytest.raises(_StopLoop):
+            await recon.run(interval_sec=1)
+
+    # The poll actually executed (broker queried) and the filled order was
+    # reconciled — proving poll_once was awaited, not left as a coroutine.
+    assert broker.calls, "run() never polled the broker"
+    assert "ord-run-1" in recon._seen_order_ids
+    assert "agent3-tag" not in recon.optimistic_marks
+
+
 async def test_extended_hours_default_false():
     from tradefarm.config import settings
 

@@ -4,15 +4,24 @@
 real paper account, but each agent has an isolated book of positions, cash,
 and P&L computed locally. Fills from the real broker get attributed back to
 the agent that placed the parent order.
+
+Money is held as :class:`~decimal.Decimal` for exactness (cash, realized
+P&L, avg price, qty). Inputs (marks/prices/qty) arrive as ``float`` from
+market data / the broker and are coerced at the boundary via
+:func:`tradefarm.runtime.money.D`. Output boundaries (WS payloads, REST
+responses, ``json.dumps``) must convert back to ``float`` — see
+``runtime.money.to_float``.
 """
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 
 import structlog
 
 from tradefarm.runtime.clock import now_utc
+from tradefarm.runtime.money import D
 
 log = structlog.get_logger(__name__)
 
@@ -20,6 +29,8 @@ log = structlog.get_logger(__name__)
 # 100 agents × 10k fills each = 1M ids max, but each is small (string).
 # Acceptable; the cap is per-book so a single book never exceeds 10k.
 _RECONCILED_IDS_LRU_CAP = 10_000
+
+_ZERO = Decimal("0")
 
 
 def _utcnow() -> datetime:
@@ -29,13 +40,20 @@ def _utcnow() -> datetime:
 @dataclass
 class VirtualPosition:
     symbol: str
-    qty: float = 0.0
-    avg_price: float = 0.0
+    qty: Decimal = field(default_factory=lambda: Decimal("0"))
+    avg_price: Decimal = field(default_factory=lambda: Decimal("0"))
     # Set when qty goes from 0 to non-zero; cleared when qty returns to 0.
     # Drives the RiskManager time-stop.
     opened_at: datetime | None = None
 
-    def apply_fill(self, side: str, qty: float, price: float, at: datetime | None = None) -> float:
+    def __post_init__(self) -> None:
+        # Allow construction with float/int literals (tests, legacy callers).
+        self.qty = D(self.qty)
+        self.avg_price = D(self.avg_price)
+
+    def apply_fill(
+        self, side: str, qty: float | Decimal, price: float | Decimal, at: datetime | None = None
+    ) -> Decimal:
         """Apply a fill, returning the realized PnL it produces.
 
         Flat-only invariant: a fill that would carry the position THROUGH
@@ -47,37 +65,43 @@ class VirtualPosition:
         """
         at = at or _utcnow()
         qty = self._clamp_flip(side, qty)
-        if qty <= 0:
-            return 0.0
-        was_zero = self.qty == 0
+        price = D(price)
+        if qty <= _ZERO:
+            return _ZERO
+        was_zero = self.qty == _ZERO
         signed = qty if side == "buy" else -qty
         new_qty = self.qty + signed
-        realized = 0.0
-        if was_zero or (self.qty > 0) == (signed > 0):
-            if new_qty != 0:
+        realized = _ZERO
+        if was_zero or (self.qty > _ZERO) == (signed > _ZERO):
+            if new_qty != _ZERO:
                 self.avg_price = (self.avg_price * self.qty + price * signed) / new_qty
         else:
             closing = min(abs(signed), abs(self.qty))
-            realized = closing * (price - self.avg_price) * (1 if self.qty > 0 else -1)
+            realized = (
+                closing
+                * (price - self.avg_price)
+                * (Decimal(1) if self.qty > _ZERO else Decimal(-1))
+            )
             # No flip is possible after `_clamp_flip`, so the closing
             # branch never opens the opposite side; avg_price is left
             # unchanged on a partial close and reset to flat below.
         self.qty = new_qty
-        if self.qty == 0:
-            self.avg_price = 0.0
+        if self.qty == _ZERO:
+            self.avg_price = _ZERO
             self.opened_at = None
         elif was_zero:
             self.opened_at = at
         return realized
 
-    def _clamp_flip(self, side: str, qty: float) -> float:
+    def _clamp_flip(self, side: str, qty: float | Decimal) -> Decimal:
         """Clamp ``qty`` so an opposite-side fill can only close to flat.
 
         Returns the executable qty (== requested qty unless a through-zero
         flip was detected, in which case it is reduced to ``abs(self.qty)``).
         """
+        qty = D(qty)
         signed = qty if side == "buy" else -qty
-        if self.qty == 0 or (self.qty > 0) == (signed > 0):
+        if self.qty == _ZERO or (self.qty > _ZERO) == (signed > _ZERO):
             return qty  # opening / same-side add — never a flip
         if abs(signed) <= abs(self.qty):
             return qty  # (partial) close that stays same-sign or hits flat
@@ -86,9 +110,9 @@ class VirtualPosition:
             "fill_flip_clamped",
             symbol=self.symbol,
             side=side,
-            requested_qty=qty,
-            clamped_qty=clamped,
-            held_qty=self.qty,
+            requested_qty=float(qty),
+            clamped_qty=float(clamped),
+            held_qty=float(self.qty),
         )
         return clamped
 
@@ -96,8 +120,8 @@ class VirtualPosition:
 @dataclass
 class VirtualBook:
     agent_id: int
-    cash: float
-    realized_pnl: float = 0.0
+    cash: Decimal
+    realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
     # Plain dict (not defaultdict) — the previous defaultdict auto-vivified
     # entries with `VirtualPosition("")` for unseen symbols, leaving the
     # symbol field empty for any code path that read `pos.symbol`. Forced
@@ -108,6 +132,11 @@ class VirtualBook:
     # so a long-running broadcast can't accumulate every order_id
     # forever. Replaces the unbounded set.
     _reconciled_ids: OrderedDict[str, None] = field(default_factory=OrderedDict)
+
+    def __post_init__(self) -> None:
+        # Coerce constructor inputs (tests/callers pass float literals).
+        self.cash = D(self.cash)
+        self.realized_pnl = D(self.realized_pnl)
 
     def _add_reconciled_id(self, broker_order_id: str) -> None:
         """LRU-bounded insert into the dedup set."""
@@ -123,19 +152,28 @@ class VirtualBook:
         return pos
 
     def record_fill(
-        self, symbol: str, side: str, qty: float, price: float, at: datetime | None = None
-    ) -> float:
+        self,
+        symbol: str,
+        side: str,
+        qty: float | Decimal,
+        price: float | Decimal,
+        at: datetime | None = None,
+    ) -> Decimal:
         """Apply a fill to this book. Returns the realized PnL produced by
         this fill alone (zero for opening fills / same-side adds, non-zero
         for fills that close or flip part/all of a position). The
         book's ``realized_pnl`` running total is updated by the same amount.
+
+        ``qty``/``price`` may arrive as ``float`` (broker boundary); they
+        are coerced to Decimal internally.
         """
         pos = self._get_or_create(symbol)
+        price = D(price)
         # Clamp flat-only BEFORE moving cash so the cash delta reflects the
         # executed (possibly clamped) qty, never the requested qty.
         qty = pos._clamp_flip(side, qty)
-        if qty <= 0:
-            return 0.0
+        if qty <= _ZERO:
+            return _ZERO
         notional = qty * price
         self.cash += notional if side == "sell" else -notional
         realized = pos.apply_fill(side, qty, price, at=at)
@@ -146,9 +184,9 @@ class VirtualBook:
         self,
         symbol: str,
         side: str,
-        qty: float,
-        mark_price: float,
-        actual_price: float,
+        qty: float | Decimal,
+        mark_price: float | Decimal,
+        actual_price: float | Decimal,
         broker_order_id: str,
         at: datetime | None = None,
     ) -> bool:
@@ -189,11 +227,17 @@ class VirtualBook:
         reconcile path mirrors that clamp so it never corrects more than
         the executed close — the old unrecoverable-flip fallback (which
         left ``prev_avg`` pinned to the optimistic mark) is gone.
+
+        Money is exact (Decimal) so the pre-fill recovery / clamp checks
+        compare against ``Decimal("0")`` exactly — no epsilon fudge needed.
         """
         if broker_order_id in self._reconciled_ids:
             return False
         self._add_reconciled_id(broker_order_id)
-        if abs(mark_price - actual_price) < 1e-9:
+        qty = D(qty)
+        mark_price = D(mark_price)
+        actual_price = D(actual_price)
+        if mark_price == actual_price:
             return True  # nothing to correct, but still consume the id
         delta = actual_price - mark_price  # signed
         pos = self.positions.get(symbol)
@@ -216,11 +260,10 @@ class VirtualBook:
         # flip; we guard against that by never letting the recovered
         # pre-fill cross zero in the direction of `signed`.
         prev_qty = post_qty - signed
-        if abs(prev_qty) < 1e-9:
+        if prev_qty == _ZERO:
             # Position was opened (or fully closed) by this fill from/to flat.
-            prev_qty = 0.0
-            prev_avg = 0.0
-        elif (prev_qty > 0) == (signed > 0):
+            prev_avg = _ZERO
+        elif (prev_qty > _ZERO) == (signed > _ZERO):
             # Same-side as the fill: an add-to-position. Recover prev_avg
             # from the weighted-mean update:
             #     post_avg = (prev_avg * prev_qty + mark * signed) / post_qty
@@ -237,34 +280,34 @@ class VirtualBook:
         # `abs(prev_qty)` and no opposite side was ever opened. Correct
         # against the executed (clamped) qty, not the requested qty, so we
         # never poison avg_price or open a phantom position.
-        if prev_qty != 0 and (prev_qty > 0) != (signed > 0) and qty > abs(prev_qty):
+        if prev_qty != _ZERO and (prev_qty > _ZERO) != (signed > _ZERO) and qty > abs(prev_qty):
             executed = abs(prev_qty)
             log.warning(
                 "reconciled_fill_flip_clamped",
                 symbol=symbol,
                 side=side,
-                requested_qty=qty,
-                clamped_qty=executed,
-                held_qty=prev_qty,
+                requested_qty=float(qty),
+                clamped_qty=float(executed),
+                held_qty=float(prev_qty),
                 broker_order_id=broker_order_id,
             )
             qty = executed
 
         # Now split the (possibly clamped) qty into closing vs opening
         # portions relative to the pre-fill position.
-        if prev_qty == 0:
+        if prev_qty == _ZERO:
             # Pure open from flat — nothing to close.
-            closing_qty, opening_qty = 0.0, qty
-        elif (prev_qty > 0) == (signed > 0):
+            closing_qty, opening_qty = _ZERO, qty
+        elif (prev_qty > _ZERO) == (signed > _ZERO):
             # Same-side add — nothing to close.
-            closing_qty, opening_qty = 0.0, qty
+            closing_qty, opening_qty = _ZERO, qty
         else:
             # Opposite-side fill. The flat-only invariant guarantees the
             # booked fill NEVER opened an opposite-side position, so the
             # opening portion is always zero — the whole executed fill was
             # a close against the pre-fill holding.
             closing_qty = min(qty, abs(prev_qty))
-            opening_qty = 0.0
+            opening_qty = _ZERO
             # KNOWN BOUND (degenerate input only): when the optimistic fill
             # landed the book exactly flat (post_qty == 0) we cannot tell an
             # exact full close (qty == held) apart from an over-sell that
@@ -297,27 +340,27 @@ class VirtualBook:
         #    and should be
         #        closing_qty * (actual - prev_avg).
         #    Difference: closing_qty * delta with the right sign.
-        if closing_qty > 0:
-            direction = 1.0 if prev_qty > 0 else -1.0
+        if closing_qty > _ZERO:
+            direction = Decimal(1) if prev_qty > _ZERO else Decimal(-1)
             self.realized_pnl += closing_qty * delta * direction
 
         # 3. avg_price correction for the opening portion. avg's
         #    contribution from this fill is the price × opening_qty
         #    blended into the post-fill total. Recompute post_avg from
         #    the actual price for the opening_qty.
-        if opening_qty > 0 and post_qty != 0:
+        if opening_qty > _ZERO and post_qty != _ZERO:
             # Closing reduces |prev_qty| toward zero, regardless of
             # which side opened the prior position.
-            if closing_qty > 0:
-                prev_sign = 1.0 if prev_qty > 0 else -1.0
+            if closing_qty > _ZERO:
+                prev_sign = Decimal(1) if prev_qty > _ZERO else Decimal(-1)
                 mid_qty = prev_qty - prev_sign * closing_qty
             else:
                 mid_qty = prev_qty
             # Apply the opening portion at actual price.
-            opening_signed = opening_qty if signed > 0 else -opening_qty
+            opening_signed = opening_qty if signed > _ZERO else -opening_qty
             final_qty = mid_qty + opening_signed
-            if abs(final_qty) > 1e-9:
-                mid_avg = prev_avg if abs(mid_qty) > 1e-9 else 0.0
+            if final_qty != _ZERO:
+                mid_avg = prev_avg if mid_qty != _ZERO else _ZERO
                 pos.avg_price = (mid_avg * mid_qty + actual_price * opening_signed) / final_qty
         return True
 
@@ -327,8 +370,8 @@ class VirtualBook:
         self,
         symbol: str,
         side: str,
-        qty: float,
-        delta: float,
+        qty: float | Decimal,
+        delta: float | Decimal,
         broker_order_id: str,
     ) -> bool:
         """DEPRECATED. Forwards to apply_reconciled_fill by deriving the
@@ -337,10 +380,12 @@ class VirtualBook:
         # Without the actual_price we can only invent one — caller must
         # use the new API for correctness; this shim covers fills where
         # delta is exactly 0 (no-op) without breaking the test suite.
-        if abs(delta) < 1e-9:
-            return broker_order_id not in self._reconciled_ids and bool(
-                self._add_reconciled_id(broker_order_id) or True
-            )
+        qty = D(qty)
+        delta = D(delta)
+        if delta == _ZERO:
+            already_seen = broker_order_id in self._reconciled_ids
+            self._add_reconciled_id(broker_order_id)
+            return not already_seen
         # Best-effort for non-zero delta callers that haven't migrated:
         # treat delta as a cash-only correction (the old buggy behavior).
         # Real callers should switch to apply_reconciled_fill.
@@ -350,20 +395,31 @@ class VirtualBook:
         if side == "buy":
             self.cash -= delta * qty
             pos = self.positions.get(symbol)
-            if pos and pos.qty > 0:
+            if pos and pos.qty > _ZERO:
                 pos.avg_price += delta * qty / pos.qty
         else:
             self.cash += delta * qty
             self.realized_pnl += delta * qty
         return True
 
-    def equity(self, marks: dict[str, float]) -> float:
-        mtm = sum(p.qty * marks.get(s, p.avg_price) for s, p in self.positions.items())
-        return self.cash + mtm
+    def equity(self, marks: dict[str, float]) -> Decimal:
+        """Mark-to-market equity as an exact Decimal.
 
-    def unrealized_pnl(self, marks: dict[str, float]) -> float:
-        return sum(
-            p.qty * (marks.get(s, p.avg_price) - p.avg_price)
+        ``marks`` arrive as ``float`` market data; they are coerced to
+        Decimal here. Callers that emit this on a JSON/WS/REST boundary
+        must convert with ``runtime.money.to_float``.
+        """
+        mtm = sum(
+            (p.qty * D(marks[s]) if s in marks else p.qty * p.avg_price)
             for s, p in self.positions.items()
-            if p.qty != 0
         )
+        return self.cash + (mtm if mtm else _ZERO)
+
+    def unrealized_pnl(self, marks: dict[str, float]) -> Decimal:
+        """Unrealized P&L as an exact Decimal (float marks in, Decimal out)."""
+        total = sum(
+            (p.qty * ((D(marks[s]) if s in marks else p.avg_price) - p.avg_price))
+            for s, p in self.positions.items()
+            if p.qty != _ZERO
+        )
+        return total if total else _ZERO

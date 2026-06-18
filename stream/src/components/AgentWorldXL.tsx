@@ -447,30 +447,6 @@ export function AgentWorldXL({
     [agents, spots],
   );
 
-  // Continuous camera drift — sin/cos translate so the diorama gently floats.
-  // Driven entirely outside React: a rAF loop mutates the transform of an
-  // isolated wrapper <g> directly, so the thousands of SVG nodes inside are
-  // never reconciled (no setState per frame → no CPU-pinning re-renders).
-  const camGroupRef = useRef<SVGGElement | null>(null);
-  useEffect(() => {
-    let raf = 0;
-    const loop = () => {
-      const camPhase = (performance.now() / 1000) * 0.18;
-      const camDx = Math.sin(camPhase) * 16;
-      const camDy = Math.cos(camPhase * 0.7) * 8;
-      const g = camGroupRef.current;
-      if (g) g.setAttribute("transform", `translate(${-camDx} ${-camDy})`);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  // Camera phase sampled at render time — used only for the parallax clouds'
-  // authored offsets (they sit in the screen-fixed sky layer, not the drift
-  // wrapper, so they don't need per-frame updates).
-  const camPhase = (performance.now() / 1000) * 0.18;
-
   const bounds = useMemo(() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const island of ISLANDS) {
@@ -488,6 +464,50 @@ export function AgentWorldXL({
     }
     return { minX, minY, maxX, maxY };
   }, []);
+
+  // Parallax cloud authoring — base positions + per-cloud drift params.
+  // The ellipses are rendered once (refs captured) and their cx is mutated
+  // each frame in the rAF loop below, so clouds drift continuously without
+  // any React re-render.
+  const CLOUDS = useMemo(
+    () => [
+      { x: 0, y: -120, r: 60, op: 0.1, speed: 0.04, phase: 0 },
+      { x: 220, y: -80, r: 80, op: 0.08, speed: 0.025, phase: 1.4 },
+      { x: 480, y: -150, r: 50, op: 0.12, speed: 0.06, phase: 2.6 },
+      { x: 700, y: -100, r: 90, op: 0.07, speed: 0.03, phase: 3.7 },
+    ],
+    [],
+  );
+  const cloudRefs = useRef<(SVGEllipseElement | null)[]>([]);
+
+  // Continuous camera drift — sin/cos translate so the diorama gently floats.
+  // Driven entirely outside React: a rAF loop mutates the transform of an
+  // isolated wrapper <g> directly, so the thousands of SVG nodes inside are
+  // never reconciled (no setState per frame → no CPU-pinning re-renders).
+  // The same loop also drifts the parallax clouds (cx mutation) so the sky
+  // layer stays animated between data updates.
+  const camGroupRef = useRef<SVGGElement | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const loop = () => {
+      const camPhase = (performance.now() / 1000) * 0.18;
+      const camDx = Math.sin(camPhase) * 16;
+      const camDy = Math.cos(camPhase * 0.7) * 8;
+      const g = camGroupRef.current;
+      if (g) g.setAttribute("transform", `translate(${-camDx} ${-camDy})`);
+      for (let i = 0; i < CLOUDS.length; i++) {
+        const el = cloudRefs.current[i];
+        const c = CLOUDS[i]!;
+        if (el) {
+          const dx = Math.sin(camPhase * c.speed + c.phase) * 40;
+          el.setAttribute("cx", String(bounds.minX + c.x + dx));
+        }
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [CLOUDS, bounds.minX]);
 
   const mascotNodes = useMemo(() => {
     const out: { x: number; y: number }[] = [];
@@ -565,22 +585,22 @@ export function AgentWorldXL({
           );
         })}
 
-        {/* Drifting clouds (parallax) */}
-        {[
-          { x: 0, y: -120, r: 60, op: 0.10, speed: 0.04, phase: 0 },
-          { x: 220, y: -80, r: 80, op: 0.08, speed: 0.025, phase: 1.4 },
-          { x: 480, y: -150, r: 50, op: 0.12, speed: 0.06, phase: 2.6 },
-          { x: 700, y: -100, r: 90, op: 0.07, speed: 0.03, phase: 3.7 },
-        ].map((c, i) => {
-          const dx = Math.sin(camPhase * c.speed + c.phase) * 40;
-          return (
-            <ellipse key={i}
-              cx={bounds.minX + c.x + dx}
-              cy={bounds.minY + c.y}
-              rx={c.r} ry={c.r * 0.45}
-              fill="#e2e8f0" opacity={c.op} />
-          );
-        })}
+        {/* Drifting clouds (parallax) — cx mutated each frame by the rAF
+            loop above so they drift continuously with zero React renders. */}
+        {CLOUDS.map((c, i) => (
+          <ellipse
+            key={i}
+            ref={(el) => {
+              cloudRefs.current[i] = el;
+            }}
+            cx={bounds.minX + c.x}
+            cy={bounds.minY + c.y}
+            rx={c.r}
+            ry={c.r * 0.45}
+            fill="#e2e8f0"
+            opacity={c.op}
+          />
+        ))}
 
         <rect x={viewX} y={viewY} width={viewW} height={viewH} fill="url(#scene-bg-xl)" />
 

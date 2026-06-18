@@ -435,7 +435,8 @@ async def list_agents(
     out = []
     for a in orch.agents:
         book = a.state.book
-        equity = book.equity(marks)
+        # Book money is Decimal; convert to float at this REST-output boundary.
+        equity = float(book.equity(marks))
         last_lstm = getattr(a, "last_lstm", None) or getattr(a, "last_prediction", None)
         last_decision = None
         if (d := getattr(a, "last_decision", None)) is not None:
@@ -460,15 +461,15 @@ async def list_agents(
                 "status": a.state.status,
                 "rank": rank,
                 "symbol": agent_symbol,
-                "cash": book.cash,
+                "cash": float(book.cash),
                 "equity": equity,
-                "realized_pnl": book.realized_pnl,
-                "unrealized_pnl": book.unrealized_pnl(marks),
+                "realized_pnl": float(book.realized_pnl),
+                "unrealized_pnl": float(book.unrealized_pnl(marks)),
                 "positions": {
                     s: {
-                        "qty": p.qty,
-                        "avg_price": p.avg_price,
-                        "mark": marks.get(s, p.avg_price),
+                        "qty": float(p.qty),
+                        "avg_price": float(p.avg_price),
+                        "mark": float(marks.get(s, p.avg_price)),
                     }
                     for s, p in book.positions.items()
                     if p.qty
@@ -614,9 +615,10 @@ async def account(
     profit = sum(1 for a in orch.agents if a.state.status == "profit")
     loss = sum(1 for a in orch.agents if a.state.status == "loss")
     waiting = sum(1 for a in orch.agents if a.state.status == "waiting")
-    total_equity = sum(a.state.book.equity(marks) for a in orch.agents)
-    realized = sum(a.state.book.realized_pnl for a in orch.agents)
-    unrealized = sum(a.state.book.unrealized_pnl(marks) for a in orch.agents)
+    # Book money is Decimal; convert at this REST-output boundary.
+    total_equity = sum(float(a.state.book.equity(marks)) for a in orch.agents)
+    realized = sum(float(a.state.book.realized_pnl) for a in orch.agents)
+    unrealized = sum(float(a.state.book.unrealized_pnl(marks)) for a in orch.agents)
     from tradefarm.orchestrator.scheduler import JOURNAL_COUNTERS
 
     return {
@@ -732,8 +734,8 @@ async def agent_trades(
             "id": t.id,
             "symbol": t.symbol,
             "side": t.side,
-            "qty": t.qty,
-            "price": t.price,
+            "qty": float(t.qty),
+            "price": float(t.price),
             "executed_at": t.executed_at.isoformat() if t.executed_at else None,
             "reason": t.reason,
         }

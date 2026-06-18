@@ -141,6 +141,13 @@ class CommentaryLoop:
         if self._task is not None:
             return
         self._task = asyncio.create_task(self._run(), name="orch_commentary_loop")
+        # Issue #6: supervise the fire-and-forget inner loop so a hard crash
+        # logs `background_loop_crashed` instead of a bare "Task exception
+        # was never retrieved" warning. Lazy import to avoid a module-load
+        # cycle (broadcast_suite imports this module).
+        from tradefarm.orchestrator.broadcast_suite import attach_crash_logger
+
+        attach_crash_logger(self._task, name="orch_commentary_loop")
         log.info("commentary_loop_started", interval_sec=self.poll_interval_sec)
 
     def invalidate_overlay(self) -> None:
@@ -184,7 +191,7 @@ class CommentaryLoop:
             book = getattr(a.state, "book", None)
             if book is None or starting <= 0:
                 continue
-            equity = book.equity(marks)
+            equity = float(book.equity(marks))
             pnl = equity - starting
             pct = pnl / starting if starting > 0 else 0.0
             agent_snaps.append(

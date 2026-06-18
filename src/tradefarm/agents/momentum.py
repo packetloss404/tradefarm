@@ -9,6 +9,7 @@ from __future__ import annotations
 import pandas as pd
 
 from tradefarm.agents.base import Agent, Signal
+from tradefarm.runtime.money import D, quantize_qty
 
 
 class MomentumAgent(Agent):
@@ -35,11 +36,12 @@ class MomentumAgent(Agent):
         has_long = pos is not None and pos.qty > 0
 
         if fast_ma > slow_ma and prev_fast <= prev_slow and not has_long:
-            target_notional = self.state.book.cash * 0.2
-            qty = round(target_notional / px, 4)
+            # Money is Decimal; size exactly then quantize to 4dp.
+            target_notional = self.state.book.cash * D("0.2")
+            qty = quantize_qty(target_notional / D(px))
             if qty <= 0:
                 return []
             return [Signal(self.symbol, "buy", qty, reason="golden cross")]
-        if fast_ma < slow_ma and prev_fast >= prev_slow and has_long:
-            return [Signal(self.symbol, "sell", round(pos.qty, 4), reason="death cross")]
+        if fast_ma < slow_ma and prev_fast >= prev_slow and has_long and pos is not None:
+            return [Signal(self.symbol, "sell", quantize_qty(pos.qty), reason="death cross")]
         return []

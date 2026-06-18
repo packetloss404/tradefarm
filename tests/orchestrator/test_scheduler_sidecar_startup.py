@@ -7,6 +7,11 @@ import pytest
 from tradefarm.orchestrator import broadcast_os as bos
 from tradefarm.orchestrator.scheduler import Orchestrator
 
+# Issue #6: the presentation sidecars are now owned by the BroadcastSuite,
+# so the construction symbols (AutoDirector, StreakWatcher, ...) live in
+# tradefarm.orchestrator.broadcast_suite. Patch there, not on scheduler.
+_SUITE = "tradefarm.orchestrator.broadcast_suite"
+
 
 class _RaisingSidecar:
     """Stand-in whose start() raises, mimicking a boot-time failure."""
@@ -54,7 +59,7 @@ async def test_sidecar_start_failure_surfaces_at_boot():
     rather than being swallowed by a discarded create_task."""
     orch = Orchestrator(agents=[])
 
-    with patch("tradefarm.orchestrator.scheduler.AutoDirector", _RaisingSidecar):
+    with patch(f"{_SUITE}.AutoDirector", _RaisingSidecar):
         with pytest.raises(RuntimeError, match="sidecar boot failed"):
             await orch.start_background()
 
@@ -66,18 +71,18 @@ async def test_sidecars_are_actually_started():
     orch = Orchestrator(agents=[])
 
     with (
-        patch("tradefarm.orchestrator.scheduler.AutoDirector", _RecordingSidecar),
-        patch("tradefarm.orchestrator.scheduler.StreakWatcher", _RecordingSidecar),
-        patch("tradefarm.orchestrator.scheduler.CommentaryLoop", _RecordingSidecar),
-        patch("tradefarm.orchestrator.scheduler.YouTubeChatPoller", _RecordingSidecar),
-        patch("tradefarm.orchestrator.scheduler.PredictionsBoard", _RecordingSidecar),
-        patch("tradefarm.orchestrator.scheduler.AudienceCoordinator", _RecordingSidecar),
+        patch(f"{_SUITE}.AutoDirector", _RecordingSidecar),
+        patch(f"{_SUITE}.StreakWatcher", _RecordingSidecar),
+        patch(f"{_SUITE}.CommentaryLoop", _RecordingSidecar),
+        patch(f"{_SUITE}.YouTubeChatPoller", _RecordingSidecar),
+        patch(f"{_SUITE}.PredictionsBoard", _RecordingSidecar),
+        patch(f"{_SUITE}.AudienceCoordinator", _RecordingSidecar),
     ):
         await orch.start_background()
 
     assert len(_RecordingSidecar.instances) == 6
     assert all(s.started for s in _RecordingSidecar.instances)
     # Idempotent: a second call doesn't re-construct already-started sidecars.
-    with patch("tradefarm.orchestrator.scheduler.AutoDirector", _RecordingSidecar):
+    with patch(f"{_SUITE}.AutoDirector", _RecordingSidecar):
         await orch.start_background()
     assert len(_RecordingSidecar.instances) == 6

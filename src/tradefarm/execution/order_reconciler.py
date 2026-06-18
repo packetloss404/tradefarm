@@ -169,7 +169,7 @@ class OrderReconciler:
         log.info("reconciler_started", interval_sec=interval_sec)
         while True:
             try:
-                fills = self.poll_once()
+                fills = await self.poll_once()
                 if fills:
                     log.info("reconciler_deltas", count=len(fills))
                     for f in fills:

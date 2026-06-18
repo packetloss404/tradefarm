@@ -362,7 +362,7 @@ def _score_divergence(fills: list[_Fill], th: DetectorThresholds) -> list[Beat]:
         by_symbol.setdefault(f.symbol, []).append(f)
 
     window = timedelta(seconds=th.divergence_window_sec)
-    seen: set[tuple[int, int, int, int]] = set()
+    seen: set[tuple[int, ...]] = set()
     for sym, group in by_symbol.items():
         group_sorted = sorted(group, key=lambda f: f.t)
         for i, a in enumerate(group_sorted):
