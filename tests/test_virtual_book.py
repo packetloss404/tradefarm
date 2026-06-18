@@ -14,6 +14,34 @@ def test_buy_sell_roundtrip_realizes_pnl():
     assert book.realized_pnl == 20.0
 
 
+def test_record_fill_clamps_through_zero_flip_to_flat():
+    # Flat-only invariant: a sell exceeding the held long closes only to
+    # flat — it never opens a short on the residual.
+    book = VirtualBook(agent_id=1, cash=1000.0)
+    book.record_fill("SPY", "buy", 5, 100.0)
+    assert book.positions["SPY"].qty == 5
+
+    realized = book.record_fill("SPY", "sell", 8, 110.0)  # would flip to -3
+    assert realized == 5 * (110.0 - 100.0)  # only the 5 held closed
+    assert book.positions["SPY"].qty == 0
+    assert book.positions["SPY"].avg_price == 0.0
+    # Cash reflects only the executed 5 shares (clamped), not 8.
+    assert book.cash == 1000.0 - 5 * 100.0 + 5 * 110.0
+
+
+def test_record_fill_clamps_buy_through_short_to_flat():
+    # Symmetric guard on the short side: a buy exceeding the held short
+    # covers only to flat, never opening a long.
+    book = VirtualBook(agent_id=1, cash=1000.0)
+    book.record_fill("SPY", "sell", 4, 100.0)  # open short 4
+    assert book.positions["SPY"].qty == -4
+
+    realized = book.record_fill("SPY", "buy", 7, 90.0)  # would flip to +3
+    assert realized == 4 * (100.0 - 90.0)  # only the 4 short covered
+    assert book.positions["SPY"].qty == 0
+    assert book.positions["SPY"].avg_price == 0.0
+
+
 def test_equity_marks_to_market():
     book = VirtualBook(agent_id=1, cash=500.0)
     book.record_fill("AAPL", "buy", 3, 200.0)

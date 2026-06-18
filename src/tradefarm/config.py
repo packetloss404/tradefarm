@@ -41,6 +41,26 @@ class Settings(BaseSettings):
     # 0.0.0.0:8000 bind without breaking the read-only dashboard polling.
     api_shared_secret: str = ""
 
+    # Issue #3 (security): the host the API is bound to. Used by the
+    # fail-fast startup guard in api/main.py — if this is a non-loopback
+    # interface (0.0.0.0 or a LAN IP) AND api_shared_secret is empty, the
+    # server refuses to start so an operator can't expose the
+    # secret-rewriting endpoints to the LAN unauthenticated. The guard
+    # prefers the `--host` value actually passed to uvicorn on sys.argv;
+    # this setting is the fallback (and the testable/overridable knob).
+    api_bind_host: str = "127.0.0.1"
+
+    # Issue #4 (security): CORS allow-list is default-safe. By default only
+    # loopback origins (localhost / 127.0.0.1 on any port, http or https) plus
+    # the packaged Tauri webview origins are permitted. The broad RFC-1918 LAN
+    # ranges (10.x / 192.168.x / 172.16-31.x) — needed for the split-machine
+    # broadcast topology — are OPT-IN via `cors_allow_lan` so a malicious page
+    # on an arbitrary LAN host can't be a permitted origin on a default bind.
+    # `cors_allow_origins` is an optional CSV of extra exact origins merged into
+    # the allow-list (e.g. "https://dash.example.com").
+    cors_allow_lan: bool = False
+    cors_allow_origins: str = ""
+
     # Background scheduler cadence in seconds. Default 300 (5 min) matches
     # the production cadence documented in CLAUDE.md. 0 disables auto-tick
     # so /tick is the only entrypoint — useful for backtesting / local

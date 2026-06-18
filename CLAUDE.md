@@ -68,8 +68,9 @@ control it from the workstation:
 2. **Workstation**: `npm run dashboard` — dashboard Vite only on 5179. Set
    `TRADEFARM_BACKEND=<vm-ip>:8000` in `web/.env.local` so Vite proxies
    `/api` and `/ws` to the VM. Browser still hits `http://localhost:5179`
-   (Origin stays localhost → existing CORS allow-list matches; LAN IP
-   ranges are also permitted defensively).
+   (Origin stays localhost → the default CORS allow-list matches). If a
+   browser must hit the VM over its LAN IP directly (Origin becomes the
+   RFC-1918 IP), set `CORS_ALLOW_LAN=true` on the VM — see Gotcha 16.
 3. **Stream WS**: the Tauri shell hardcodes `ws://127.0.0.1:8000/ws` so it
    only works when the backend is on the same machine as the Tauri shell.
    `stream-only` (no co-located backend) needs a future
@@ -123,6 +124,13 @@ control it from the workstation:
     `0.0.0.0:8000` to the LAN — the dashboard's read-only polling
     keeps working unauthenticated, but `/tick`, `/admin/*`,
     `/backtest/run` are locked. Middleware is in `api/main.py`.
+    **Fail-fast (issue #3):** the lifespan startup calls
+    `_assert_secure_bind()` — if the server is bound to a non-loopback
+    host (`0.0.0.0` or a LAN IP, detected from uvicorn's `--host` arg
+    with `API_BIND_HOST` as fallback) AND `api_shared_secret` is empty,
+    startup raises `RuntimeError` instead of quietly exposing the
+    mutating surface. Loopback (`127.0.0.1`/`localhost`/`::1`) stays open
+    with no secret for local dev.
 13. **Replay clock is everywhere now.** Anything that needs "now" in
     backend code MUST go through `tradefarm.runtime.clock.now_utc()`
     (not `datetime.now(timezone.utc)`), and frontend (`stream/`) goes
@@ -141,6 +149,19 @@ control it from the workstation:
     constructing bare `Orchestrator(…)` instances used to overwrite
     process-global arbiter state silently — now they don't.
     `stop_background()` cleanly uninstalls them.
+16. **CORS is default-safe and env-driven (Issue #4).** The allow-list
+    defaults to loopback only (`localhost` / `127.0.0.1`, any port,
+    http/https) plus the Tauri webview origins
+    (`http(s)://tauri.localhost`, `tauri://localhost`). The broad RFC-1918
+    LAN ranges (10.x / 192.168.x / 172.16-31.x) are **opt-in** via
+    `CORS_ALLOW_LAN=true` — without it, a malicious page on any LAN host is
+    NOT a permitted origin, even when the API binds `0.0.0.0`. Add exact
+    extra origins with the `CORS_ALLOW_ORIGINS` CSV (e.g.
+    `https://dash.example.com`). The regex is built by
+    `build_cors_origin_regex(settings)` in `api/main.py`; `allow_credentials`
+    stays `False`. Note this is orthogonal to `API_SHARED_SECRET` (Gotcha 12,
+    which protects mutating endpoints regardless of Origin) — CORS only
+    governs which browser origins may read responses.
 
 ## YouTube chat setup
 

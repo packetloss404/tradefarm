@@ -1,7 +1,9 @@
+import sys
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from typing import Any
 
+import structlog
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -29,6 +31,58 @@ from tradefarm.session import replay_query
 from tradefarm.storage import journal, repo
 from tradefarm.storage.db import SessionLocal, init_db
 from tradefarm.storage.models import PnlSnapshot
+
+
+log = structlog.get_logger(__name__)
+
+# Issue #3 (security): hosts that are safe to serve on without auth. Anything
+# else (0.0.0.0 or a concrete LAN IP) is reachable from other machines, so it
+# requires api_shared_secret before startup is allowed.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _resolve_bind_host(argv: list[str] | None = None) -> str:
+    """Best-effort detection of the interface uvicorn is binding to.
+
+    Prefers the `--host` value actually passed on the command line
+    (``--host 0.0.0.0`` or ``--host=0.0.0.0``); falls back to
+    ``settings.api_bind_host`` (env ``API_BIND_HOST``) when no flag is
+    present. ``argv`` is injectable for tests.
+    """
+    args = sys.argv if argv is None else argv
+    for i, tok in enumerate(args):
+        if tok == "--host" and i + 1 < len(args):
+            return args[i + 1].strip()
+        if tok.startswith("--host="):
+            return tok.split("=", 1)[1].strip()
+    return settings.api_bind_host
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True when ``host`` is a loopback interface safe to serve unauthenticated."""
+    return host.strip().lower() in _LOOPBACK_HOSTS
+
+
+def _assert_secure_bind(argv: list[str] | None = None) -> str:
+    """Fail-fast guard: refuse to start on a non-loopback bind without a secret.
+
+    Returns the resolved bind host on success. Raises ``RuntimeError`` with an
+    actionable message when the server is reachable from the LAN but
+    ``api_shared_secret`` is empty, so an operator can't silently expose the
+    secret-rewriting endpoints (/admin/config, /tick, /backtest/run).
+    """
+    host = _resolve_bind_host(argv)
+    if _is_loopback_host(host):
+        return host
+    if (getattr(settings, "api_shared_secret", "") or "").strip():
+        return host
+    raise RuntimeError(
+        f"Refusing to start: bound to non-loopback host {host!r} with no "
+        f"API_SHARED_SECRET set. The mutating endpoints (/tick, /admin/config, "
+        f"/admin/toggle-ai, /backtest/run) would be open to the LAN. Set "
+        f"API_SHARED_SECRET=<value> in .env (then send it as the "
+        f"X-TradeFarm-Token header), or bind to 127.0.0.1 for local-only use."
+    )
 
 
 def _parse_replay_at(at: str | None) -> datetime | None:
@@ -83,6 +137,11 @@ def _load_replay_manifest(session_id: str) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Issue #3 (security): fail-fast before serving if we're reachable from
+    # the LAN without a shared secret. Raising here aborts startup loudly
+    # instead of quietly exposing the mutating surface.
+    bind_host = _assert_secure_bind()
+    log.info("bind_guard_ok", host=bind_host, secret_set=bool(settings.api_shared_secret))
     await init_db()
     # Phase 2: seed each agent's RiskManager with its persisted rank so the
     # first tick respects rank-gated caps. Missing entries default to intern.
@@ -152,26 +211,47 @@ async def _shared_secret_guard(request: Request, call_next):
     return await call_next(request)
 
 
+# Issue #4 (security): CORS allow-list is built from settings so the default
+# is loopback + Tauri only. The broad RFC-1918 LAN ranges (which let any page
+# on any LAN host be a permitted origin) are opt-in via `cors_allow_lan`.
+# Loopback regex covers localhost / 127.0.0.1 on any port, http or https; the
+# Tauri webview origin varies by platform (`http(s)://tauri.localhost` on
+# Windows, `tauri://localhost` on macOS/Linux).
+_CORS_LOOPBACK_ALT = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+_CORS_TAURI_ALTS = (r"https?://tauri\.localhost", r"tauri://localhost")
+# RFC-1918 IPv4 ranges, opt-in only (split-machine broadcast topology:
+# dashboard on a workstation, backend on a broadcast VM).
+_CORS_LAN_ALTS = (
+    r"https?://10(\.\d{1,3}){3}(:\d+)?",
+    r"https?://192\.168(\.\d{1,3}){2}(:\d+)?",
+    r"https?://172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}(:\d+)?",
+)
+
+
+def build_cors_origin_regex(cfg=settings) -> str:
+    """Build the CORS allow-origin regex from settings (Issue #4).
+
+    Always allows loopback (localhost / 127.0.0.1, any port, http/https) and
+    the Tauri webview origins. Adds RFC-1918 LAN ranges only when
+    ``cors_allow_lan`` is true, plus any exact origins listed in the
+    ``cors_allow_origins`` CSV. Extracted as a pure function so the matcher is
+    unit-testable without spinning up the app.
+    """
+    import re
+
+    alts: list[str] = [_CORS_LOOPBACK_ALT, *_CORS_TAURI_ALTS]
+    if getattr(cfg, "cors_allow_lan", False):
+        alts.extend(_CORS_LAN_ALTS)
+    for origin in (getattr(cfg, "cors_allow_origins", "") or "").split(","):
+        origin = origin.strip()
+        if origin:
+            alts.append(re.escape(origin))
+    return r"^(" + r"|".join(alts) + r")$"
+
+
 app.add_middleware(
     CORSMiddleware,
-    # Web dashboard runs on 5179, stream-app dev on 5180, packaged Tauri
-    # webview origin varies by platform (`http(s)://tauri.localhost` on
-    # Windows, `tauri://localhost` on macOS/Linux).
-    #
-    # We also allow private/LAN IPv4 ranges so the split-machine topology
-    # works (dashboard on workstation, backend on a broadcast VM running
-    # `npm run broadcast`). The API is paper-trading-only and binds the LAN
-    # interface only when explicitly run as the broadcast flavor.
-    allow_origin_regex=(
-        r"^("
-        r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
-        r"|https?://10(\.\d{1,3}){3}(:\d+)?"
-        r"|https?://192\.168(\.\d{1,3}){2}(:\d+)?"
-        r"|https?://172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}(:\d+)?"
-        r"|https?://tauri\.localhost"
-        r"|tauri://localhost"
-        r")$"
-    ),
+    allow_origin_regex=build_cors_origin_regex(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

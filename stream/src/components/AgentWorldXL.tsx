@@ -447,22 +447,29 @@ export function AgentWorldXL({
     [agents, spots],
   );
 
-  // Continuous camera drift — sin/cos translate of the SVG viewBox so the
-  // diorama gently floats. Computed every animation frame.
-  const [cameraTick, setCameraTick] = useState(0);
+  // Continuous camera drift — sin/cos translate so the diorama gently floats.
+  // Driven entirely outside React: a rAF loop mutates the transform of an
+  // isolated wrapper <g> directly, so the thousands of SVG nodes inside are
+  // never reconciled (no setState per frame → no CPU-pinning re-renders).
+  const camGroupRef = useRef<SVGGElement | null>(null);
   useEffect(() => {
-    let raf: number;
+    let raf = 0;
     const loop = () => {
-      setCameraTick((t) => (t + 1) % 100_000);
+      const camPhase = (performance.now() / 1000) * 0.18;
+      const camDx = Math.sin(camPhase) * 16;
+      const camDy = Math.cos(camPhase * 0.7) * 8;
+      const g = camGroupRef.current;
+      if (g) g.setAttribute("transform", `translate(${-camDx} ${-camDy})`);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  // Camera phase sampled at render time — used only for the parallax clouds'
+  // authored offsets (they sit in the screen-fixed sky layer, not the drift
+  // wrapper, so they don't need per-frame updates).
   const camPhase = (performance.now() / 1000) * 0.18;
-  const camDx = Math.sin(camPhase) * 16;
-  const camDy = Math.cos(camPhase * 0.7) * 8;
-  void cameraTick;
 
   const bounds = useMemo(() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -500,8 +507,8 @@ export function AgentWorldXL({
   const padX = 80;
   const padTop = 140;
   const padBot = 60;
-  const viewX = bounds.minX - padX + camDx;
-  const viewY = bounds.minY - padTop + camDy;
+  const viewX = bounds.minX - padX;
+  const viewY = bounds.minY - padTop;
   const viewW = (bounds.maxX - bounds.minX) + padX * 2;
   const viewH = (bounds.maxY - bounds.minY) + padTop + padBot;
 
@@ -646,6 +653,10 @@ export function AgentWorldXL({
           </rect>
         )}
 
+        {/* World content lives inside an isolated wrapper whose transform is
+            mutated each frame by the rAF loop above (camera drift) — keeping
+            the per-frame motion off React's render path. */}
+        <g ref={camGroupRef}>
         {BRIDGES.map((b, i) => <Bridge key={i} from={b.from} to={b.to} />)}
 
         {tilesDraw.map(({ wx, wy, island }) => {
@@ -814,6 +825,7 @@ export function AgentWorldXL({
         })}
 
         <MascotPet nodes={mascotNodes} />
+        </g>
       </svg>
     </div>
   );

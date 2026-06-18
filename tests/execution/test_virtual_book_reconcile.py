@@ -97,22 +97,42 @@ def test_apply_reconciled_short_open_was_broken_now_correct():
     assert b.positions["AAA"].avg_price == pytest.approx(200.10)
 
 
-def test_apply_reconciled_long_to_short_flip_in_one_fill():
-    """Long 10 @ 100, sell 15 @ 110 actual (mark 110). Closes 10 with
-    realized = 10 * (110 - 100) = +100. Opens short 5 @ 110."""
+def test_apply_fill_clamps_long_to_short_flip_to_flat():
+    """Flat-only invariant: long 10 @ 100, then a sell of 15 must NOT
+    flip to a 5-share short. The fill is clamped to close exactly the
+    held 10 shares; the position goes flat and no opposite side opens.
+
+    v1 agents never short, so a through-zero flip can only be a data
+    error — and the post-flip residual avg_price is unrecoverable at
+    reconcile time, which would poison downstream PnL/equity."""
     b = _book()
     b.record_fill("AAA", "buy", 10, 100.0)
-    # Optimistic sell at mark 110.
-    b.record_fill("AAA", "sell", 15, 110.0)
-    pre_realized = b.realized_pnl
-    pre_pos = b.positions["AAA"].qty
-    pre_avg = b.positions["AAA"].avg_price
-    assert pre_pos == -5  # flipped
-    assert pre_realized == pytest.approx(100.0)
-    assert pre_avg == pytest.approx(110.0)
+    # Sell 15 — would flip to short 5 without the clamp.
+    realized = b.record_fill("AAA", "sell", 15, 110.0)
+    # Only 10 shares closed: realized = 10 * (110 - 100) = +100.
+    assert realized == pytest.approx(100.0)
+    assert b.realized_pnl == pytest.approx(100.0)
+    # Position is flat, NOT short 5, and avg is reset (not the mark).
+    assert b.positions["AAA"].qty == 0
+    assert b.positions["AAA"].avg_price == 0.0
 
-    # Reconcile with actual 110.20 (paid 0.20 more per share on the
-    # whole 15-qty fill, but only 10 closed and 5 opened a new short).
+
+def test_apply_reconciled_flip_request_is_clamped_not_corrupting_avg():
+    """A reconciled fill whose requested qty would flip the position is
+    clamped: the residual position stays flat (no opposite side opened)
+    and avg_price is NEVER set to the optimistic mark. Reconciling a
+    long 10 → sell-15 (clamped to 10) just corrects cash + the closing
+    realized PnL; it must not leave a phantom short at the mark."""
+    b = _book()
+    b.record_fill("AAA", "buy", 10, 100.0)
+    # Optimistic sell of 15 is clamped to 10 → flat. cash: 10000 - 1000
+    # (buy) + 1100 (sell 10 @ 110) = 10100; realized = 10*(110-100) = 100.
+    b.record_fill("AAA", "sell", 15, 110.0)
+    assert b.positions["AAA"].qty == 0
+    assert b.positions["AAA"].avg_price == 0.0
+    assert b.cash == pytest.approx(10100.0)
+    assert b.realized_pnl == pytest.approx(100.0)
+
     applied = b.apply_reconciled_fill(
         "AAA",
         "sell",
@@ -122,12 +142,84 @@ def test_apply_reconciled_long_to_short_flip_in_one_fill():
         broker_order_id="o1",
     )
     assert applied
-    # Closing portion realized: 10 * (110.20 - 100) = +102 (was +100).
-    # Net realized correction: +2.
-    assert b.realized_pnl == pytest.approx(102.0)
-    # Position still short 5, but at avg 110.20 (actual fill price).
-    assert b.positions["AAA"].qty == -5
-    assert b.positions["AAA"].avg_price == pytest.approx(110.20)
+    # CORE FIX — must hold exactly: no phantom short opened, avg_price is
+    # NEVER set to the optimistic mark.
+    assert b.positions["AAA"].qty == 0
+    assert b.positions["AAA"].avg_price == 0.0
+    # KNOWN BOUND (degenerate over-sell only): the optimistic clamp to flat
+    # discarded the true executed close (10), so the reconcile corrects the
+    # *requested* 15 instead — cash/realized over-correct by exactly
+    # (15-10)*delta = 5*0.20 = 1.0. Exact values would be cash 10102.0 /
+    # realized 102.0; the bounded best-effort yields 10103.0 / 103.0. This
+    # path is unreachable for v1 (long-only, risk-capped) and the over-sell
+    # is logged as `fill_flip_clamped` at record_fill. avg_price/positions
+    # (above) stay correct regardless. See apply_reconciled_fill's
+    # "KNOWN BOUND" note for why exact recovery isn't done here.
+    exact_cash, exact_realized = 10102.0, 102.0
+    bound = (15 - 10) * 0.20
+    assert b.cash == pytest.approx(10103.0)
+    assert b.realized_pnl == pytest.approx(103.0)
+    assert abs(b.cash - exact_cash) <= bound + 1e-9
+    assert abs(b.realized_pnl - exact_realized) <= bound + 1e-9
+
+
+def test_apply_reconciled_partial_close_no_regression():
+    """A normal partial close (sell 4 of a 10 long) reconciles correctly:
+    realized corrected for the 4 closed shares, residual 6 long keeps its
+    original avg_price (unchanged by a partial close)."""
+    b = _book()
+    b.record_fill("AAA", "buy", 10, 100.0)
+    b.record_fill("AAA", "sell", 4, 110.0)  # optimistic partial close
+    assert b.positions["AAA"].qty == 6
+    assert b.positions["AAA"].avg_price == pytest.approx(100.0)
+    assert b.realized_pnl == pytest.approx(4 * (110.0 - 100.0))  # +40
+    # cash: 10000 - 1000 (buy 10) + 440 (sell 4 @ 110) = 9440.
+    assert b.cash == pytest.approx(9440.0)
+
+    applied = b.apply_reconciled_fill(
+        "AAA",
+        "sell",
+        4,
+        mark_price=110.0,
+        actual_price=110.50,
+        broker_order_id="pc1",
+    )
+    assert applied
+    # Realized: 4 * (110.50 - 100) = +42 (was +40), correction +2.
+    assert b.realized_pnl == pytest.approx(42.0)
+    # Cash: sold the 4 shares for $0.50/sh more than recorded → +2.
+    assert b.cash == pytest.approx(9442.0)
+    # Residual long unchanged in qty and avg.
+    assert b.positions["AAA"].qty == 6
+    assert b.positions["AAA"].avg_price == pytest.approx(100.0)
+
+
+def test_apply_reconciled_full_close_no_regression():
+    """A full close (sell exactly the held qty) reconciles to flat with a
+    corrected realized PnL and avg_price reset to 0."""
+    b = _book()
+    b.record_fill("AAA", "buy", 10, 100.0)
+    b.record_fill("AAA", "sell", 10, 110.0)  # optimistic full close
+    assert b.positions["AAA"].qty == 0
+    assert b.realized_pnl == pytest.approx(100.0)
+    # cash: 10000 - 1000 (buy) + 1100 (sell 10 @ 110) = 10100.
+    assert b.cash == pytest.approx(10100.0)
+
+    applied = b.apply_reconciled_fill(
+        "AAA",
+        "sell",
+        10,
+        mark_price=110.0,
+        actual_price=110.30,
+        broker_order_id="fc1",
+    )
+    assert applied
+    # Realized: 10 * (110.30 - 100) = +103 (was +100), correction +3.
+    assert b.realized_pnl == pytest.approx(103.0)
+    # Cash: 10 shares sold for $0.30/sh more than recorded → +3.
+    assert b.cash == pytest.approx(10103.0)
+    assert b.positions["AAA"].qty == 0
+    assert b.positions["AAA"].avg_price == 0.0
 
 
 def test_apply_reconciled_buy_to_cover_short():

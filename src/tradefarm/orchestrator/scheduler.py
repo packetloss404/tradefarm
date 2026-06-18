@@ -423,6 +423,7 @@ class Orchestrator:
                     fill.qty,
                     fill.price,
                     sig.reason,
+                    broker_order_id=fill.broker_order_id or None,
                 )
                 await repo.sync_positions(agent.state.id, agent.state.book)
                 # If the fill produced non-zero realized PnL, stamp the
@@ -767,6 +768,24 @@ class Orchestrator:
             )
             if ok:
                 applied += 1
+                # Persist the reconciled fill keyed on broker_order_id. The
+                # UNIQUE constraint dedupes this against the optimistic write
+                # the scheduler made at submit time — so a normal run inserts
+                # nothing here, but after a process restart (when the
+                # in-memory optimistic row never happened) this is the row
+                # that records the fill. Either way broker_order_id ends up
+                # persisted exactly once: the documented restart-safe guard
+                # (CLAUDE.md gotcha #7) is now live.
+                await repo.record_trade(
+                    rf.agent_id,
+                    rf.symbol,
+                    rf.side,
+                    rf.qty,
+                    rf.actual_price,
+                    "reconciled_fill",
+                    broker_order_id=rf.broker_order_id or None,
+                )
+                await repo.sync_positions(rf.agent_id, agent.state.book)
                 # If this fill was a sell, clear the pending-exit guard
                 # so the next tick can issue a fresh exit if the agent
                 # opens a new position.

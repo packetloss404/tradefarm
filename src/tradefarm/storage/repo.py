@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import structlog
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from tradefarm.execution.virtual_book import VirtualBook
 from tradefarm.runtime.clock import now_utc
@@ -10,6 +12,8 @@ from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import Agent, PnlSnapshot, Position, Trade
+
+log = structlog.get_logger(__name__)
 
 __all__ = [
     "upsert_agent",
@@ -55,8 +59,26 @@ async def upsert_agent(agent_id: int, name: str, strategy: str, starting_capital
 
 
 async def record_trade(
-    agent_id: int, symbol: str, side: str, qty: float, price: float, reason: str
+    agent_id: int,
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float,
+    reason: str,
+    broker_order_id: str | None = None,
 ) -> None:
+    """Persist one Trade row.
+
+    ``broker_order_id`` is written so the DB-level UNIQUE constraint
+    (``uq_trades_broker_order_id``) becomes the restart-safe dedupe for
+    reconciled/broker fills (CLAUDE.md gotcha #7). A second write with the
+    same id hits that constraint; we swallow the IntegrityError and treat
+    the trade as already recorded rather than raising. ``None`` (sim fills
+    with no broker id, or callers that pass nothing) skips dedupe — SQLite
+    treats NULLs as distinct under UNIQUE, so NULL ``broker_order_id`` rows
+    are never deduped (matching db.py's partial index, which is scoped
+    ``WHERE broker_order_id IS NOT NULL``).
+    """
     async with SessionLocal() as session:
         session.add(
             Trade(
@@ -67,9 +89,17 @@ async def record_trade(
                 price=price,
                 reason=reason,
                 session_id=current_session_id(),
+                broker_order_id=broker_order_id,
             )
         )
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # UNIQUE(broker_order_id) violation — this fill was already
+            # recorded (e.g. optimistic write then reconcile, or a
+            # process restart replaying the reconcile path). Idempotent.
+            await session.rollback()
+            log.info("trade_already_recorded", broker_order_id=broker_order_id, symbol=symbol)
 
 
 async def snapshot_pnl(agent_id: int, book: VirtualBook, marks: dict[str, float]) -> None:

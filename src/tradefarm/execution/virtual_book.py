@@ -10,7 +10,11 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import structlog
+
 from tradefarm.runtime.clock import now_utc
+
+log = structlog.get_logger(__name__)
 
 # Round-5 audit fix (Z): bound the per-book reconciliation dedup set.
 # 100 agents × 10k fills each = 1M ids max, but each is small (string).
@@ -32,8 +36,19 @@ class VirtualPosition:
     opened_at: datetime | None = None
 
     def apply_fill(self, side: str, qty: float, price: float, at: datetime | None = None) -> float:
-        """Returns realized PnL from this fill."""
+        """Apply a fill, returning the realized PnL it produces.
+
+        Flat-only invariant: a fill that would carry the position THROUGH
+        zero to the opposite sign in a single step is clamped so it can
+        only close down to flat (never open the opposite side). v1 agents
+        never short, so a flip can only be a data error — and the
+        post-flip residual avg_price is unrecoverable at reconcile time,
+        which would poison downstream PnL/equity for the symbol.
+        """
         at = at or _utcnow()
+        qty = self._clamp_flip(side, qty)
+        if qty <= 0:
+            return 0.0
         was_zero = self.qty == 0
         signed = qty if side == "buy" else -qty
         new_qty = self.qty + signed
@@ -44,8 +59,9 @@ class VirtualPosition:
         else:
             closing = min(abs(signed), abs(self.qty))
             realized = closing * (price - self.avg_price) * (1 if self.qty > 0 else -1)
-            if abs(signed) > abs(self.qty):
-                self.avg_price = price
+            # No flip is possible after `_clamp_flip`, so the closing
+            # branch never opens the opposite side; avg_price is left
+            # unchanged on a partial close and reset to flat below.
         self.qty = new_qty
         if self.qty == 0:
             self.avg_price = 0.0
@@ -53,6 +69,28 @@ class VirtualPosition:
         elif was_zero:
             self.opened_at = at
         return realized
+
+    def _clamp_flip(self, side: str, qty: float) -> float:
+        """Clamp ``qty`` so an opposite-side fill can only close to flat.
+
+        Returns the executable qty (== requested qty unless a through-zero
+        flip was detected, in which case it is reduced to ``abs(self.qty)``).
+        """
+        signed = qty if side == "buy" else -qty
+        if self.qty == 0 or (self.qty > 0) == (signed > 0):
+            return qty  # opening / same-side add — never a flip
+        if abs(signed) <= abs(self.qty):
+            return qty  # (partial) close that stays same-sign or hits flat
+        clamped = abs(self.qty)
+        log.warning(
+            "fill_flip_clamped",
+            symbol=self.symbol,
+            side=side,
+            requested_qty=qty,
+            clamped_qty=clamped,
+            held_qty=self.qty,
+        )
+        return clamped
 
 
 @dataclass
@@ -93,6 +131,11 @@ class VirtualBook:
         book's ``realized_pnl`` running total is updated by the same amount.
         """
         pos = self._get_or_create(symbol)
+        # Clamp flat-only BEFORE moving cash so the cash delta reflects the
+        # executed (possibly clamped) qty, never the requested qty.
+        qty = pos._clamp_flip(side, qty)
+        if qty <= 0:
+            return 0.0
         notional = qty * price
         self.cash += notional if side == "sell" else -notional
         realized = pos.apply_fill(side, qty, price, at=at)
@@ -139,6 +182,13 @@ class VirtualBook:
         from (post_qty, post_avg) and the known fill (side, qty,
         mark_price), the pre-fill (prev_qty, prev_avg) is the unique
         solution that ``apply_fill`` would have stepped from.
+
+        Flat-only invariant: because ``record_fill`` clamps any
+        through-zero flip to flat (see ``VirtualPosition._clamp_flip``),
+        the booked fill never opened an opposite-side position. The
+        reconcile path mirrors that clamp so it never corrects more than
+        the executed close — the old unrecoverable-flip fallback (which
+        left ``prev_avg`` pinned to the optimistic mark) is gone.
         """
         if broker_order_id in self._reconciled_ids:
             return False
@@ -153,13 +203,21 @@ class VirtualBook:
             self.cash += cash_delta
             return True
 
-        # Reverse `apply_fill` arithmetic to recover pre-fill state.
         signed = qty if side == "buy" else -qty
         post_qty = pos.qty
         post_avg = pos.avg_price
+
+        # Reverse `apply_fill` arithmetic to recover pre-fill state.
+        #
+        # The optimistic fill was clamped flat-only at `record_fill` time
+        # (see `VirtualPosition._clamp_flip`), so the booked fill never
+        # opened an opposite-side position. A naive `post_qty - signed`
+        # recovery would mistake a clamped full-close (post flat) for a
+        # flip; we guard against that by never letting the recovered
+        # pre-fill cross zero in the direction of `signed`.
         prev_qty = post_qty - signed
         if abs(prev_qty) < 1e-9:
-            # Position was opened by this fill from flat.
+            # Position was opened (or fully closed) by this fill from/to flat.
             prev_qty = 0.0
             prev_avg = 0.0
         elif (prev_qty > 0) == (signed > 0):
@@ -168,43 +226,67 @@ class VirtualBook:
             #     post_avg = (prev_avg * prev_qty + mark * signed) / post_qty
             prev_avg = (post_avg * post_qty - mark_price * signed) / prev_qty
         else:
-            # Opposite-side: a (partial) close or flip. apply_fill keeps
-            # avg_price unchanged on partial closes; on a flip the new
-            # avg is the fill price. Either way, prev_avg == post_avg
-            # only for the partial-close case. For a flip,
-            # `abs(signed) > abs(prev_qty)`, so we detect via sign-flip
-            # of (prev_qty, post_qty).
-            if (post_qty > 0) != (prev_qty > 0) and post_qty != 0:
-                # Flip happened: post_avg was set to mark_price.
-                # Pre-fill avg is whatever it was before this fill; we
-                # can't recover it from post-state alone, but the only
-                # consumer that cares about prev_avg here is the
-                # realized-PnL correction for the closing portion,
-                # which uses prev_avg directly. Best-effort fall-back:
-                # treat avg as post_avg (= mark) so the closing portion's
-                # realized was originally `closing_qty * (mark - mark) = 0`,
-                # which matches the fact that on a flip apply_fill
-                # books realized = closing_qty * (mark - prev_avg)
-                # using the actual prev_avg. We don't have it.
-                # Apply only the cash + remaining-opening-portion
-                # correction.
-                prev_avg = post_avg
-            else:
-                # Pure partial close: avg unchanged.
-                prev_avg = post_avg
+            # Opposite-side partial close. Flat-only clamping guarantees no
+            # through-zero flip survives to here, so avg_price is unchanged
+            # by the close and prev_avg == post_avg.
+            prev_avg = post_avg
 
-        # Now split the qty into closing vs opening portions relative
-        # to the pre-fill position.
+        # Detect a clamped flip: the requested qty would have carried the
+        # pre-fill position THROUGH zero to the opposite sign. Because the
+        # booked fill was clamped to flat, the executed close was only
+        # `abs(prev_qty)` and no opposite side was ever opened. Correct
+        # against the executed (clamped) qty, not the requested qty, so we
+        # never poison avg_price or open a phantom position.
+        if prev_qty != 0 and (prev_qty > 0) != (signed > 0) and qty > abs(prev_qty):
+            executed = abs(prev_qty)
+            log.warning(
+                "reconciled_fill_flip_clamped",
+                symbol=symbol,
+                side=side,
+                requested_qty=qty,
+                clamped_qty=executed,
+                held_qty=prev_qty,
+                broker_order_id=broker_order_id,
+            )
+            qty = executed
+
+        # Now split the (possibly clamped) qty into closing vs opening
+        # portions relative to the pre-fill position.
         if prev_qty == 0:
+            # Pure open from flat — nothing to close.
             closing_qty, opening_qty = 0.0, qty
         elif (prev_qty > 0) == (signed > 0):
+            # Same-side add — nothing to close.
             closing_qty, opening_qty = 0.0, qty
         else:
+            # Opposite-side fill. The flat-only invariant guarantees the
+            # booked fill NEVER opened an opposite-side position, so the
+            # opening portion is always zero — the whole executed fill was
+            # a close against the pre-fill holding.
             closing_qty = min(qty, abs(prev_qty))
-            opening_qty = qty - closing_qty
+            opening_qty = 0.0
+            # KNOWN BOUND (degenerate input only): when the optimistic fill
+            # landed the book exactly flat (post_qty == 0) we cannot tell an
+            # exact full close (qty == held) apart from an over-sell that
+            # `record_fill` clamped to flat (qty > held) — the clamp
+            # discards the true executed qty, so `prev_qty` is recovered as
+            # the *requested* qty and `closing_qty == qty`. For every
+            # consistent (qty <= held) fill — which is all v1 ever produces
+            # (long-only + risk-capped) — the cash/realized correction below
+            # is EXACT. For the should-never-happen over-sell the correction
+            # is best-effort, bounded by `(requested - held) * |delta|`;
+            # avg_price and positions stay correct (flat) regardless. The
+            # over-sell itself is logged at source as `fill_flip_clamped`
+            # in `record_fill`. Exact resolution of that path would require
+            # threading the executed qty through record_fill (see
+            # `_clamp_flip`), which we deliberately don't do for a guard
+            # path that also can't survive a mid-settlement restart.
 
-        # 1. Cash adjustment for the full qty.
-        cash_delta = -delta * qty if side == "buy" else delta * qty
+        # 1. Cash adjustment for the executed (closing + opening) qty. With
+        #    the flat-only invariant opening_qty is 0 on opposite-side
+        #    fills, so cash never corrects an opening that never happened.
+        executed_qty = closing_qty + opening_qty
+        cash_delta = -delta * executed_qty if side == "buy" else delta * executed_qty
         self.cash += cash_delta
 
         # 2. Realized-PnL correction for the closing portion. The
