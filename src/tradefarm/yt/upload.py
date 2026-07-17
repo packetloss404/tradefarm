@@ -16,8 +16,11 @@ Thumbnail upload is a separate call (POST thumbnails/set with the jpeg
 as multipart). Optional — only fired when --upload-thumbnail is set
 AND the file is present.
 
-For v0 we keep the upload synchronous (single-shot resumable PUT —
-no chunked retry). Real ops use a retry harness on top.
+The resumable PUT streams the mp4 in 8 MiB chunks (RESUMABLE_CHUNK_BYTES)
+rather than buffering the whole reel in RAM, and retries on 308 (advance
+the cursor to the server's offset) and 401 (refresh the access token) —
+see _put_video_bytes. The upload itself is still driven synchronously
+from a single call; real ops layer their own retry harness on top.
 """
 
 from __future__ import annotations
