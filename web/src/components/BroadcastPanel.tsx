@@ -13,6 +13,7 @@ import { BroadcastMacrosSection } from "./broadcast/BroadcastMacrosSection";
 import { BroadcastSpotlightSection } from "./broadcast/BroadcastSpotlightSection";
 import { PreviewPopoutButton } from "./broadcast/PreviewPopoutButton";
 import { AudienceRequestsPanel } from "./AudienceRequestsPanel";
+import { OfflineWarning } from "./broadcast/OfflineWarning";
 
 async function postCmd(type: string, payload: Record<string, unknown>): Promise<void> {
   const r = await fetch("/api/stream/cmd", {
@@ -115,6 +116,11 @@ export function BroadcastPanel() {
 
   return (
     <Panel title="Broadcast" right={liveness}>
+      {!ss.isOnline && (
+        <div className="mb-4">
+          <OfflineWarning />
+        </div>
+      )}
       <div className="grid grid-cols-12 gap-x-6 gap-y-4">
         {/* ─────────────────────────────────────────────────────────────────
             DIRECTOR (left, ~3/4): high-frequency live controls. This is what
@@ -125,12 +131,11 @@ export function BroadcastPanel() {
         <div className="col-span-12 lg:col-span-9 space-y-4">
           <div>
             <SectionLabel>Macros</SectionLabel>
-            <BroadcastMacrosSection isOnline={ss.isOnline} />
+            <BroadcastMacrosSection />
           </div>
 
           <div className="border-t border-zinc-800 pt-4">
             <BroadcastSpotlightSection
-              isOnline={ss.isOnline}
               pinAgentId={ss.pinAgentId}
               scene={ss.scene}
               layoutMode={ss.layoutMode}
@@ -147,7 +152,6 @@ export function BroadcastPanel() {
                 scene={ss.scene}
                 rotationEnabled={ss.rotationEnabled}
                 layoutMode={ss.layoutMode}
-                isOnline={ss.isOnline}
               />
             </div>
 
@@ -196,7 +200,7 @@ export function BroadcastPanel() {
             the start of a session and then left alone.
             ───────────────────────────────────────────────────────────────── */}
         <div className="col-span-12 lg:col-span-3 lg:border-l lg:border-zinc-800 lg:pl-6 space-y-4">
-          <BroadcastLayoutSection layoutMode={ss.layoutMode} isOnline={ss.isOnline} />
+          <BroadcastLayoutSection layoutMode={ss.layoutMode} />
 
           <div className="border-t border-zinc-800 pt-4">
             <BroadcastAudioSection
@@ -215,11 +219,11 @@ export function BroadcastPanel() {
           </div>
 
           <div className="border-t border-zinc-800 pt-4">
-            <BroadcastCrtSection crtEnabled={ss.crtEnabled} isOnline={ss.isOnline} />
+            <BroadcastCrtSection crtEnabled={ss.crtEnabled} />
           </div>
 
           <div className="border-t border-zinc-800 pt-4">
-            <BroadcastFullscreenSection fullscreen={ss.fullscreen} isOnline={ss.isOnline} />
+            <BroadcastFullscreenSection fullscreen={ss.fullscreen} />
           </div>
 
           <div className="border-t border-zinc-800 pt-4 space-y-2">

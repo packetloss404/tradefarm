@@ -22,12 +22,11 @@ function rankLabel(rank: Rank | undefined): string {
 }
 
 export function BroadcastSpotlightSection(props: {
-  isOnline: boolean;
   pinAgentId: number | null;
   scene: string | null;
   layoutMode: "scenes" | "v1-broadcast" | null;
 }) {
-  const { isOnline, pinAgentId, scene, layoutMode } = props;
+  const { pinAgentId, scene, layoutMode } = props;
   const inert = layoutMode === "v1-broadcast";
 
   const { data: agents } = useSWR<AgentRow[]>("agents", api.agents, {
@@ -137,7 +136,7 @@ export function BroadcastSpotlightSection(props: {
         placeholder="Search agents by name or id"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        disabled={!isOnline || inert}
+        disabled={inert}
         className="w-full rounded-sm border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-50"
       />
 
@@ -155,7 +154,7 @@ export function BroadcastSpotlightSection(props: {
                 <li key={a.id}>
                   <button
                     onClick={() => onPinAgent(a)}
-                    disabled={!isOnline || pending}
+                    disabled={pending}
                     className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors disabled:opacity-50 ${
                       active
                         ? "bg-(--color-profit)/15 text-(--color-profit)"
@@ -184,12 +183,11 @@ export function BroadcastSpotlightSection(props: {
         {PIN_SCENES.map((s) => {
           const pending = busy === `pin-scene:${s.id}`;
           const active = lastPinScene === s.id && activePin != null;
-          const disabled = !isOnline || pending || activePin == null;
           return (
             <button
               key={s.id}
               onClick={() => onPinScene(s.id)}
-              disabled={disabled}
+              disabled={pending || activePin == null}
               className={`rounded-sm border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                 active
                   ? "border-(--color-profit) bg-(--color-profit)/15 text-(--color-profit)"
@@ -202,7 +200,7 @@ export function BroadcastSpotlightSection(props: {
         })}
         <button
           onClick={onClear}
-          disabled={!isOnline || busy === "pin-clear" || activePin == null}
+          disabled={busy === "pin-clear" || activePin == null}
           className="rounded-sm border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 transition-colors hover:bg-zinc-700 disabled:opacity-50"
         >
           Clear pin

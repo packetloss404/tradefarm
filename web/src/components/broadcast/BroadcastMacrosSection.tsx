@@ -160,8 +160,7 @@ function dotClass(color: MacroColor): string {
   return "size-1.5 rounded-full bg-zinc-500";
 }
 
-export function BroadcastMacrosSection(props: { isOnline: boolean }) {
-  const { isOnline } = props;
+export function BroadcastMacrosSection() {
   const [subtitle, setSubtitle] = useState("");
   const [busy, setBusy] = useState<string>("");
   const [err, setErr] = useState<string>("");
@@ -197,7 +196,7 @@ export function BroadcastMacrosSection(props: { isOnline: boolean }) {
             <button
               key={m.id}
               onClick={() => void onFire(m)}
-              disabled={!isOnline || pending}
+              disabled={pending}
               className="flex items-center gap-2 rounded-sm border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 transition-colors hover:bg-zinc-700 disabled:opacity-50"
             >
               <span className={dotClass(m.color)} />

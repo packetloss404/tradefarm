@@ -11,9 +11,8 @@ async function postCmd(type: string, payload: Record<string, unknown>): Promise<
 
 export function BroadcastFullscreenSection(props: {
   fullscreen: boolean | null;
-  isOnline: boolean;
 }) {
-  const { fullscreen, isOnline } = props;
+  const { fullscreen } = props;
   // Optimistic flag — heartbeat is source of truth but round-trips every 5s,
   // so render a pending value until the wire catches up.
   const [pending, setPending] = useState<boolean | null>(null);
@@ -60,7 +59,7 @@ export function BroadcastFullscreenSection(props: {
       <div className="flex items-center gap-2">
         <button
           onClick={onClick}
-          disabled={!isOnline || busy}
+          disabled={busy}
           className="rounded-sm border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
         >
           {label}

@@ -23,9 +23,8 @@ export function BroadcastSceneSection(props: {
   scene: string | null;
   rotationEnabled: boolean | null;
   layoutMode: "scenes" | "v1-broadcast" | null;
-  isOnline: boolean;
 }) {
-  const { scene, rotationEnabled, layoutMode, isOnline } = props;
+  const { scene, rotationEnabled, layoutMode } = props;
   const inert = layoutMode === "v1-broadcast";
 
   const [busy, setBusy] = useState<string>("");
@@ -90,7 +89,7 @@ export function BroadcastSceneSection(props: {
           <input
             type="checkbox"
             checked={rotationOn}
-            disabled={!isOnline || busy === "rotation" || inert}
+            disabled={busy === "rotation" || inert}
             onChange={(e) => onRotation(e.target.checked)}
             className="size-3.5 accent-emerald-500"
           />
@@ -113,7 +112,7 @@ export function BroadcastSceneSection(props: {
             <button
               key={s.id}
               onClick={() => onScene(s.id)}
-              disabled={!isOnline || pending || inert}
+              disabled={pending || inert}
               className={`rounded-sm border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                 active
                   ? "border-(--color-profit) bg-(--color-profit)/15 text-(--color-profit)"

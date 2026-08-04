@@ -11,9 +11,8 @@ async function postCmd(type: string, payload: Record<string, unknown>): Promise<
 
 export function BroadcastCrtSection(props: {
   crtEnabled: boolean | null;
-  isOnline: boolean;
 }) {
-  const { crtEnabled, isOnline } = props;
+  const { crtEnabled } = props;
   // Optimistic flag — heartbeat is source of truth but round-trips every 5s,
   // so render a pending value until the wire catches up.
   const [pending, setPending] = useState<boolean | null>(null);
@@ -53,7 +52,7 @@ export function BroadcastCrtSection(props: {
         <input
           type="checkbox"
           checked={effective}
-          disabled={!isOnline || busy}
+          disabled={busy}
           onChange={(e) => onToggle(e.target.checked)}
           className="size-3.5 accent-emerald-500"
         />

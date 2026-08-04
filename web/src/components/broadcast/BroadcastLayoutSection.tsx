@@ -30,9 +30,8 @@ async function postCmd(
 
 export function BroadcastLayoutSection(props: {
   layoutMode: LayoutMode | null;
-  isOnline: boolean;
 }) {
-  const { layoutMode, isOnline } = props;
+  const { layoutMode } = props;
   // Optimistic pending value — heartbeat is the source of truth, but it
   // round-trips every ~5s (and switching layouts forces a stream reload),
   // so we render the pending choice until the wire catches up.
@@ -49,7 +48,7 @@ export function BroadcastLayoutSection(props: {
   const syncing = pendingMode !== null && pendingMode !== layoutMode;
 
   const onPick = async (mode: LayoutMode) => {
-    if (busy || !isOnline) return;
+    if (busy) return;
     setPendingMode(mode);
     setBusy(true);
     try {
@@ -90,7 +89,7 @@ export function BroadcastLayoutSection(props: {
             <button
               key={l.id}
               onClick={() => void onPick(l.id)}
-              disabled={!isOnline || busy}
+              disabled={busy}
               className={`rounded-sm border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                 active
                   ? l.activeClass
