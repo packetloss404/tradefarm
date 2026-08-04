@@ -308,10 +308,25 @@ class Orchestrator:
         # Collect signals from all agents in parallel (LLM calls dominate).
         sem = asyncio.Semaphore(20)
         disabled = settings.disabled_strategies_set
+        # Per-agent disable set: read once per tick (the agents table is
+        # small, ~100 rows). Disabled agents are fully frozen — no new
+        # entries AND no risk-driven exits — so the operator can park a
+        # misbehaving agent without it being force-closed on the next SL.
+        # The risk-exit loop below intentionally uses this same set so a
+        # disabled agent's open position is not touched until re-enabled.
+        disabled_agent_ids = await repo.get_disabled_agent_ids()
 
         async def gather(a):
             if a.state.strategy in disabled:
                 return a, []  # frozen strategy — no new signals
+            if a.state.id in disabled_agent_ids:
+                # Disabled agents are fully frozen: no new entries AND no
+                # risk-driven exits. The operator must re-enable to exit
+                # a position. This is intentionally conservative — a
+                # "disable" is "leave the position alone", not "force
+                # close on the next tick" (which on a wrong tick could
+                # crystallize a loss the operator didn't authorize).
+                return a, []
             async with sem:
                 try:
                     return a, await a.decide(bars, marks)
@@ -360,6 +375,13 @@ class Orchestrator:
             self._pending_exits.pop(k, None)
 
         for agent in self.agents:
+            # Per-agent disable: a disabled agent is fully frozen — no new
+            # entries AND no risk-driven exits. See the gather() comment
+            # above for the rationale ("leave the position alone", not
+            # "force-close on the next tick"). Operator must re-enable
+            # to exit a trade.
+            if agent.state.id in disabled_agent_ids:
+                continue
             for sym, pos in list(agent.state.book.positions.items()):
                 if pos.qty <= 0:
                     continue

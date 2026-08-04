@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from tradefarm.config import settings
+from tradefarm.storage import repo
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -317,3 +318,89 @@ async def toggle_ai(enabled: bool) -> dict[str, bool]:
         except Exception:
             pass
     return {"ai_enabled": enabled}
+
+
+# ---------------------------------------------------------------------------
+# Per-agent disable controls.
+#
+# Companion to the per-strategy `disabled_strategies` set: instead of freezing
+# every agent running a given strategy, the operator can flip a single agent
+# off (and back on) from the admin UI. Disabled agents are fully frozen — the
+# scheduler skips them in gather() so they emit no signals and the risk-exit
+# loop in `_tick_once_inner` doesn't run against their positions either.
+# This is intentionally conservative: a "disable" is "leave it alone", not
+# "force-close my position". The operator must re-enable to exit a trade.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/agents")
+async def list_agents() -> list[dict[str, Any]]:
+    """Return all agents with their per-agent disable flag + cash.
+
+    Slim response (5 fields per agent × 100 agents ≈ 5KB JSON) so the
+    admin UI can poll every few seconds without bloating the network.
+    The `cash` column is the agent's current virtual-book cash (Decimal)
+    coerced to float at this boundary.
+    """
+    return await repo.get_all_agents_with_disabled()
+
+
+class _AgentDisabledBody(BaseModel):
+    disabled: bool
+
+
+class _AgentBulkDisabledBody(BaseModel):
+    agent_ids: list[int]
+    disabled: bool
+
+
+def _validate_agent_id(agent_id: int) -> None:
+    """Reject agent ids outside the configured population range.
+
+    The runtime guarantees 0..settings.agent_count-1; anything else is
+    either a stale UI, a typo, or an attacker's probe. 400 keeps the
+    response code aligned with FastAPI's other "client supplied bad data"
+    responses — 404 would be defensible but a crafty attacker could
+    use 200/404 deltas to enumerate id ranges.
+    """
+    n = int(getattr(settings, "agent_count", 0))
+    if agent_id < 0 or (n and agent_id >= n):
+        raise HTTPException(
+            status_code=400,
+            detail=f"agent_id {agent_id} out of range [0, {n})",
+        )
+
+
+@router.post("/agents/{agent_id}/disabled")
+async def set_agent_disabled(agent_id: int, body: _AgentDisabledBody) -> dict[str, Any]:
+    """Flip a single agent's `disabled` flag.
+
+    Disabled agents skip ``decide()`` in the next tick (the orchestrator
+    reads `repo.get_disabled_agent_ids()` once per tick). The flag is
+    durable in `agents.disabled`; on a process restart the same agent
+    comes back disabled.
+    """
+    _validate_agent_id(agent_id)
+    await repo.set_agent_disabled(agent_id, body.disabled)
+    return {"agent_id": int(agent_id), "disabled": bool(body.disabled)}
+
+
+@router.post("/agents/bulk-disabled")
+async def bulk_set_agents_disabled(body: _AgentBulkDisabledBody) -> dict[str, Any]:
+    """Flip the disable flag on a batch of agents in one request.
+
+    All ids in ``agent_ids`` are validated against the configured range
+    up front; the whole batch is rejected if any id is out of range (no
+    partial updates). Useful for the UI's "disable all in strategy" /
+    "enable all in strategy" affordances.
+    """
+    n = int(getattr(settings, "agent_count", 0))
+    bad = [aid for aid in body.agent_ids if aid < 0 or (n and aid >= n)]
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=f"agent_ids out of range [0, {n}): {sorted(set(bad))[:10]}"
+            + (" ..." if len(set(bad)) > 10 else ""),
+        )
+    updated = await repo.set_agents_disabled_bulk(body.agent_ids, body.disabled)
+    return {"updated": [int(i) for i in updated]}

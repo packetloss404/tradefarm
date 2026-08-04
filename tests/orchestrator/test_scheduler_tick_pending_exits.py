@@ -95,6 +95,14 @@ def patched_persistence(monkeypatch):
     monkeypatch.setattr(repo_mod, "snapshot_pnl", _noop)
     monkeypatch.setattr(repo_mod, "sync_positions", _noop)
     monkeypatch.setattr(repo_mod, "upsert_agent", _noop)
+    # Per-agent disable set read on every tick by the scheduler (added
+    # alongside the per-agent admin toggle endpoints). The pending-exit
+    # tests pre-date that wiring; stub the new repo call so they don't
+    # need a live DB to run.
+    async def _no_disabled_ids():
+        return set()
+
+    monkeypatch.setattr(repo_mod, "get_disabled_agent_ids", _no_disabled_ids)
     monkeypatch.setattr(journal_mod, "write_note", _note)
 
     async def _close(*_a, **_kw):

@@ -5,9 +5,9 @@
 // allowlist (academy retrieval, VOD pipeline) stay local-state until
 // the backend exposes them.
 
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import useSWR from "swr";
-import { api, type AdminConfig as LiveConfig } from "../api";
+import { api, type AdminAgentRow, type AdminConfig as LiveConfig } from "../api";
 import { useTheme } from "./ThemeContext";
 import { DEFAULT_ADMIN_CONFIG } from "./data";
 import type { DashAdminConfig } from "./types";
@@ -737,6 +737,294 @@ function StrategyTable({
   );
 }
 
+function AgentOverrideTable() {
+  // Per-agent disable section. Distinct from the per-strategy
+  // `disabled_strategies` set in StrategyTable — disabling a single
+  // agent bypasses the strategy-level freeze and parks just that one
+  // row's decisions (and risk-driven exits) until re-enabled. Fetched
+  // from `/api/admin/agents`; mutations go through the per-agent +
+  // bulk endpoints.
+  const { T } = useTheme();
+  const { data, error, mutate } = useSWR<AdminAgentRow[]>(
+    "admin-agents",
+    api.adminAgents,
+    { refreshInterval: 5_000 },
+  );
+  const [filter, setFilter] = useState("");
+  const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null);
+  const [sectionError, setSectionError] = useState<string | null>(null);
+  // Auto-clear section-level error banner after 5s so a transient
+  // backend blip doesn't leave a stale red row.
+  useEffect(() => {
+    if (!sectionError) return;
+    const t = window.setTimeout(() => setSectionError(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [sectionError]);
+
+  const rows = data ?? [];
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) => r.name.toLowerCase().includes(q) || r.strategy.toLowerCase().includes(q),
+    );
+  }, [rows, filter]);
+
+  // Group by strategy for the bulk-action affordances; visible-filtered
+  // so the bulk buttons only act on the rows the operator sees.
+  const byStrategy = useMemo(() => {
+    const m = new Map<string, AdminAgentRow[]>();
+    for (const r of visible) {
+      const arr = m.get(r.strategy) ?? [];
+      arr.push(r);
+      m.set(r.strategy, arr);
+    }
+    return m;
+  }, [visible]);
+
+  async function setOne(id: number, disabled: boolean) {
+    setBusyIds((s) => new Set(s).add(id));
+    try {
+      await api.adminAgentSetDisabled(id, disabled);
+      await mutate();
+    } catch (e) {
+      setSectionError((e as Error).message);
+    } finally {
+      setBusyIds((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+    }
+  }
+
+  async function setBulk(strategy: string, ids: number[], disabled: boolean) {
+    if (!ids.length) return;
+    const tag = `${strategy}-${disabled}`;
+    setBulkBusy(tag);
+    try {
+      await api.adminAgentBulkSetDisabled(ids, disabled);
+      await mutate();
+    } catch (e) {
+      setSectionError((e as Error).message);
+    } finally {
+      setBulkBusy(null);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <Input value={filter} onChange={setFilter} placeholder="filter by name or strategy" />
+        </div>
+        {error && (
+          <span
+            style={{
+              fontFamily: "JetBrains Mono, monospace",
+              fontSize: 11,
+              color: T.err,
+            }}
+          >
+            /api/admin/agents unreachable
+          </span>
+        )}
+        <span
+          style={{
+            fontFamily: "JetBrains Mono, monospace",
+            fontSize: 10,
+            color: T.text3,
+            letterSpacing: 1.2,
+          }}
+        >
+          {rows.filter((r) => r.disabled).length} / {rows.length} DISABLED
+        </span>
+      </div>
+      {sectionError && (
+        <div
+          style={{
+            background: `${T.err}18`,
+            border: `1px solid ${T.err}`,
+            borderRadius: 6,
+            padding: "8px 12px",
+            fontFamily: "JetBrains Mono, monospace",
+            fontSize: 11,
+            color: T.err,
+          }}
+        >
+          {sectionError}
+        </div>
+      )}
+      <div
+        style={{
+          maxHeight: 360,
+          overflowY: "auto",
+          border: `1px solid ${T.border}`,
+          borderRadius: 4,
+          background: T.bg,
+        }}
+      >
+        {Array.from(byStrategy.entries()).map(([strategy, agents]) => (
+          <div key={strategy}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 12px",
+                background: T.panel2,
+                borderBottom: `1px solid ${T.border}`,
+                position: "sticky",
+                top: 0,
+                zIndex: 1,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: "JetBrains Mono, monospace",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: 1.2,
+                  color: T.text2,
+                }}
+              >
+                {strategy} · {agents.length}
+              </span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  onClick={() => setBulk(strategy, agents.map((a) => a.id), true)}
+                  disabled={bulkBusy !== null || agents.every((a) => a.disabled)}
+                  style={{
+                    fontFamily: "JetBrains Mono, monospace",
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: "4px 8px",
+                    borderRadius: 3,
+                    border: `1px solid ${T.border}`,
+                    background: "transparent",
+                    color: T.text2,
+                    cursor:
+                      bulkBusy !== null || agents.every((a) => a.disabled)
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity:
+                      bulkBusy !== null || agents.every((a) => a.disabled) ? 0.5 : 1,
+                  }}
+                >
+                  {bulkBusy === `${strategy}-true` ? "…" : "disable all"}
+                </button>
+                <button
+                  onClick={() => setBulk(strategy, agents.map((a) => a.id), false)}
+                  disabled={bulkBusy !== null || agents.every((a) => !a.disabled)}
+                  style={{
+                    fontFamily: "JetBrains Mono, monospace",
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: "4px 8px",
+                    borderRadius: 3,
+                    border: `1px solid ${T.border}`,
+                    background: "transparent",
+                    color: T.text2,
+                    cursor:
+                      bulkBusy !== null || agents.every((a) => !a.disabled)
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity:
+                      bulkBusy !== null || agents.every((a) => !a.disabled) ? 0.5 : 1,
+                  }}
+                >
+                  {bulkBusy === `${strategy}-false` ? "…" : "enable all"}
+                </button>
+              </div>
+            </div>
+            {agents.map((a) => {
+              const isBusy = busyIds.has(a.id);
+              return (
+                <div
+                  key={a.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "40px 1fr 180px 110px auto",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "6px 12px",
+                    borderBottom: `1px solid ${T.border}`,
+                    background: a.disabled ? T.panel2 : "transparent",
+                    opacity: a.disabled ? 0.65 : 1,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "JetBrains Mono, monospace",
+                      fontSize: 10,
+                      color: T.text3,
+                      textAlign: "right",
+                    }}
+                  >
+                    {a.id}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: "JetBrains Mono, monospace",
+                      fontSize: 12,
+                      color: T.text,
+                    }}
+                  >
+                    {a.name}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: "JetBrains Mono, monospace",
+                      fontSize: 10,
+                      color: T.text2,
+                    }}
+                  >
+                    {fmtMoney(a.cash, { signed: false, dp: 0 })}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: "JetBrains Mono, monospace",
+                      fontSize: 9,
+                      fontWeight: 700,
+                      letterSpacing: 1,
+                      padding: "2px 6px",
+                      borderRadius: 3,
+                      background: a.disabled ? `${T.err}22` : `${T.ok}22`,
+                      color: a.disabled ? T.err : T.ok,
+                      textAlign: "center",
+                    }}
+                  >
+                    {a.disabled ? "FROZEN" : "ACTIVE"}
+                  </span>
+                  <Toggle
+                    value={!a.disabled}
+                    onChange={(v) => setOne(a.id, !v)}
+                    disabled={isBusy}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ))}
+        {!error && rows.length === 0 && (
+          <div
+            style={{
+              padding: 24,
+              textAlign: "center",
+              fontFamily: "JetBrains Mono, monospace",
+              fontSize: 11,
+              color: T.text3,
+            }}
+          >
+            no agents — backend has not persisted any rows yet
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DangerZone() {
   const { T } = useTheme();
   return (
@@ -938,6 +1226,13 @@ export function AdminPage() {
           sub="Freeze a strategy and its agents keep open positions but skip new decisions."
         >
           <StrategyTable config={config} update={update} />
+        </AdminSection>
+
+        <AdminSection
+          title="AGENT OVERRIDE"
+          sub="Disable individual agents. Disabled agents skip new decisions AND risk-driven exits — re-enable to resume."
+        >
+          <AgentOverrideTable />
         </AdminSection>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
