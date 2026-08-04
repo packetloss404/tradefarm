@@ -228,6 +228,28 @@ export type AdminPatch = Partial<{
   persist: boolean;
 }>;
 
+// Per-agent admin override responses. Mirrors the response shape of
+// `/api/admin/agents` and the two POST endpoints. Distinct from the
+// per-strategy `disabled_strategies` field on `AdminConfig` — the
+// per-agent flag is stored on `agents.disabled` in the DB and the
+// scheduler reads it once per tick.
+export type AdminAgentRow = {
+  id: number;
+  name: string;
+  strategy: string;
+  disabled: boolean;
+  cash: number;
+};
+
+export type AdminAgentSetDisabledResult = {
+  agent_id: number;
+  disabled: boolean;
+};
+
+export type AdminAgentBulkSetDisabledResult = {
+  updated: number[];
+};
+
 export type LlmStats = {
   called: number;
   skipped_low_confidence: number;
@@ -317,6 +339,35 @@ export const api = {
   },
   promotions: (hours = 24, limit = 100) =>
     fetcher<Promotion[]>(`/api/academy/promotions?hours=${hours}&limit=${limit}`),
+  // Per-agent admin override endpoints. Separate from the per-strategy
+  // `disabled_strategies` set in `AdminConfig` — disabling a single
+  // agent bypasses the whole strategy and freezes just that one row's
+  // decisions + risk-exits until re-enabled.
+  adminAgents: () => fetcher<AdminAgentRow[]>("/api/admin/agents"),
+  adminAgentSetDisabled: async (
+    agentId: number,
+    disabled: boolean,
+  ): Promise<AdminAgentSetDisabledResult> => {
+    const r = await fetch(`/api/admin/agents/${agentId}/disabled`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ disabled }),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
+  adminAgentBulkSetDisabled: async (
+    agentIds: number[],
+    disabled: boolean,
+  ): Promise<AdminAgentBulkSetDisabledResult> => {
+    const r = await fetch("/api/admin/agents/bulk-disabled", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_ids: agentIds, disabled }),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
   runCurriculum: async (): Promise<CurriculumResult> => {
     const r = await fetch("/api/academy/evaluate", { method: "POST" });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);

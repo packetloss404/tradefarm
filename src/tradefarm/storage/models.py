@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -43,6 +44,17 @@ class Agent(Base):
         server_default="intern",
     )
     rank_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Per-agent disable flag. The scheduler's tick reads the set of disabled
+    # ids once per tick and skips ``decide()`` for them — disabled agents
+    # are fully frozen (no new entries AND no risk-driven exits). Operator
+    # must re-enable to exit a position. ``server_default="0"`` so existing
+    # SQLite/Postgres rows resolve to False without a migration.
+    disabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
+    )
 
     positions: Mapped[list["Position"]] = relationship(
         back_populates="agent", cascade="all, delete-orphan"

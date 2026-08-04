@@ -25,6 +25,10 @@ __all__ = [
     "sync_positions",
     "strategy_summary",
     "strategy_equity_timeseries",
+    "get_all_agents_with_disabled",
+    "set_agent_disabled",
+    "set_agents_disabled_bulk",
+    "get_disabled_agent_ids",
     "journal",
 ]
 
@@ -207,6 +211,91 @@ async def record_fill_atomic(
             # prior write's positions stand. Idempotent.
             await session.rollback()
             log.info("fill_already_recorded", broker_order_id=broker_order_id, symbol=symbol)
+
+
+async def get_all_agents_with_disabled() -> list[dict]:
+    """Return every agent row as a slim dict for the admin toggle list.
+
+    Only the columns the admin UI needs are returned (``id``, ``name``,
+    ``strategy``, ``disabled``, ``cash``); the cash is coerced to float at
+    this JSON boundary (it's stored as Decimal / NUMERIC(20, 6)).
+    Ordered by id so the UI is stable across polls.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(Agent.id, Agent.name, Agent.strategy, Agent.disabled, Agent.cash).order_by(
+                    Agent.id
+                )
+            )
+        ).all()
+    return [
+        {
+            "id": int(rid),
+            "name": str(rname),
+            "strategy": str(rstrat),
+            "disabled": bool(rdisabled),
+            "cash": float(rcash) if rcash is not None else 0.0,
+        }
+        for rid, rname, rstrat, rdisabled, rcash in rows
+    ]
+
+
+async def set_agent_disabled(agent_id: int, disabled: bool) -> None:
+    """Flip the per-agent ``disabled`` flag.
+
+    No-op (silently) when the agent id doesn't exist — the API layer is
+    expected to validate the range before calling. SQLite/Postgres both
+    treat ``0``/``1`` as falsy/truthy for the Boolean column.
+    """
+    async with SessionLocal() as session:
+        existing = (
+            await session.execute(select(Agent).where(Agent.id == agent_id))
+        ).scalar_one_or_none()
+        if existing is None:
+            return
+        existing.disabled = bool(disabled)
+        await session.commit()
+
+
+async def set_agents_disabled_bulk(agent_ids: list[int], disabled: bool) -> list[int]:
+    """Flip the ``disabled`` flag on a batch of agent ids.
+
+    Returns the subset of ids that actually matched an agent row (any
+    unknown ids are silently dropped — the API layer is expected to
+    validate the range; this is a "best effort update what's there" path).
+    """
+    if not agent_ids:
+        return []
+    async with SessionLocal() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(Agent).where(Agent.id.in_(agent_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for a in rows:
+            a.disabled = bool(disabled)
+        await session.commit()
+        return [a.id for a in rows]
+
+
+async def get_disabled_agent_ids() -> set[int]:
+    """Return the set of agent ids that are currently disabled.
+
+    Used by the orchestrator's tick to skip decisions for disabled agents
+    without forcing a settings reload. The 100-row agents table is small
+    enough that one SELECT per tick (every ~30s) is well within the
+    per-tick budget.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(select(Agent.id).where(Agent.disabled.is_(True)))
+        ).all()
+    return {int(rid) for (rid,) in rows}
 
 
 async def strategy_summary() -> list[dict]:
