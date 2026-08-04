@@ -231,33 +231,39 @@ class CommentaryLoop:
         )
 
     def _recent_fills_from_orch(self) -> list[_FillSnap]:
-        """Best-effort recent-fill listing pulled from agent positions.
+        """Recent fills pulled from the orchestrator's bounded ring buffer.
 
-        We snapshot each agent's largest currently-open position as a stand-in
-        for "recent activity". This avoids adding a fill ring buffer to the
-        Orchestrator just for commentary. The list is capped at RECENT_FILLS.
+        The buffer (``orch.recent_fills``) is appended to at the in-tick
+        fill site AND the reconciler (alpaca_paper mode), bounded at 50
+        entries. Newest fills live at the END of the returned list, which
+        the caller feeds to ``_is_quiet`` and the prompt assembly. The
+        previous implementation listed each agent's largest open
+        position as a stand-in for "recent activity" — that misnamed the
+        cost-gate (positions are not fills) and made the loop fire
+        every 45s whenever any position was open, even on quiet
+        days. Returns at most ``RECENT_FILLS`` entries.
         """
+        ring = getattr(self.orch, "recent_fills", None)
+        if not ring:
+            return []
+        # Newest first; cap at RECENT_FILLS. The ring is bounded at 50
+        # so this slice is at most 50.
+        recent_window = ring[-RECENT_FILLS:]
         out: list[_FillSnap] = []
-        marks = self.orch.last_marks
-        for agent in self.orch.agents:
-            book = getattr(agent.state, "book", None)
-            if book is None:
-                continue
-            for sym, pos in book.positions.items():
-                if pos.qty <= 0:
-                    continue
-                out.append(
-                    _FillSnap(
-                        agent_name=agent.state.name,
-                        side="long",
-                        qty=float(pos.qty),
-                        symbol=sym,
-                        price=float(marks.get(sym, pos.avg_price)),
-                    )
+        for entry in reversed(recent_window):
+            out.append(
+                _FillSnap(
+                    agent_name=str(
+                        entry.get("agent_name")
+                        or f"agent-{entry.get('agent_id', 0)}"
+                    ),
+                    side=str(entry.get("side", "buy")),
+                    qty=float(entry.get("qty", 0.0)),
+                    symbol=str(entry.get("symbol", "")),
+                    price=float(entry.get("price", 0.0)),
                 )
-        # Heaviest notional first; keep top N.
-        out.sort(key=lambda f: f.qty * f.price, reverse=True)
-        return out[:RECENT_FILLS]
+            )
+        return out
 
     @staticmethod
     def _is_quiet(snap: _StateSnapshot) -> bool:

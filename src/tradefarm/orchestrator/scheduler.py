@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections import deque
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 import pandas as pd
 import structlog
@@ -140,6 +142,16 @@ class Orchestrator:
         # pruned when the reconciler reports the exit as filled OR after
         # PENDING_EXIT_TTL_SEC.
         self._pending_exits: dict[tuple[int, str], float] = {}
+        # Round-6 audit fix (recent_fills ring): bounded ring buffer of the
+        # most recent fills, appended to in BOTH the in-tick fill site
+        # (simulated broker + optimistic Alpaca submit) AND the reconciler
+        # (actual-vs-mark correction for alpaca_paper). The cost-gate in
+        # ``CommentaryLoop`` reads this ring — surfaces "any fill in the
+        # last 50" rather than "any open position" so quiet stretches with
+        # stale positions no longer trip the LLM every 45s. Newest entry
+        # is at the end of the deque. ``.recent_fills`` returns a copy
+        # so readers don't observe a half-appended entry under the GIL.
+        self._recent_fills: deque[dict[str, Any]] = deque(maxlen=50)
         self._curriculum_task: asyncio.Task | None = None
         # Issue #6: the presentation/interactivity layer (auto-director,
         # streak watcher, commentary, youtube chat, predictions, audience)
@@ -149,6 +161,26 @@ class Orchestrator:
         # as module globals on start() (audit fix C15 — installing at
         # construction polluted test globals).
         self._broadcast_suite = BroadcastSuite(self)
+
+    # ------------------------------------------------------------------
+    # Public read-only views.
+    # ------------------------------------------------------------------
+
+    @property
+    def recent_fills(self) -> list[dict[str, Any]]:
+        """Snapshot of the bounded in-memory fill ring buffer.
+
+        Newest fills are at the END of the list. Each entry is a dict
+        shaped ``{agent_id, agent_name, symbol, side, qty, price, at}``
+        where ``price`` is the executed (or optimistic) fill price as
+        a float, ``qty`` is shares, and ``at`` is a tz-aware datetime
+        stamped via :func:`tradefarm.runtime.clock.now_utc` so replay
+        sessions use the replayed clock. The buffer is bounded at 50
+        entries; the oldest entry is silently dropped on overflow.
+        Returns a copy so readers cannot observe a half-appended entry
+        under the GIL during a concurrent reconciler append.
+        """
+        return list(self._recent_fills)
 
     # ------------------------------------------------------------------
     # Backward-compatible delegators. External consumers (api/audience.py,
@@ -486,6 +518,23 @@ class Orchestrator:
                         reason=sig.reason,
                     )
                 )
+                # Record the fill in the bounded ring buffer so the
+                # commentary cost-gate can read real fill activity
+                # instead of inferring it from open positions. ``at``
+                # goes through the replay-aware clock so backtested
+                # sessions stamp the replayed timestamp, matching the
+                # convention used elsewhere in this tick path.
+                self._recent_fills.append(
+                    {
+                        "agent_id": agent.state.id,
+                        "agent_name": agent.state.name,
+                        "symbol": fill.symbol,
+                        "side": fill.side,
+                        "qty": float(fill.qty),
+                        "price": float(fill.price),
+                        "at": _runtime_clock_now_utc(),
+                    }
+                )
 
         await self._publish_fill_of_tick(tick_id, fill_moment_candidates)
 
@@ -792,6 +841,23 @@ class Orchestrator:
                         "delta": rf.delta,
                         "actual_price": rf.actual_price,
                     },
+                )
+                # Record the actual fill in the same ring buffer the
+                # in-tick site writes to. In alpaca_paper mode the
+                # same trade appears twice (optimistic mark at submit
+                # time, actual price here) — acceptable: the cost-gate
+                # keys on ``len() == 0``, not on distinct ids, and
+                # the prompt lists fills newest-first regardless.
+                self._recent_fills.append(
+                    {
+                        "agent_id": rf.agent_id,
+                        "agent_name": agent.state.name,
+                        "symbol": rf.symbol,
+                        "side": rf.side,
+                        "qty": float(rf.qty),
+                        "price": float(rf.actual_price),
+                        "at": _runtime_clock_now_utc(),
+                    }
                 )
         return applied
 
