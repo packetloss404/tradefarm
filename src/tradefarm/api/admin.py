@@ -32,6 +32,7 @@ KNOWN_STRATEGIES = (
     "momentum_12_1",  # cross-sectional 12-1 month momentum (default since 0.7.0)
     "mean_reversion_bb",  # 20-period Bollinger Bands, ±2σ extremes
     "rsi2",  # Connors' 2-period RSI, deep-oversold/overbought
+    "donchian_breakout",  # 20-period Donchian channel, upper/lower breakouts
     "lstm_v1",
     "lstm_llm_v1",
 )
