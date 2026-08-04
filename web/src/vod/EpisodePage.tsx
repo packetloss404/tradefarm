@@ -1,11 +1,32 @@
 // Episode page — finished VOD card. Thumbnail, editable title and
 // description, auto chapters, tags, schedule, upload strip.
 // Operator's "review before publish" view.
+//
+// The preview area + download button used to be all-mock. They now
+// read live render output from out/sessions/<id>/ via the
+// `/vod/{session_id}/reel.mp4` and `/vod/{session_id}/thumb.jpg`
+// backend endpoints. When no rendered session exists (the common case
+// before the operator has run a render), the page falls back to the
+// static SVG thumbnail so the layout is still demoable.
 
+import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { T } from "./tokens";
 import { fmtInt, fmtPct } from "./widgets";
 import type { VodMock } from "./useVodMock";
+
+// Backend response shape — must stay in sync with
+// `src/tradefarm/api/vod.list_sessions`.
+type VodSession = {
+  session_id: string;
+  date: number;
+  has_reel: boolean;
+  has_thumb: boolean;
+  reel_bytes: number;
+  thumb_bytes: number;
+};
+
+const EMPTY_SESSIONS: VodSession[] = [];
 
 function epBtn(color?: string): CSSProperties {
   return {
@@ -22,7 +43,19 @@ function epBtn(color?: string): CSSProperties {
   };
 }
 
-function EpisodeHeader({ vod }: { vod: VodMock }) {
+function EpisodeHeader({
+  vod,
+  downloadHref,
+  pickedSessionId,
+  onPickedSessionChange,
+  sessions,
+}: {
+  vod: VodMock;
+  downloadHref: string | null;
+  pickedSessionId: string;
+  onPickedSessionChange: (id: string) => void;
+  sessions: VodSession[];
+}) {
   return (
     <div
       style={{
@@ -60,8 +93,33 @@ function EpisodeHeader({ vod }: { vod: VodMock }) {
         </div>
       </div>
       <div style={{ flex: 1 }} />
+      <SessionPicker
+        sessions={sessions}
+        value={pickedSessionId}
+        onChange={onPickedSessionChange}
+      />
       <button style={epBtn()}>← back to beats</button>
-      <button style={epBtn()}>↓ download mp4</button>
+      {downloadHref ? (
+        // The download attribute hints the browser to save the file
+        // rather than navigate to the URL. Server already sets
+        // Content-Disposition via FileResponse; the attribute makes
+        // the file name match on the client too.
+        <a
+          href={downloadHref}
+          download={`${pickedSessionId}-reel.mp4`}
+          style={{
+            ...epBtn(),
+            textDecoration: "none",
+            display: "inline-block",
+          }}
+        >
+          ↓ download mp4
+        </a>
+      ) : (
+        <button style={{ ...epBtn(), opacity: 0.4, cursor: "not-allowed" }} disabled>
+          ↓ download mp4
+        </button>
+      )}
       <button style={{ ...epBtn(T.yt), background: T.yt, color: "#fff" }}>
         ▲ upload to YouTube
       </button>
@@ -387,7 +445,243 @@ function Stat2({
   );
 }
 
+// ---------------------------------------------------------------------------
+// ReelPreview — live preview of the rendered MP4 for a chosen session.
+//
+// Pulls /vod/sessions on mount, then renders:
+//   - <video> with native controls if the chosen session has a reel
+//   - the static Thumbnail mock if nothing has been rendered yet
+//   - a "no reel" empty state if the session exists but reel.mp4 is missing
+//
+// The poster is the real thumb.jpg when present, so the player shows the
+// generated thumbnail before the user hits play. Range requests are
+// handled by FileResponse on the backend, so the browser can scrub
+// without buffering the whole file.
+// ---------------------------------------------------------------------------
+
+function useVodSessions(): { sessions: VodSession[]; loaded: boolean } {
+  const [sessions, setSessions] = useState<VodSession[]>(EMPTY_SESSIONS);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/vod/sessions")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: VodSession[]) => {
+        if (!cancelled) setSessions(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return { sessions, loaded };
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function ReelPreview({
+  vod,
+  sessionId,
+  sessions,
+  loaded,
+}: {
+  vod: VodMock;
+  sessionId: string;
+  sessions: VodSession[];
+  loaded: boolean;
+}) {
+  // The chosen session wins if it has a reel; otherwise the most
+  // recent rendered session takes over. Both let the operator preview
+  // older episodes without having to re-render.
+  const active =
+    sessions.find((s) => s.session_id === sessionId && s.has_reel) ??
+    sessions.find((s) => s.session_id === sessionId) ??
+    sessions.find((s) => s.has_reel);
+
+  if (!active) {
+    // No rendered session on disk yet. Show the static mock thumbnail
+    // with a "not rendered" badge so the layout is still demoable.
+    if (!loaded) {
+      // Initial fetch in flight — show a quiet placeholder rather than
+      // a hard "no reel" message, otherwise the badge would flash on
+      // every page load.
+      return (
+        <div
+          style={{
+            position: "relative",
+            aspectRatio: "16/9",
+            width: "100%",
+            background: T.bg,
+            border: `1px solid ${T.border}`,
+            borderRadius: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: T.text3,
+            fontFamily: T.mono,
+            fontSize: 11,
+          }}
+        >
+          checking for rendered sessions…
+        </div>
+      );
+    }
+    return (
+      <div style={{ position: "relative" }}>
+        <Thumbnail vod={vod} />
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            background: "rgba(0,0,0,0.75)",
+            color: T.text,
+            fontFamily: T.mono,
+            fontSize: 10,
+            letterSpacing: 1.4,
+            padding: "4px 8px",
+            borderRadius: 3,
+            border: `1px solid ${T.border}`,
+          }}
+        >
+          no reel rendered yet — run the VOD pipeline to populate out/sessions/
+        </div>
+      </div>
+    );
+  }
+
+  if (!active.has_reel) {
+    return (
+      <div
+        style={{
+          aspectRatio: "16/9",
+          width: "100%",
+          background: T.bg,
+          border: `1px solid ${T.border}`,
+          borderRadius: 8,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 6,
+          color: T.text2,
+          fontFamily: T.mono,
+          fontSize: 12,
+        }}
+      >
+        <div style={{ color: T.text, fontWeight: 600 }}>
+          session {active.session_id} — reel not rendered
+        </div>
+        <div style={{ color: T.text3, fontSize: 10 }}>
+          render.stitch + render.mix produce reel.mp4 under this session dir
+        </div>
+      </div>
+    );
+  }
+
+  // Real preview. The <video> element streams the file with native
+  // controls (play / pause / scrub / volume / fullscreen) and uses the
+  // generated thumbnail as the poster image.
+  return (
+    <div>
+      <video
+        controls
+        preload="metadata"
+        poster={active.has_thumb ? `/vod/${active.session_id}/thumb.jpg` : undefined}
+        src={`/vod/${active.session_id}/reel.mp4`}
+        style={{
+          display: "block",
+          width: "100%",
+          aspectRatio: "16/9",
+          background: "#000",
+          borderRadius: 8,
+          border: `1px solid ${T.border}`,
+        }}
+      >
+        Your browser does not support embedded video.
+      </video>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginTop: 6,
+          fontFamily: T.mono,
+          fontSize: 10,
+          color: T.text3,
+          letterSpacing: 0.5,
+        }}
+      >
+        <span>
+          {active.session_id} · {fmtBytes(active.reel_bytes)} · {active.has_thumb ? "thumb.jpg present" : "no thumb"}
+        </span>
+        <span>1080p · h264</span>
+      </div>
+    </div>
+  );
+}
+
+function SessionPicker({
+  sessions,
+  value,
+  onChange,
+}: {
+  sessions: VodSession[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  if (sessions.length === 0) return null;
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        fontFamily: T.mono,
+        fontSize: 11,
+        background: T.bg,
+        color: T.text,
+        border: `1px solid ${T.border}`,
+        borderRadius: 4,
+        padding: "6px 8px",
+        cursor: "pointer",
+        minWidth: 200,
+      }}
+      title="Pick a rendered session to preview"
+    >
+      {sessions.map((s) => (
+        <option key={s.session_id} value={s.session_id}>
+          {s.session_id}
+          {s.has_reel ? "" : " (no reel)"}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function EpisodePage({ vod }: { vod: VodMock }) {
+  // The chosen session drives the preview + download button. Defaults
+  // to the mock's hard-coded sessionId, but the operator can switch
+  // to any rendered session via the picker.
+  const { sessions, loaded } = useVodSessions();
+  const [pickedSession, setPickedSession] = useState<string>(vod.sessionId);
+  // Fall back to the most recent rendered session if the mock's
+  // sessionId doesn't have a reel yet — the mock's id is decorative.
+  const picked =
+    sessions.find((s) => s.session_id === pickedSession && s.has_reel) ??
+    sessions.find((s) => s.session_id === pickedSession) ??
+    sessions.find((s) => s.has_reel);
+  const downloadSessionId = picked?.session_id ?? null;
+  const downloadHref = downloadSessionId ? `/vod/${downloadSessionId}/reel.mp4` : null;
+
   return (
     <div
       style={{
@@ -401,14 +695,25 @@ export function EpisodePage({ vod }: { vod: VodMock }) {
         overflow: "hidden",
       }}
     >
-      <EpisodeHeader vod={vod} />
+      <EpisodeHeader
+        vod={vod}
+        downloadHref={downloadHref}
+        pickedSessionId={pickedSession}
+        onPickedSessionChange={setPickedSession}
+        sessions={sessions}
+      />
       <div
         className="vod-no-scroll"
         style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 20 }}
       >
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Thumbnail vod={vod} />
+            <ReelPreview
+              vod={vod}
+              sessionId={pickedSession}
+              sessions={sessions}
+              loaded={loaded}
+            />
             <UploadStrip />
             <div
               style={{

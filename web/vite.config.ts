@@ -20,6 +20,14 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/api/, ""),
         },
+        // VOD asset streaming — serves the rendered MP4 + thumbnail
+        // from out/sessions/<id>/. Same origin as the dashboard, so
+        // the <video> element can stream the file directly and the
+        // download button gets a clean relative URL.
+        "/vod": {
+          target: `http://${backend}`,
+          changeOrigin: true,
+        },
         // Live event stream — must be proxied as a WebSocket. `changeOrigin`
         // rewrites the Origin header to the backend's host so CORS-on-WS (if
         // any) sees a same-origin upgrade.
