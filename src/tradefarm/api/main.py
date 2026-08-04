@@ -27,6 +27,7 @@ from tradefarm.api.ws import router as ws_router
 from tradefarm.config import settings
 from tradefarm.orchestrator.scheduler import Orchestrator
 from tradefarm.risk.manager import BASE_MAX_POSITION_NOTIONAL_PCT
+from tradefarm.runtime.clock import now_utc
 from tradefarm.session import replay_query
 from tradefarm.storage import journal, repo
 from tradefarm.storage.db import SessionLocal, init_db
@@ -672,7 +673,13 @@ async def pnl_daily(days: int = 30) -> list[dict]:
         ).all()
 
     orch: Orchestrator = app.state.orchestrator
-    starting_total = len(orch.agents) * 1000.0
+    # B1 (round-6 audit): the denominator must read from settings so a
+    # non-default ``AGENT_STARTING_CAPITAL`` is reflected in the chart.
+    # Previously hardcoded to 1000.0, which silently zeroed out pnl_pct
+    # for anyone running the rig with the academy / capital knob raised.
+    starting_total = (
+        len(orch.agents) * float(getattr(settings, "agent_starting_capital", 1000.0))
+    )
     return [
         {
             "date": str(r.d),
@@ -796,3 +803,42 @@ async def list_orders(limit: int = 25) -> list[dict]:
         agent_id = AlpacaBroker.parse_agent_id(cid)
         out.append({**o, "agent_id": agent_id})
     return out
+
+
+@app.get("/fills/count")
+async def fills_count(
+    since: date | None = Query(
+        None,
+        description=(
+            "ISO date (YYYY-MM-DD). Counts Trade rows whose "
+            "executed_at >= since (00:00 UTC). Defaults to today. "
+            "Live-only: replay-tagged trades (session_id IS NOT NULL) "
+            "are excluded so a VOD session doesn't double-count."
+        ),
+    ),
+) -> dict:
+    """Count fills since a date — the real DB count, not the WS buffer cap.
+
+    The VOD "fills today" stat used to read ``useVodSessionLive.ts:218``
+    against ``liveFills.length`` which is the in-memory WS buffer (capped
+    to 20). After more than 20 fills roll through the buffer, the count
+    was wrong. This endpoint hits the DB directly so the number stays
+    accurate regardless of WS buffer size.
+    """
+    from tradefarm.storage.models import Trade
+
+    cutoff = since or date.today()
+    async with SessionLocal() as session:
+        count = (
+            await session.execute(
+                select(func.count(Trade.id)).where(
+                    Trade.executed_at >= cutoff,
+                    Trade.session_id.is_(None),
+                )
+            )
+        ).scalar_one()
+    return {
+        "count": int(count),
+        "since": cutoff.isoformat(),
+        "as_of": now_utc().isoformat(),
+    }

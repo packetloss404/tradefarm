@@ -599,3 +599,81 @@ async def test_session_totals_reflect_roster_equity(recap_db, monkeypatch):
     payload2 = await build_recap(orch2, session_factory=recap_db)
     assert payload2["session_total_equity"] == pytest.approx(2300.0)
     assert payload2["session_pnl_pct"] == pytest.approx(15.0)
+
+
+# ---------------------------------------------------------------------------
+# /pnl/daily — B1 regression: starting capital must come from settings, not
+# the hardcoded 1000.0. With a 2-agent roster and a non-default starting
+# capital of 500.0, an aggregate snapshot equity of 1100.0 should yield
+# (1100 - 1000) / 1000 * 100 = +10%, NOT (1100 - 1000) / 2000 * 100 = +5%.
+# ---------------------------------------------------------------------------
+
+
+async def test_pnl_daily_uses_settings_starting_capital(recap_db, monkeypatch):
+    """B1 (round-6 audit): /pnl/daily used to compute pnl_pct against a
+    hardcoded ``len(orch.agents) * 1000.0`` denominator. Setting
+    ``AGENT_STARTING_CAPITAL=500.0`` previously produced a doubled
+    denominator, halving the chart's pnl_pct for any non-default rig.
+
+    Drives the REAL route via httpx.AsyncClient against the real ``app``
+    object; the route reads ``app.state.orchestrator`` from the module-
+    level instance, so we inject our stub there. ``SessionLocal`` is
+    monkey-patched to the in-memory test factory. Using AsyncClient
+    (not TestClient) keeps the test fully async — pytest-asyncio owns
+    the loop and the engine's aiosqlite connection stays bound to it.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from httpx import ASGITransport, AsyncClient
+
+    from tradefarm.config import settings
+    from tradefarm.storage.models import PnlSnapshot
+
+    import tradefarm.api.main as main_mod
+
+    monkeypatch.setattr(settings, "agent_starting_capital", 500.0)
+    monkeypatch.setattr(main_mod, "SessionLocal", recap_db)
+
+    today = _date.today()
+    async with recap_db() as s:
+        s.add(
+            PnlSnapshot(
+                agent_id=1,
+                equity=550.0,
+                realized_pnl=0.0,
+                unrealized_pnl=0.0,
+                taken_at=_dt.combine(today, _dt.min.time()),
+            )
+        )
+        s.add(
+            PnlSnapshot(
+                agent_id=2,
+                equity=550.0,
+                realized_pnl=0.0,
+                unrealized_pnl=0.0,
+                taken_at=_dt.combine(today, _dt.min.time()),
+            )
+        )
+        await s.commit()
+
+    # Inject the stub orchestrator onto the REAL app instance (the route
+    # resolves ``app.state.orchestrator`` against the module-level ``app``).
+    main_mod.app.state.orchestrator = _make_orch(
+        agents=[(1, "agent-001", 550.0), (2, "agent-002", 550.0)]
+    )
+    try:
+        transport = ASGITransport(app=main_mod.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/pnl/daily?days=1")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert len(body) == 1
+        # 1100 equity vs (2 × 500) = 1000 → +10.0%, NOT +5.0%.
+        assert body[0]["pnl_pct"] == pytest.approx(10.0)
+    finally:
+        # Clean up the state injection so other tests that import the
+        # module aren't surprised.
+        try:
+            del main_mod.app.state.orchestrator
+        except AttributeError:
+            pass
