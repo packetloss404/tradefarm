@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type BacktestJob, type BacktestResult } from "../api";
+import { useFocusTrap } from "../lib/useFocusTrap";
+
+const BACKTEST_TITLE_ID = "backtest-modal-title";
 
 type SortKey = "symbol" | "sharpe" | "total_return_pct" | "cagr_pct" | "max_drawdown_pct" | "win_rate" | "n_trades";
 
@@ -21,6 +24,7 @@ export function BacktestModal({ onClose }: { onClose: () => void }) {
   const [sortKey, setSortKey] = useState<SortKey>("sharpe");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
   const pollRef = useRef<number | null>(null);
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -103,17 +107,28 @@ export function BacktestModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="w-[900px] max-w-[95vw] max-h-[90vh] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={BACKTEST_TITLE_ID}
+        tabIndex={-1}
+        className="w-[900px] max-w-[95vw] max-h-[90vh] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
           <div>
-            <div className="text-lg font-semibold">Backtest Launcher</div>
+            <div id={BACKTEST_TITLE_ID} className="text-lg font-semibold">Backtest Launcher</div>
             <div className="text-[11px] uppercase tracking-wider text-zinc-500">
               walk-forward on ~2y of EOD bars · LstmAgent rule (max_prob ≥ 0.40)
             </div>
           </div>
-          <button onClick={onClose} className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700">esc</button>
+          <button
+            onClick={onClose}
+            aria-label="Close backtest modal"
+            className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+          >
+            esc
+          </button>
         </header>
 
         <div className="space-y-4 p-5">

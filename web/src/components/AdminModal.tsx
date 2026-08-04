@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { api, type AdminConfig, type AdminPatch } from "../api";
 import { BacktestModal } from "./BacktestModal";
+import { useFocusTrap } from "../lib/useFocusTrap";
+
+const ADMIN_TITLE_ID = "admin-modal-title";
 
 export function AdminModal({ onClose }: { onClose: () => void }) {
   const [backtestOpen, setBacktestOpen] = useState(false);
@@ -10,6 +13,7 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
   const [curriculumBusy, setCurriculumBusy] = useState(false);
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -19,14 +23,14 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
 
   if (error) {
     return (
-      <Shell onClose={onClose}>
+      <Shell onClose={onClose} titleId={ADMIN_TITLE_ID} dialogRef={dialogRef}>
         <div className="p-5 text-sm text-(--color-loss)">Failed to load admin config: {(error as Error).message}</div>
       </Shell>
     );
   }
   if (!data) {
     return (
-      <Shell onClose={onClose}>
+      <Shell onClose={onClose} titleId={ADMIN_TITLE_ID} dialogRef={dialogRef}>
         <div className="p-5 text-sm text-zinc-500">Loading…</div>
       </Shell>
     );
@@ -85,13 +89,19 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
   const modelPlaceholder = data._meta.model_defaults[d.llm_provider] ?? "";
 
   return (
-    <Shell onClose={onClose}>
+    <Shell onClose={onClose} titleId={ADMIN_TITLE_ID} dialogRef={dialogRef}>
       <header className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
         <div>
-          <div className="text-lg font-semibold">Admin</div>
+          <div id={ADMIN_TITLE_ID} className="text-lg font-semibold">Admin</div>
           <div className="text-[11px] uppercase tracking-wider text-zinc-500">runtime config · persists to .env</div>
         </div>
-        <button onClick={onClose} className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700">esc</button>
+        <button
+          onClick={onClose}
+          aria-label="Close admin modal"
+          className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+        >
+          esc
+        </button>
       </header>
 
       <div className="space-y-5 p-5">
@@ -322,11 +332,26 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function Shell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+function Shell({
+  children,
+  onClose,
+  titleId,
+  dialogRef,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  titleId?: string;
+  dialogRef?: React.RefObject<HTMLDivElement | null>;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="w-[640px] max-w-[92vw] max-h-[88vh] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="w-[640px] max-w-[92vw] max-h-[88vh] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {children}
