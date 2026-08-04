@@ -31,6 +31,7 @@ KNOWN_STRATEGIES = (
     "momentum_sma20",  # legacy placeholder — pre-0.7.0; orchestrator no longer assigns
     "momentum_12_1",  # cross-sectional 12-1 month momentum (default since 0.7.0)
     "mean_reversion_bb",  # 20-period Bollinger Bands, ±2σ extremes
+    "rsi2",  # Connors' 2-period RSI, deep-oversold/overbought
     "lstm_v1",
     "lstm_llm_v1",
 )
