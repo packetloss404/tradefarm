@@ -1,5 +1,8 @@
 # Broadcast OS
 
+> **Status: shipped 2026-06-18** (round 6, audit C6; `BroadcastSuite` is
+> the production shape).
+
 The Broadcast OS is TradeFarm's presentation layer between raw trading events
 and the stream UI. Raw events say what happened; broadcast moments say what is
 worth producing for an audience.

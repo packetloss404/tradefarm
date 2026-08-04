@@ -82,32 +82,57 @@ src/tradefarm/
 │                    #   (similar past setups), features (19 engineered),
 │                    #   lstm_model (torch), lstm_train (CLI),
 │                    #   llm_overlay + providers, backtest
-├── api/             # FastAPI app, admin router, ws endpoint, events bus,
-│                    #   backtest router
+├── api/             # FastAPI app, admin + backtest + audience + market_clock
+│                    #   + recap + stream_control routers, ws endpoint,
+│                    #   events bus
 ├── data/            # EODHD client (with parquet cache), symbol universe
 ├── execution/       # Broker protocol, SimulatedBroker, AlpacaBroker,
-│                    #   VirtualBook, OrderReconciler
+│                    #   VirtualBook (Decimal money), OrderReconciler
 ├── market/          # NYSE calendar / RTH helper
-├── orchestrator/    # tick loop, scheduler, reconciler loop, curriculum loop
+├── orchestrator/    # tick loop + scheduler + reconciler + curriculum +
+│                    #   BroadcastSuite (AutoDirector, StreakWatcher,
+│                    #   CommentaryLoop, PredictionsBoard,
+│                    #   AudienceCoordinator, YouTubeChatPoller) +
+│                    #   broadcast_os / scheduler / recap / decision_feed
+├── render/          # VOD pipeline: headless playwright capture, stitch
+│                    #   (ffmpeg concat), mix (audio bed + voiceover)
 ├── risk/            # per-symbol cap, portfolio SL/TP/time-stop/trailing
-└── storage/         # SQLAlchemy async models + repo + journal
+├── runtime/         # cross-cutting helpers: clock (replay-aware), http
+│                    #   (shared httpx.AsyncClient), llm_budget (daily USD
+│                    #   ceiling), money (Decimal coercion), session_context
+├── script/          # VOD: LLM-generated narration from selected beats
+├── session/         # VOD headless driver: run, beats, manifest,
+│                    #   replay, replay_query, closing_snapshot
+├── storage/         # SQLAlchemy async models + repo + journal
+├── thumb/           # VOD: thumbnail frame grab + overlay
+├── tools/           # one-shot helpers (youtube_auth refresh-token capture)
+├── tts/             # VOD: streaming TTS via OpenAI-compatible endpoint
+├── yt/              # VOD: chunked resumable upload + metadata
+├── config.py        # pydantic-settings (Settings)
+└── __init__.py
 web/                 # Vite + React 19 + Tailwind v4 dashboard
-                     #   src/dash/   — new multi-page dashboard (Today,
-                     #                 Episodes, Research, Admin) + tweaks panel
+                     #   src/dash/   — multi-page dashboard (Today,
+                     #                 Episodes, Research, Admin) +
+                     #                 tweaks panel + theme tokens
+                     #                 (studio-dark / studio-light / amber-crt)
                      #   src/vod/    — VOD Studio (Beat picker, Pipeline,
                      #                 Session control, Episode review)
                      #   src/{App,components,hooks}/  — legacy single-page UI
                      #                 (still mounted at #legacy)
 stream/              # Tauri 2 broadcast app (1920x1080 multi-scene rotator
-                     #   for OBS Window Capture, with Web Audio cues)
+                     #   for OBS Window Capture, with Web Audio cues).
+                     #   src/broadcast/  — rotator + scenes (Hero, Leaderboard,
+                     #                      Brain, Strategy, Recap) +
+                     #                      v1/ (sports-broadcast layout)
 tests/               # pytest — virtual book, journal, ranks, retrieval,
-                     #   curriculum, risk-exits
+                     #   curriculum, risk-exits, render, tts, yt, runtime
 scripts/             # make_favicon.py
 docs/                # vod-build-roadmap.md, vod-pivot.md,
                      #   session-runner-spec.md, broadcast_os.md
 dev/                 # design notes — feature-backlog.md, audit-findings.md,
                      #   _archive/ (plan_product.md, plan_tech.md,
-                     #   PROJECT_PLAN.md)
+                     #   PROJECT_PLAN.md, design_handoffs_2026-04/,
+                     #   screenshot_*.py)
 ```
 
 **Decision flow per tick**:
@@ -220,33 +245,62 @@ Header → **Admin**. Live-editable sections:
 | Section        | Controls                                                    |
 |----------------|-------------------------------------------------------------|
 | AI Control     | Master on/off switch                                        |
-| Brain Provider | Anthropic ↔ MiniMax, API key (masked), model override       |
+| Brain Provider | Anthropic ↔ MiniMax, API key (masked), model override, base URL |
 | Tuning         | Min LSTM confidence, tick interval, outside-RTH toggle      |
 | Strategies     | Per-strategy freeze toggles with live agent counts          |
-| Execution      | `simulated` ↔ `alpaca_paper`                                |
+| Execution      | `simulated` ↔ `alpaca_paper` (set in `.env`; requires restart) |
 | Backtest       | Launch walk-forward backtest, sortable results              |
+| Academy        | Rank multipliers + min-trades / min-win-rate / min-Sharpe thresholds; eval interval; demote drawdown + consecutive-loss + cap |
+| Risk           | Stop-loss, take-profit, trailing-stop, max-hold-days        |
+| Retrieval      | Top-K similar setups, on/off toggle                         |
+| VOD Pipeline   | Per-stage en/disable (read-only summary; stage launchers live in VOD Studio) |
+| Danger zone    | Clear `.env` overrides, force-resync `tradefarm.db`         |
 
-Changes are applied live and persisted to `.env`.
+Changes are applied live and persisted to `.env`. Secrets (API keys, tokens)
+are masked on GET; the masked sentinel `••••` is never POSTed back, so typing
+into a key field does not clobber the real value.
 
 ## Key API endpoints
 
 | Endpoint                              | Purpose                            |
 |---------------------------------------|------------------------------------|
 | `GET /health`                         | Liveness                           |
+| `GET /readiness`                      | DB + scheduler + last-tick freshness (503 on degraded) |
+| `GET /metrics`                        | Prometheus text exposition         |
 | `GET /account`                        | Aggregate KPIs                     |
 | `GET /agents`                         | Full 100-agent snapshot            |
 | `GET /agents/{id}/trades?limit=N`     | Per-agent trade history            |
+| `GET /agents/{id}/notes?limit=N`      | Per-agent journal notes            |
+| `GET /agents/{id}/retrieval-preview`  | Top-K similar past setups + outcomes |
+| `GET /agents/{id}/academy`            | Per-agent rank + history           |
+| `GET /agents/{id}/promotions`         | Per-agent promotion log            |
 | `GET /pnl/daily?days=N`               | Daily equity rollup                |
-| `GET /pnl/by-strategy[/timeseries]`   | Per-strategy attribution           |
+| `GET /pnl/by-strategy`                | Per-strategy attribution           |
+| `GET /pnl/by-strategy/timeseries`     | Per-strategy equity over time      |
 | `GET /orders?limit=N`                 | Recent Alpaca paper orders         |
 | `GET /llm/stats`                      | LLM call vs skip counters          |
+| `GET /academy/ranks`                  | All 100 agent ranks                |
+| `GET /academy/promotions`             | Promotion ledger                   |
+| `POST /academy/evaluate`              | Force a rank-evaluation pass       |
+| `GET /market/clock`                   | RTH phase + next open/close        |
+| `GET /recap/today`                    | Live read for the Today dashboard surface |
+| `GET /audience/pin-requests`          | Pending audience pin requests      |
+| `GET /audience/predictions`           | Predictions board state            |
+| `GET /backtest`                       | List backtest jobs                 |
+| `POST /backtest/run`                  | Kick off backtest job              |
+| `GET  /backtest/{job_id}`             | Backtest progress + results        |
+| `DELETE /backtest/{job_id}`           | Cancel a running backtest          |
+| `POST /stream/cmd`                    | Push command to the broadcast app  |
 | `POST /tick`                          | Force a tick                       |
 | `GET /admin/config`                   | Runtime config (secrets masked)    |
 | `POST /admin/config`                  | Patch config, persist to `.env`    |
 | `POST /admin/toggle-ai?enabled=bool`  | Master kill switch                 |
-| `POST /backtest/run`                  | Kick off backtest job              |
-| `GET  /backtest/{job_id}`             | Backtest progress + results        |
 | `WS   /ws`                            | Live event stream                  |
+
+Mutating endpoints (`POST`/`PUT`/`PATCH`/`DELETE`) require the
+`X-TradeFarm-Token: <API_SHARED_SECRET>` header when the backend is bound
+to a non-loopback host; loopback stays open for local dev. See
+[CLAUDE.md Gotcha 12](./CLAUDE.md) for the fail-fast bind rule.
 
 ## Streaming setup
 

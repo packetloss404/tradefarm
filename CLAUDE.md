@@ -5,7 +5,7 @@ Guidance for Claude Code when working on this repo.
 ## Project in one sentence
 
 100-agent paper-trading sandbox for US equities. Each agent runs one of three
-strategies (`momentum_sma20`, `lstm_v1`, `lstm_llm_v1`). Stack: Python 3.13 +
+strategies (`momentum_sma20`, `lstm_v1`, `lstm_llm_v1`). Stack: Python 3.12 +
 FastAPI + SQLAlchemy async + SQLite backend, Vite + React 19 + Tailwind v4
 frontend, PyTorch LSTMs, Claude or MiniMax for the LLM overlay.
 
@@ -162,6 +162,44 @@ control it from the workstation:
     stays `False`. Note this is orthogonal to `API_SHARED_SECRET` (Gotcha 12,
     which protects mutating endpoints regardless of Origin) — CORS only
     governs which browser origins may read responses.
+17. **Money is `Decimal` end-to-end (0.6.0).** `VirtualBook.cash`,
+    `avg_price`, `realized_pnl`, `qty` are all `Decimal`; inputs are
+    coerced at the book boundary via `runtime/money.D()`, math is
+    exact (epsilon flat-guards become exact `== Decimal(0)`). Every
+    JSON/WS/REST output boundary converts back to `float` via
+    `runtime/money.to_float()` — adversarial review at 0.6.0 found
+    no serialization leak. Storage columns are
+    `Numeric(20, 6, asdecimal=True)`. `backtest.py` (pure numpy) and
+    `replay_query.py` (float JSON snapshots) intentionally stay
+    `float`.
+18. **`BroadcastSuite` owns the six presentation sidecars
+    (`AutoDirector`, `StreakWatcher`, `CommentaryLoop`,
+    `PredictionsBoard`, `AudienceCoordinator`, `YouTubeChatPoller`)
+    plus the broadcast arbiter; hangs off
+    `orchestrator._broadcast_suite`.** Tests that construct bare
+    `Orchestrator(...)` no longer pollute module globals (was the
+    pre-0.6.0 C15 audit finding). Start/stop ordering, dependency
+    order, idempotency, and await-don't-swallow semantics are all
+    preserved across the extraction.
+19. **`BroadcastSuite.start()` is `await`ed.** A boot-time failure
+    propagates instead of being swallowed by a discarded
+    `create_task`. Each sidecar's inner `_run()` loop has a
+    crash-logging done-callback (no bare unretrieved-task warnings).
+    See audit round 6 C6 in `dev/audit-findings.md`.
+20. **`VirtualBook` is flat-only (0.6.0).** A sell with
+    `qty > held_qty` is clamped to the held position; the long→short
+    "flip" path is no longer reachable. The reconciler
+    reverses-and-reapplies the optimistic fill math to recover
+    pre-fill state (`apply_reconciled_fill(...)` from round 2 still
+    does the recovery; the flat-only invariant just makes the
+    long→short corner case impossible at the input boundary).
+21. **`LlmParseError` is a distinct exception class (0.6.0).**
+    Pydantic v2 `_LlmDecisionModel` validates `bias`/`predictive`/`stance`
+    as `Literal` enums, clamps `size_pct` to `[0, 0.25]`, truncates
+    `reason` to 120 chars. Parse failures are NOT conflated with
+    provider call failures — `LlmParseError` is a separate subclass
+    so callers (and the daily-budget gate) can decide whether to
+    retry, skip, or hard-fail independently of upstream 5xx / 429.
 
 ## YouTube chat setup
 
@@ -233,8 +271,11 @@ the Google Cloud Console (free).
 - TypeScript: strict mode, no `any`. Components in
   `web/src/components/*.tsx`, hooks in `web/src/hooks/*.ts`. SWR for polling
   REST, `useEventFeed` for live WS slices.
-- Tailwind: dark-only theme. Custom colors `--color-profit` (emerald),
-  `--color-loss` (rose), `--color-wait` (zinc).
+- Tailwind: multi-theme via `web/src/dash/tokens.ts` — three themes
+  (`studio-dark`, `studio-light`, `amber-crt`) selectable from the
+  tweaks panel; shared custom-color tokens
+  (`--color-profit`/`--color-loss`/`--color-wait`) defined per
+  theme. Add a new token in all three palettes, not just one.
 - Tests live in `tests/`. Keep them deterministic (no network, no real LLM).
 
 ## Don't

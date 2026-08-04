@@ -6,6 +6,15 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
+**0.6.0 shipped 2026-06-18.** Correctness-flavor release — every
+senior-review top-10 issue closed, money is `Decimal` end-to-end, the
+orchestrator is no longer a god object, security is correct by default,
+and the LLM surface is schema-validated. CI gates mypy, ruff, and
+ESLint. 556 tests passing across 72 files (up from 31 at 0.5.0). See
+[CHANGELOG.md](./CHANGELOG.md) for the full release notes. The current
+focus is operational hardening + the post-0.6.0 audit findings
+(catalogued in `REPO_REVIEW.md` + `BACKLOG.md`).
+
 Status legend:
 
 - `now`        — in flight or up next (≤ 1–2 weeks)

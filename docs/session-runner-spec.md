@@ -1,6 +1,9 @@
 # Session Runner — scoping (Phase 1, step 1 of the VOD pivot)
 
-Status: scoping. No code yet. Companion to `docs/vod-pivot.md`.
+> **Status: design record. Code shipped 2026-05-17**
+> (`src/tradefarm/session/` — `run.py`, `beats.py`, `manifest.py`,
+> `replay.py`, `replay_query.py`, `closing_snapshot.py`).
+> Companion to `docs/vod-pivot.md`.
 
 ## Goal
 

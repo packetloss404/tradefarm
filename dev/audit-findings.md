@@ -100,7 +100,7 @@ Status: **FIXED** (committed), **FIX-NEXT** (next session), **DOC**
 - `web/components/BacktestModal.tsx` poll interval leaks on backend disconnect
 - `dash/Dashboard.tsx` style-injection survives HMR but body attr doesn't
 - `vod/SessionControl` ManifestPanel "fills today" reads ws-buffer cap, not real count
-- `stream/AgentWorldXL` 60Hz rAF triggers full SVG re-render of 100 sprites
+- ~~`stream/AgentWorldXL` 60Hz rAF triggers full SVG re-render of 100 sprites~~ — **FIXED (round 6, C5)**: rAF mutates `camGroupRef.setAttribute("transform", …)` + cloud ellipse `cx` directly, zero `setState` per frame.
 - `stream/RecapScene` remounts on every scene rotation, restarts sequence
 - `web/api.ts` SWR errorRetryInterval not set → single 5xx white-screens dashboard
 - 30+ more — see individual audit reports in agent traces
@@ -115,14 +115,16 @@ Status: **FIXED** (committed), **FIX-NEXT** (next session), **DOC**
 
 ---
 
-## Top 10 by money-loss / security potential (post-rounds-2-4 status)
+## Top 10 by money-loss / security potential (post-0.6.0 status)
 
-All ten items below have been addressed in rounds 2-4. List preserved
-to show the original priority order against current status.
+All ten items from the original (round-1) top-10 have been closed across
+rounds 2-8. List preserved for the audit trail:
 
 1. **C7** — apply_fill_delta short/flip — **FIXED** (round 2,
-   renamed `apply_reconciled_fill`)
-2. **H17/H18/H19** — RiskManager — **FIXED** (round 2)
+   renamed `apply_reconciled_fill`; reinforced by round-6 C1 flat-only
+   invariant that makes the flip path unreachable)
+2. **H17/H18/H19** — RiskManager cap + trailing peak + time-stop —
+   **FIXED** (round 2)
 3. **C11** — live queries mix replay rows — **FIXED** (round 2)
 4. **C13** — Trade dedupe — **FIXED** (round 2, `broker_order_id` UNIQUE)
 5. **C14** — YT upload in-memory + no 401 retry — **FIXED** (round 3)
@@ -130,17 +132,37 @@ to show the original priority order against current status.
 7. **C9/C10** — curriculum race + promotion dedupe — **FIXED** (rounds 2 + 3)
 8. **H10/H11** — stream scene-ready + `replayNow()` — **FIXED** (round 4)
 9. **H28** — auth on destructive endpoints — **FIXED** (round 3,
-   `API_SHARED_SECRET`)
-10. **C16** — test coverage — **PARTIAL** (significant new coverage in
-    rounds 2-4 but `alpaca_broker`, `lstm_llm_agent`, `audience`,
-    `backtest` CLI, `eodhd`, and frontend remain untested)
+   `API_SHARED_SECRET`; reinforced by round-6 C3 fail-fast bind + C4
+   default-safe CORS)
+10. **C16** — test coverage — **PARTIAL** (556 tests / 72 files at
+    0.6.0; `alpaca_broker`, `lstm_llm_agent`, `audience`, `backtest`
+    CLI, `eodhd`, and the frontend still have no test infra)
 
-Next priority surface (carried forward / new):
+**Post-0.6.0 priority surface (the next top-10 candidates):**
 
-- H6 — `commentary_loop` overlay-per-tick recreation defeats prompt cache
-- H12 — multiple `/ws` per tab (lift `useStreamState` into a context)
+- H6 — `commentary_loop` recreates LLM overlay each 45s tick (defeats
+  keepalive + prompt cache)
+- H12 — multiple `/ws` per tab (lift `useStreamState` into a context;
+  only half-fixed in round 4)
 - H14 — env-var shadowing hides admin `.env` writes after restart
-- MED items unchanged from round 1
+- Backend `pnl_daily` denominator hardcoded to 1000.0 (ignores
+  `agent_starting_capital`)
+- Backend two LLM hot paths (`llm_providers.py`,
+  `commentary_loop.py`) still spin a fresh `httpx.AsyncClient` per
+  call (mirror the `eodhd.py:72-74` pattern)
+- Backend MiniMax provider has no retry on transient 5xx/429 and
+  accepts any `minimax_base_url`
+- Backend `_recent_fills_from_orch` returns open positions, not
+  recent fills → cost gate misfires on flat markets with positions
+  still open from earlier fills
+- Frontend `RecentFillsRail` age label uses `Date.now()` only on a
+  new fill (5-min-old fill reads "0s")
+- Frontend mock data ships in the prod bundle
+  (`dash/mockData.ts` + `vod/mockData.ts`)
+- Frontend 800ms `useVodSessionLive` heartbeat re-renders the whole
+  tree 1.25×/sec to power a cursor-blink
+
+See `REPO_REVIEW.md` + `BACKLOG.md` for the full 2026-07-17 audit list.
 
 ---
 
@@ -195,6 +217,54 @@ defensive guards on `slice_range` empty frames.
 C15 (broadcast scheduler/ledger install on start, uninstall on stop);
 H7, H10, H11 (`replayNow()` shim), H13, H31 (CI, ffmpeg docs).
 
+### Round 5 — `1031652` (production polish + runbook)
+
+Alpaca SDK calls offloaded to `asyncio.to_thread` so a 500ms broker
+round-trip no longer pauses the tick loop. Per-book reconciled-id LRU
+cap (10k). Shared `httpx.AsyncClient` singleton (`runtime/http.py`).
+Daily LLM spend ceiling (`runtime/llm_budget.py`,
+`llm_daily_budget_usd`). New `/metrics` (Prometheus) and `/readiness`
+endpoints. Postgres compatibility in `storage/db.py` with
+`schema_version` migration ledger. `RUNBOOK.md` rewrite for round-5
+surface. 22 new test files.
+
+### Round 6 — `941150c` (audit top-5)
+
+C1 flat-only invariant on `VirtualBook` — sells are clamped to held
+qty, long→short flip is unreachable, reconciler reverses-and-reapplies
+to recover pre-fill state. C2 `broker_order_id` dedup is live (column +
+UNIQUE + idempotent writes end-to-end). C3 fail-fast on insecure bind
+(`_assert_secure_bind()` refuses to start without
+`api_shared_secret` on a non-loopback host). C4 default-safe CORS
+(loopback + Tauri only; RFC-1918 LAN opt-in via `CORS_ALLOW_LAN`).
+C5 `AgentWorldXL` 60fps loop mutates `camGroupRef` + cloud ellipse
+`cx` directly — zero `setState` per frame.
+
+### Round 7 — `0aadc52` (audit #6-#10)
+
+C6 `BroadcastSuite` owns the six sidecars + broadcast arbiter; `start()`
+is awaited so a boot-time failure propagates instead of being
+swallowed by a discarded `create_task`. C7 `ScheduledMoment.state` is
+a real `Literal["active","queued","preempted"]`. C8 migration hardening
+(check-then-add + `IF NOT EXISTS` on Postgres + `schema_version`
+stamping). C9 atomic fill persistence (`record_fill_atomic()` writes
+the Trade row and re-syncs positions in one transaction). C10 LLM
+parse validation — Pydantic v2 `_LlmDecisionModel` with `Literal`
+enums, `size_pct` clamped `[0, 0.25]`, `LlmParseError` distinct from
+call failures. C11 dead UI controls disabled with "coming soon"
+tooltips.
+
+### Round 8 — `be7b136` (deferred roadmap)
+
+Money is `Decimal` end-to-end (`runtime/money.D()` at the book
+boundary, `to_float()` at the JSON/WS/REST edge; sub-cent money grid
+with banker's rounding; storage columns
+`Numeric(20, 6, asdecimal=True)`). `BroadcastSuite` extraction
+(Orchestrator no longer a god object; six sidecars + arbiter hang off
+`orchestrator._broadcast_suite`). CI gates mypy + ruff + ESLint
+(`[tool.mypy]` block, flat ESLint configs, `npm run lint` in both
+frontends).
+
 ---
 
 ## New gotchas surfaced (folded into CLAUDE.md)
@@ -207,6 +277,33 @@ H7, H10, H11 (`replayNow()` shim), H13, H31 (CI, ffmpeg docs).
   `asyncio.Lock`
 - **Gotcha #15** — Broadcast scheduler / recap ledger install on
   `start_background()`, NOT in `__init__`
+- **Gotcha #16** — CORS is default-safe + env-driven
+  (`build_cors_origin_regex(settings)`); loopback + Tauri only by
+  default, RFC-1918 LAN ranges opt-in via `CORS_ALLOW_LAN=true`
+- **Gotcha #17** — Money is `Decimal` end-to-end. Coerce at the book
+  boundary via `runtime/money.D()`; convert back to `float` at the
+  JSON/WS/REST edge via `runtime/money.to_float()`. Sub-cent money
+  grid (4 dp) with banker's rounding. Storage columns are
+  `Numeric(20, 6, asdecimal=True)`.
+- **Gotcha #18** — `BroadcastSuite` owns the six presentation sidecars
+  (`AutoDirector`, `StreakWatcher`, `CommentaryLoop`,
+  `PredictionsBoard`, `AudienceCoordinator`, `YouTubeChatPoller`) plus
+  the broadcast arbiter; hangs off `orchestrator._broadcast_suite`.
+  Tests can construct bare `Orchestrator(...)` without polluting
+  module globals.
+- **Gotcha #19** — `BroadcastSuite.start()` is `await`ed. A boot-time
+  failure propagates instead of being swallowed by a discarded
+  `create_task`. Each sidecar's inner `_run()` loop has a
+  crash-logging done-callback.
+- **Gotcha #20** — `VirtualBook` flat-only invariant. Sells with
+  `qty > held_qty` are clamped to the held position; the long→short
+  flip path is unreachable. Reconciler reverses-and-reapplies the
+  optimistic fill math to recover pre-fill state.
+- **Gotcha #21** — `LlmParseError` is a distinct exception class. Pydantic
+  v2 `_LlmDecisionModel` validates `bias`/`predictive`/`stance` as
+  `Literal` enums, clamps `size_pct` to `[0, 0.25]`, truncates
+  `reason` to 120 chars. Parse failures are not conflated with call
+  failures.
 
 ## New deferred items (not yet ticketed)
 
@@ -216,4 +313,6 @@ H7, H10, H11 (`replayNow()` shim), H13, H31 (CI, ffmpeg docs).
   if env was set in shell; warn on boot
 - `H6` — `commentary_loop` recreates LLM overlay each 45s tick (still
   defeats keepalive + prompt cache)
-- All MED / LOW items unchanged from round 1.
+- `AgentWorldXL` 60Hz re-render MED item closed in round 6 C5 (now
+  marked FIXED above). All other MED / LOW items unchanged from
+  round 1.
