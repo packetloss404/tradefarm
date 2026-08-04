@@ -9,7 +9,131 @@ commit on GitHub.
 
 ## [Unreleased]
 
-(Nothing pending — see [0.5.0] below.)
+- None yet.
+
+---
+
+## [0.6.0] — 2026-06-18
+
+A correctness-flavor release: every high-priority finding from the
+2026-06 senior staff review and the round-5 audit is now landed. Money
+is exact (`Decimal` end-to-end), the orchestrator is no longer a god
+object, security is correct by default, and the LLM surface is
+schema-validated. CI gates mypy, ruff, and ESLint. Test count: 556
+passing across 72 files (up from 31 at 0.5.0).
+
+### Added — Round 5 production polish (`1031652`, 2026-05-26)
+
+- **Alpaca SDK offloaded to threads.** `execution/alpaca_broker.py`
+  now wraps every blocking SDK call in `asyncio.to_thread` so a 500ms
+  broker round-trip no longer pauses the tick loop.
+- **Per-book reconciled-id LRU cap** (10k entries) so a multi-day
+  broadcast can't OOM the reconciler.
+- **Shared `httpx.AsyncClient` singleton** (`runtime/http.py`) with
+  HTTP/2 keepalive — closed in `Orchestrator.stop_background`. Wired
+  through EODHD; the two LLM-provider hot paths still need migration.
+- **Daily LLM spend ceiling** (`llm_daily_budget_usd`, default 0=off;
+  `runtime/llm_budget.py`). Once tripped, agents fall back to LSTM-only
+  with `reason="llm budget exhausted"`. Resets at UTC midnight.
+- **Prometheus metrics endpoint** `GET /metrics` exposing
+  `tradefarm_llm_calls_total`, `llm_skips_total`, `llm_budget_spent_usd`,
+  `llm_budget_blocked_total`, `last_tick_timestamp_seconds`,
+  `notes_this_tick`, `outcomes_this_tick`.
+- **Readiness endpoint** `GET /readiness` returns 503 + `failed_checks`
+  when DB, scheduler, or last-tick freshness is degraded.
+- **Postgres compatibility** in `storage/db.py` — dialect detection
+  via `engine.dialect.name`; `ADD COLUMN` guarded with check-then-add
+  and Postgres `IF NOT EXISTS`; a `schema_version` table records
+  applied migrations.
+- **RUNBOOK.md rewrite** for round-5 surface — fail-fast bind, secrets,
+  database recovery, VOD pipeline failures, split-machine topology.
+- **Author-scale test suite** — 22 new test files across
+  `tests/execution/`, `tests/runtime/`, `tests/storage/`,
+  `tests/audit_round*`, `tests/agents/test_llm_parse.py`,
+  `tests/orchestrator/test_broadcast_*`, `tests/yt/`, `tests/tts/`,
+  `tests/script/`, `tests/data/`.
+
+### Fixed — Audit top-5 (`941150c`, 2026-06-18)
+
+- **C1 — Flat-only invariant on `VirtualBook`.** A sell with
+  `qty > held_qty` is clamped to the held position; the long→short
+  "flip" path is no longer reachable. Reconciler reverses-and-reapplies
+  the optimistic fill math to recover pre-fill state.
+- **C2 — `broker_order_id` dedup is now live.** `record_trade(…,
+  broker_order_id=)` writes the column; a second write hits the
+  `uq_trades_broker_order_id` UNIQUE constraint and is swallowed
+  (idempotent). Reconciler, in-tick fill, and `record_fill_atomic` all
+  propagate `broker_order_id` end-to-end.
+- **C3 — Fail-fast on insecure bind.** `_assert_secure_bind()` aborts
+  startup if uvicorn binds a non-loopback host and `api_shared_secret`
+  is empty. Refuses to expose `/admin/config`, `/tick`, `/backtest/run`
+  to the LAN silently.
+- **C4 — Default-safe CORS.** Loopback + Tauri only by default.
+  RFC-1918 LAN ranges opt-in via `CORS_ALLOW_LAN=true`; exact
+  origins via `CORS_ALLOW_ORIGINS` CSV.
+- **C5 — `AgentWorldXL` 60fps loop no longer re-renders React.**
+  rAF mutates `camGroupRef.setAttribute("transform", …)` and cloud
+  ellipse `cx` attributes directly; zero `setState` per frame.
+
+### Fixed — Audit #6-#10 (`0aadc52`, 2026-06-18)
+
+- **C6 — Sidecar startup is awaited.** `BroadcastSuite` owns the
+  six presentation sidecars (`AutoDirector`, `StreakWatcher`,
+  `CommentaryLoop`, `PredictionsBoard`, `AudienceCoordinator`,
+  `YouTubeChatPoller`) plus the broadcast arbiter. `start()` is
+  awaited, so a boot-time failure propagates instead of being
+  swallowed by a discarded `create_task`. `attach_crash_logger()`
+  supervises every spawned loop.
+- **C7 — `ScheduledMoment.state` is real.** `getattr(sm, "state",
+  "active")` removed; the field is now a `Literal["active",
+  "queued", "preempted"]` populated by the scheduler.
+- **C8 — Migration hardening.** `_ensure_columns` is check-then-add
+  with `IF NOT EXISTS` on Postgres; `_safe_index` no-ops when the
+  column is missing; `schema_version` table stamped once.
+- **C9 — Atomic fill persistence.** `record_fill_atomic()` writes
+  the Trade row and re-syncs the agent's positions in one
+  transaction, with an explicit `flush()` so the
+  `broker_order_id` UNIQUE violation surfaces inside the try.
+- **C10 — LLM parse validation.** Pydantic v2 `_LlmDecisionModel`
+  with `Literal` enums for `bias`/`predictive`/`stance`; `size_pct`
+  clamped to `[0, 0.25]`; `reason` truncated to 120 chars;
+  `LlmParseError` is a distinct exception class so parse failures
+  are not conflated with call failures.
+- **C11 — Dead UI controls disabled.** VOD Pipeline toggles in
+  `dash/Admin.tsx` and pause/abort in `vod/SessionControl.tsx` are
+  all `disabled` with "coming soon" tooltips; not deleted (operator
+  prefers the affordance).
+
+### Changed — Refactor: land deferred roadmap (`be7b136`, 2026-06-18)
+
+- **Money is `Decimal` end-to-end.** `VirtualBook.cash`,
+  `avg_price`, `realized_pnl`, `qty` are all `Decimal`; inputs are
+  coerced at the book boundary via `runtime/money.D()`; JSON/WS/REST
+  payloads convert back to `float` at the serialization edge via
+  `runtime/money.to_float()`. Sub-cent money grid (4 dp) with
+  banker's rounding. Storage columns switched to
+  `Numeric(20, 6, asdecimal=True)`.
+- **`BroadcastSuite` extraction.** The Orchestrator is no longer a
+  god object — the 6 sidecars plus the broadcast arbiter hang off
+  `orchestrator._broadcast_suite`, started/stopped as a unit.
+  Tests that construct bare `Orchestrator(...)` no longer pollute
+  module globals.
+- **CI gates mypy + ruff + ESLint.** `[tool.mypy]` block in
+  `pyproject.toml`; `web/eslint.config.js` and
+  `stream/eslint.config.js` (flat config); `npm run lint` in both
+  frontends. CI now: ruff check + ruff format + pytest +
+  `npx tsc --noEmit` + `npm run build` for both frontends.
+
+### Documentation
+
+- `dev/audit-findings.md` — round 5 + top-5 + #6-#10 + refactor
+  added to the "Round-by-round status deltas" ledger; new gotchas
+  #16-#21 cross-referenced.
+- `RUNBOOK.md` — new failure-mode rows (fail-fast bind, broadcast
+  slot state, LLM parse errors).
+- `BACKLOG.md` — 2026-07-17 audit findings preserved.
+- `REPO_REVIEW.md` / `REPO_REVIEW_NOTES.md` — senior staff review
+  archived as a historical record (all 10 issues now FIXED).
 
 ---
 

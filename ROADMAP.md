@@ -17,27 +17,77 @@ Status legend:
 
 ## Now — current focus
 
-### Stream Vibe v2 (broadcast app polish)
-Round out the broadcast app before promoting it from "personal demo" to
-"share with viewers" status.
+The 0.5.0-era "Stream Vibe v2" broadcast-app polish (day/night, weather,
+tick countdown, equity sparkline, CRT toggle, recap scene) shipped in
+v0.5.0 (2026-05-09). The 0.6.0 release (2026-06-18) closed all
+senior-review top-10 issues (Decimal money, broker_order_id dedup,
+fail-fast bind, default-safe CORS, 60fps render, sidecar awaits,
+ScheduledMoment state, migration hardening, atomic persist, LLM parse
+validation, dead UI disabled) and added the BroadcastSuite extraction,
+mypy + ESLint in CI, and a daily LLM budget gate. **The current focus
+is operational hardening + the new findings from this audit round** —
+not new features.
 
-- **Day/night sky cycle** in `AgentWorldXL` — animate the existing
-  `<linearGradient id="sky-xl">` stops based on a new `/market/clock`
-  endpoint. Pre-market = stars, RTH = bright, after-hours = dusk.
-  *~1 day.*
-- **Weather effects** — rain particles on red days, sun rays on green,
-  snow when market closed. SVG-only, no asset cost. *~½ day.*
-- **Tick countdown ring** in `TopTicker` — visual progress to next
-  scheduled tick. *~2 hours.*
-- **Equity sparkline** in `TopTicker` — 30-tick rolling line. *~½ day.*
-- **CSS-only CRT toggle** — scanlines + chroma fringe, hotkey from
-  Admin overlay. *~2 hours.*
-- **Recap scene at 4pm ET** — fifth rotator scene auto-shown after
-  market close: top movers, biggest fill, best/worst agent, total PnL,
-  strategy ranking. *~1 day.*
+### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
-Together this is roughly a week of work and gets the broadcast app to a
-"ship it on Twitch" feel.
+These are the **new** findings from the post-0.6.0 audit (see
+`REPO_REVIEW.md` + `BACKLOG.md` for the full list). They're grouped
+by impact — pick any one when the operator wants a small, contained PR.
+
+- **Backend — `pnl_daily` denominator hardcoded to 1000.0.**
+  `api/main.py:675` ignores `agent_starting_capital`. The `/account`
+  endpoint already does it right; this one is a one-line fix + a test.
+  *~15 min.*
+- **Backend — finish the shared-httpx-client migration.** Two LLM
+  hot paths (`llm_providers.py:119` for MiniMax,
+  `commentary_loop.py:430` for commentary) still spin a fresh
+  `httpx.AsyncClient` per call. Mirror the `eodhd.py:72-74` pattern.
+  *~30 min.*
+- **Backend — env-var shadowing warning at boot.** `Settings()` loads
+  from shell env + `.env`; the admin-panel `.env` write is invisible
+  if the shell env wins. Log a `env_shadow` warning on first load.
+  *~1 hour.*
+- **Backend — replace `_recent_fills_from_orch`'s open-positions
+  stand-in** with a real fill ring buffer (last 50 fills). The cost
+  gate currently misfires on a flat market with positions still open
+  from earlier fills. *~2 hours.*
+- **Backend — MiniMax provider retries + base-URL allowlist.** No
+  retry on transient 5xx/429; `minimax_base_url` accepts any URL.
+  Mirror `eodhd.py:77-89` retry pattern + a `urlparse(scheme=https)`
+  guard. *~1 hour.*
+- **Backend — add a real `/api/fills/count?since=…` endpoint.** The
+  VOD "fills today" stat currently reads the WS buffer cap (20), not
+  the real count. *~1 hour.*
+- **Backend — fix 4 stale "skeleton" docstrings** in
+  `session/{run,manifest,replay,closing_snapshot}.py`. *~10 min.*
+- **Backend — audience lock** (still OPEN from round 1). One
+  `asyncio.Lock` around approve/reject + replace the deque rebuild
+  with an `OrderedDict`. *~30 min.*
+- **Backend — pin `pandas<3` and rebuild the venv.** Currently
+  running untested pandas 3.0.2. *~30 min + lockfile regen.*
+- **Frontend — `RecentFillsRail` age label bug.** `Date.now()` only
+  re-evaluates on a new fill, so a 5-minute-old fill reads "0s".
+  Add a 1s re-render or own the tick in a child. *~30 min.*
+- **Frontend — single `WebSocket` per tab via a context provider.**
+  Dashboard opens 3, stream opens 2. The H12 multi-WS issue from
+  prior rounds was only half-fixed. *~½ day.*
+- **Frontend — gate mock data behind `import.meta.env.DEV`.** Both
+  `dash/mockData.ts` and `vod/mockData.ts` ship in the prod bundle.
+  *~1 hour.*
+- **Frontend — kill the 800ms `useVodSessionLive` heartbeat.** Re-renders
+  the whole dashboard tree 1.25×/sec to power a cursor-blink. Move
+  the cursor-blink to a leaf component. *~30 min.*
+- **Frontend — a11y pass on the legacy modals.** `AdminModal.tsx` and
+  `BacktestModal.tsx` need `role="dialog"`, `aria-modal`, focus trap,
+  return-focus on close. *~1 hour.*
+- **Frontend — replace `disabled={!isOnline}` with a warning banner.**
+  If the stream heartbeat ever goes stale, the entire Broadcast
+  panel greys out at the worst possible moment. *~½ day.*
+- **Docs — prune tracked debug screenshots** in
+  `docs/screenshots/2026-05-17/` (28 PNGs, 12 MB, not referenced).
+  *~10 min.*
+- **Docs — move/rename `dev/design_handoff_*` to `dev/_archive/`.**
+  The 3 handoff trees are now historical. *~10 min.*
 
 ---
 
@@ -113,7 +163,11 @@ Together this is roughly a week of work and gets the broadcast app to a
   bulletin from the last hour's journal entries.
 - **Daily recap MP4** — at 16:05 ET, headless Playwright + ffmpeg
   compose a 30-sec highlight reel for socials. Output to
-  `data_cache/recaps/YYYY-MM-DD.mp4`.
+  `data_cache/recaps/YYYY-MM-DD.mp4`. _(Effectively shipped: the
+  VOD pipeline builds daily 10–15 min recaps via
+  `tradefarm.session.*` → `render.headless` → `render.stitch` →
+  `script.write` → `tts.run` → `render.mix` → `thumb.gen` →
+  `yt.upload`. The 30-sec social cut is a follow-on.)_
 - **OBS WebSocket bridge** — let backend events flip OBS scenes
   (e.g. switch to a "Promotion Cutscene" scene when a rank-up arrives).
 
@@ -150,6 +204,7 @@ question.
   and rate-limiting the WS feed. Not trivial.
 - **Mascot pet** in `AgentWorldXL` — a small farmer/chicken that
   wanders the bridges. Pure flavor; would survive a 2-day sprint.
+  _(Shipped 2026-05-09 — `stream/src/components/MascotPet.tsx`.)_
 
 ---
 
