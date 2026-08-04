@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import Dashboard from "./dash/Dashboard";
 import VodStudio from "./vod/VodStudio";
+import { LiveProvider } from "./contexts/LiveContext";
 import "./index.css";
 
 // Three top-level surfaces:
@@ -29,7 +30,17 @@ async function render() {
     const { default: App } = await import("./App");
     node = <App />;
   } else node = <Dashboard />;
-  createRoot(document.getElementById("root")!).render(<StrictMode>{node}</StrictMode>);
+  // LiveProvider wraps every root so the legacy dashboard's multiple
+  // /ws consumers (useEventFeed + useStreamState × 2) collapse onto one
+  // shared socket. The provider opens the socket lazily — only when at
+  // least one useLiveEvents consumer mounts — so the new dashboard and
+  // VOD Studio, which use useVodSessionLive (their own /ws), don't pay
+  // for an idle connection.
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <LiveProvider>{node}</LiveProvider>
+    </StrictMode>,
+  );
 }
 
 void render();

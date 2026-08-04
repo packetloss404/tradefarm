@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useLiveContext } from "../contexts/LiveContext";
 import type { AccountSummary, PromotionEventPayload, TickResult } from "../api";
 
 /** Connection lifecycle for the /ws socket. */
@@ -57,88 +58,37 @@ export type LiveEvent =
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 
-const BACKOFF_START_MS = 500;
-const BACKOFF_MAX_MS = 10_000;
-
-function wsUrl(): string {
-  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}/ws`;
-}
-
-function isLiveEvent(v: unknown): v is LiveEvent {
-  if (!v || typeof v !== "object") return false;
-  const o = v as { type?: unknown; ts?: unknown; payload?: unknown };
-  return typeof o.type === "string" && typeof o.ts === "string" && o.payload !== undefined;
-}
-
 /**
- * Opens a single WebSocket to `/ws`, delivers typed events to `onEvent`, and
- * auto-reconnects with exponential backoff (500ms → 10s). Reconnection fires
- * on any non-clean close or error; there is no retry cap — the hook keeps
- * trying for the lifetime of the component.
+ * Subscribes to the shared /ws WebSocket owned by `<LiveProvider>`. Multiple
+ * consumers across the dashboard (useEventFeed, useStreamState × 2) all
+ * multiplex off the same socket — the provider handles connection lifecycle
+ * (open / close / exponential reconnect backoff) and fans events to every
+ * registered handler.
+ *
+ * Must be called inside `<LiveProvider>`. The hook returns the current
+ * connection status via `useSyncExternalStore`, and increments the provider's
+ * ref count so the socket opens lazily on first consumer and closes on zero.
  */
 export function useLiveEvents(onEvent: LiveEventHandler): LiveStatus {
-  const [status, setStatus] = useState<LiveStatus>("connecting");
+  const ctx = useLiveContext();
+
+  // Refs keep the latest handler available to the stable wrapper below.
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let backoff = BACKOFF_START_MS;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let disposed = false;
-
-    const connect = () => {
-      if (disposed) return;
-      setStatus("connecting");
-      ws = new WebSocket(wsUrl());
-
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        setStatus("open");
-      };
-
-      ws.onmessage = (m) => {
-        try {
-          const parsed: unknown = JSON.parse(typeof m.data === "string" ? m.data : "");
-          if (isLiveEvent(parsed)) handlerRef.current(parsed);
-        } catch {
-          /* ignore malformed frames */
-        }
-      };
-
-      const scheduleReconnect = () => {
-        if (disposed) return;
-        setStatus("closed");
-        retryTimer = setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
-      };
-
-      ws.onerror = () => {
-        try {
-          ws?.close();
-        } catch {
-          /* noop */
-        }
-      };
-      ws.onclose = scheduleReconnect;
+    // Stable wrapper: the Set holds this identity for the lifetime of the
+    // consumer, so handler updates flow through the ref without churning
+    // the Set.
+    const wrapper = (ev: LiveEvent): void => {
+      handlerRef.current(ev);
     };
+    return ctx.addHandler(wrapper);
+  }, [ctx]);
 
-    connect();
+  useEffect(() => {
+    return ctx.incRefCount();
+  }, [ctx]);
 
-    return () => {
-      disposed = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      if (ws) {
-        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
-        try {
-          ws.close();
-        } catch {
-          /* noop */
-        }
-      }
-    };
-  }, []);
-
-  return status;
+  return useSyncExternalStore(ctx.subscribeStatus, ctx.getStatus, ctx.getStatus);
 }

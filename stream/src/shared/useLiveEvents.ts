@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useLiveContext } from "../contexts/LiveContext";
 import type { AccountSummary, PromotionEventPayload, TickResult } from "./api";
-import { REPLAY } from "./replayMode";
 
-// Streaming-app copy of web/src/hooks/useLiveEvents.ts. The two have
-// diverged: this version's LiveEvent union also includes the broadcast-control
-// events the stream consumes (`stream_layout`, `stream_crt`, `stream_cadence`,
-// `stream_fullscreen`). The dashboard side only needs to PUBLISH those events,
-// not consume them, so they're absent there.
+// Streaming-app copy of the LiveEvent type. The two apps diverge: the
+// stream app also consumes broadcast-control events (`stream_layout`,
+// `stream_crt`, `stream_cadence`, `stream_fullscreen`). The dashboard
+// side only needs to PUBLISH those events, not consume them, so they're
+// absent there.
 
 export type LiveStatus = "connecting" | "open" | "closed";
 
@@ -174,117 +174,32 @@ export type LiveEvent =
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 
-const BACKOFF_START_MS = 500;
-const BACKOFF_MAX_MS = 10_000;
-
-function defaultWsUrl(): string {
-  // Inside the packaged Tauri webview `location.host` is `tauri.localhost`
-  // which won't accept a websocket connection. Fall back to the local
-  // FastAPI port so the broadcast app works without explicit settings.
-  if (typeof location !== "undefined" && location.hostname === "tauri.localhost") {
-    return "ws://127.0.0.1:8000/ws";
-  }
-  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}/ws`;
-}
-
-function isLiveEvent(v: unknown): v is LiveEvent {
-  if (!v || typeof v !== "object") return false;
-  const o = v as { type?: unknown; ts?: unknown; payload?: unknown };
-  return typeof o.type === "string" && typeof o.ts === "string" && o.payload !== undefined;
-}
-
 /**
- * Opens a WebSocket to either the runtime-overridden URL (for packaged Tauri
- * builds pointing at a remote backend) or the dev-server proxy `/ws` path.
- * Auto-reconnects with exponential backoff (500ms -> 10s).
+ * Subscribes to the shared /ws WebSocket owned by `<LiveProvider>`. The
+ * provider handles the open / close / exponential reconnect backoff plus
+ * the replay-mode handshake, so the hook is just a fan-out registration.
+ *
+ * The optional ``urlOverride`` is accepted for API compatibility with the
+ * previous per-consumer implementation but is no longer consulted — the
+ * Provider is configured at mount time and is the single source of truth
+ * for the target URL.
  */
-export function useLiveEvents(onEvent: LiveEventHandler, urlOverride?: string): LiveStatus {
-  const [status, setStatus] = useState<LiveStatus>("connecting");
+export function useLiveEvents(onEvent: LiveEventHandler, _urlOverride?: string): LiveStatus {
+  const ctx = useLiveContext();
+
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let backoff = BACKOFF_START_MS;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let disposed = false;
-
-    const target = urlOverride && urlOverride.length > 0 ? urlOverride : defaultWsUrl();
-
-    const connect = () => {
-      if (disposed) return;
-      setStatus("connecting");
-      ws = new WebSocket(target);
-
-      ws.onopen = () => {
-        backoff = BACKOFF_START_MS;
-        setStatus("open");
-        // In replay mode the backend waits for an opening frame. Send
-        // it eagerly so the manifest pump can start; the live path
-        // ignores the absence of this frame after a short timeout.
-        if (REPLAY.active && REPLAY.sessionId) {
-          try {
-            ws?.send(
-              JSON.stringify({
-                type: "replay",
-                session_id: REPLAY.sessionId,
-                at: REPLAY.at,
-                until: REPLAY.until,
-                speed: REPLAY.speed,
-              }),
-            );
-          } catch {
-            /* WS may have closed between onopen and this send — let onerror / onclose handle it */
-          }
-        }
-      };
-
-      ws.onmessage = (m) => {
-        try {
-          const parsed: unknown = JSON.parse(typeof m.data === "string" ? m.data : "");
-          if (isLiveEvent(parsed)) handlerRef.current(parsed);
-        } catch {
-          /* ignore malformed frames */
-        }
-      };
-
-      const scheduleReconnect = () => {
-        if (disposed) return;
-        setStatus("closed");
-        // Don't auto-reconnect in replay mode — the backend will close
-        // the socket cleanly once it finishes pumping the manifest
-        // window, and reopening would just start the replay over.
-        if (REPLAY.active) return;
-        retryTimer = setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
-      };
-
-      ws.onerror = () => {
-        try {
-          ws?.close();
-        } catch {
-          /* noop */
-        }
-      };
-      ws.onclose = scheduleReconnect;
+    const wrapper = (ev: LiveEvent): void => {
+      handlerRef.current(ev);
     };
+    return ctx.addHandler(wrapper);
+  }, [ctx]);
 
-    connect();
+  useEffect(() => {
+    return ctx.incRefCount();
+  }, [ctx]);
 
-    return () => {
-      disposed = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      if (ws) {
-        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
-        try {
-          ws.close();
-        } catch {
-          /* noop */
-        }
-      }
-    };
-  }, [urlOverride]);
-
-  return status;
+  return useSyncExternalStore(ctx.subscribeStatus, ctx.getStatus, ctx.getStatus);
 }

@@ -7,6 +7,7 @@ import { AdminOverlay } from "./components/AdminOverlay";
 import { SentimentGauge } from "./components/SentimentGauge";
 import { PredictionsWidget } from "./components/PredictionsWidget";
 import { AudiencePinBanner } from "./components/AudiencePinBanner";
+import { LiveProvider } from "./contexts/LiveContext";
 import { useStreamData } from "./hooks/useStreamData";
 import { useStreamAudio } from "./hooks/useStreamAudio";
 import { useStreamCommands } from "./hooks/useStreamCommands";
@@ -108,7 +109,7 @@ export default function App() {
   // Use a synchronously-resolvable WS URL on first render so the WebSocket
   // doesn't connect to the Tauri custom-protocol host before settings load.
   const wsUrl = wsTarget(settings ?? DEFAULT_SETTINGS);
-  const snapshot = useStreamData(wsUrl);
+  const snapshot = useStreamData();
 
   // Live event → Web Audio: kick on tick, note on fill, stinger on
   // promotion. Hook is safe to mount with default settings; it just won't
@@ -124,7 +125,6 @@ export default function App() {
   // setting in and read back the resolved effective value. Override is
   // ephemeral (lost on stream restart), matching the stream_audio pattern.
   const cmds = useStreamCommands({
-    wsUrlOverride: wsUrl,
     currentScene: showPrerollGate ? "preroll" : "rotator",
     audioEnabled: settings?.audioEnabled ?? DEFAULT_SETTINGS.audioEnabled,
     audioVolume: settings?.audioVolume ?? DEFAULT_SETTINGS.audioVolume,
@@ -173,7 +173,7 @@ export default function App() {
   const broadcastMode = settings.layoutMode === "v1-broadcast";
 
   return (
-    <>
+    <LiveProvider urlOverride={wsUrl}>
       {/* Audit fix (H10 + round-2 fix): only PreRoll + V1Broadcast
           needed `data-scene-ready` because SceneRotator publishes
           its own (per-scene, post-paint). The earlier outer wrapper
@@ -230,6 +230,6 @@ export default function App() {
       {showAdmin && (
         <AdminOverlay initial={settings} onClose={() => setShowAdmin(false)} />
       )}
-    </>
+    </LiveProvider>
   );
 }
