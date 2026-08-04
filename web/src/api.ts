@@ -250,6 +250,21 @@ export type AdminAgentBulkSetDisabledResult = {
   updated: number[];
 };
 
+export type PipelineRunRow = {
+  run_id: string;
+  session_id: string;
+  date: string | null;
+  enabled: string[];
+  force: boolean;
+  dry_run: boolean;
+  status: "pending" | "running" | "done" | "failed";
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  last_lines: string[];
+};
+
 export type LlmStats = {
   called: number;
   skipped_low_confidence: number;
@@ -378,4 +393,31 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.json();
   },
+  // VOD pipeline runner. POST /pipeline/run kicks off a background
+  // task; the result includes a run_id the UI uses to filter
+  // `pipeline_progress` WS events. The runner publishes those
+  // events as the chain walks its steps; the operator's view of
+  // progress is "Run pipeline" button + a live log panel fed off
+  // the WS bus.
+  pipelineRun: async (req: {
+    date?: string;
+    session_id?: string;
+    include_tts?: boolean;
+    include_upload?: boolean;
+    skip_headless?: boolean;
+    force?: boolean;
+    dry_run?: boolean;
+    music?: string;
+  }): Promise<{ run_id: string; session_id: string; status: string; enabled: string[] }> => {
+    const r = await fetch("/api/pipeline/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
+  pipelineRuns: () => fetcher<PipelineRunRow[]>("/api/pipeline/runs"),
+  pipelineRunStatus: (runId: string) =>
+    fetcher<PipelineRunRow>(`/api/pipeline/runs/${runId}`),
 };

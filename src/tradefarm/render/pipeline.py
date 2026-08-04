@@ -347,16 +347,25 @@ def _has_outputs(step: Step, session_id: str, opts: PipelineOpts) -> bool:
 # ----- runner ---------------------------------------------------------------
 
 
-def _print_banner(msg: str) -> None:
+def _default_sink(msg: str) -> None:
+    """Default progress sink — prints the banner to stdout. The CLI
+    uses this; the backend HTTP wrapper passes its own sink that
+    publishes to the WS event bus.
+    """
     print(f"[pipeline] {msg}")
 
 
-def _run_step(step: Step, session_id: str, opts: PipelineOpts) -> None:
+def _run_step(
+    step: Step,
+    session_id: str,
+    opts: PipelineOpts,
+    sink: Callable[[str], None],
+) -> None:
     """Run one step's inner main() with the resolved argv, capturing
     its stdout so we can prefix every line with the step name.
     """
     argv = step.build_argv(session_id, opts.sessions_dir, opts)
-    _print_banner(f"$ python -m {step.module}  {' '.join(argv)}")
+    sink(f"$ python -m {step.module}  {' '.join(argv)}")
     buf = io.StringIO()
     try:
         with redirect_stdout(buf):
@@ -377,7 +386,8 @@ def _run_step(step: Step, session_id: str, opts: PipelineOpts) -> None:
     # the operator sees what happened. Skip blank-line spam.
     for line in buf.getvalue().splitlines():
         if line.strip():
-            print(f"  | {line}")
+            sys.stdout.write(f"  | {line}\n")
+    sys.stdout.flush()
 
 
 def run_pipeline(
@@ -387,38 +397,42 @@ def run_pipeline(
     enabled: set[str],
     force: bool,
     dry_run: bool,
+    sink: Callable[[str], None] | None = None,
 ) -> None:
     """Sequentially execute the enabled steps. The order is fixed by
     :data:`STEPS`; ``enabled`` chooses which links to fire. ``force``
-    bypasses the "outputs already exist" check.
+    bypasses the "outputs already exist" check. ``sink`` receives
+    each progress line so the HTTP wrapper can fan out to the WS
+    event bus; defaults to printing to stdout.
     """
-    _print_banner(f"session_id={session_id}")
-    _print_banner(f"sessions_dir={opts.sessions_dir}")
-    _print_banner(f"enabled={sorted(enabled)}")
+    emit = sink or _default_sink
+    emit(f"session_id={session_id}")
+    emit(f"sessions_dir={opts.sessions_dir}")
+    emit(f"enabled={sorted(enabled)}")
     if dry_run:
-        _print_banner("DRY RUN — printing plan only")
+        emit("DRY RUN — printing plan only")
         for step in STEPS:
             if step.key in enabled:
                 argv = step.build_argv(session_id, opts.sessions_dir, opts)
-                _print_banner(f"  step {step.key}: argv={argv!r}")
+                emit(f"  step {step.key}: argv={argv!r}")
         return
 
     for i, step in enumerate(STEPS, 1):
         if step.key not in enabled:
-            _print_banner(f"step {i}/{len(STEPS)}: {step.label}  [skipped — not in --include set]")
+            emit(f"step {i}/{len(STEPS)}: {step.label}  [skipped — not in --include set]")
             continue
         if not force and _has_outputs(step, session_id, opts):
-            _print_banner(f"step {i}/{len(STEPS)}: {step.label}  [skipped — outputs present, --force to re-run]")
+            emit(f"step {i}/{len(STEPS)}: {step.label}  [skipped — outputs present, --force to re-run]")
             continue
-        _print_banner(f"step {i}/{len(STEPS)}: {step.label}")
-        _run_step(step, session_id, opts)
+        emit(f"step {i}/{len(STEPS)}: {step.label}")
+        _run_step(step, session_id, opts, emit)
 
     final_reel = _sdir(opts, session_id) / "reel.mp4"
     if final_reel.is_file():
         size = final_reel.stat().st_size
-        _print_banner(f"DONE: {final_reel}  ({size / 1024 / 1024:.1f} MB)")
+        emit(f"DONE: {final_reel}  ({size / 1024 / 1024:.1f} MB)")
     else:
-        _print_banner("DONE: reel.mp4 not produced — check skipped/failed steps above")
+        emit("DONE: reel.mp4 not produced — check skipped/failed steps above")
 
 
 # ----- CLI ------------------------------------------------------------------

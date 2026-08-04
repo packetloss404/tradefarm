@@ -46,6 +46,23 @@ export default function App() {
   const handlePrerollComplete = useCallback(() => setPrerollDone(true), []);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // URL `?scene=<id>` lets the headless renderer pin a specific scene on
+  // load (one URL per beat clip). We resolve it once at mount and pass
+  // it down as the rotator's initial forceSceneId. Replay-time data
+  // wiring (?replay=...&at=...&until=...&speed=...) is a separate,
+  // larger feature — for now the headless captures the LIVE snapshot
+  // pinned to the requested scene, which is enough to produce a real
+  // clip of "the system looks like this at the time of the beat".
+  const initialSceneFromUrl: string | null = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const s = p.get("scene");
+      return s && /^[a-z-]{1,32}$/.test(s) ? s : null;
+    } catch {
+      return null;
+    }
+  })();
+
   // Load persisted settings once. Also prime the audio context — browsers
   // (and Tauri's webview) require a user gesture to unlock playback, so the
   // engine installs a one-shot pointer/key listener and resumes itself on
@@ -198,11 +215,21 @@ export default function App() {
           <SceneRotator
             key="rotator"
             snapshot={snapshot}
-            rotationSec={cmds.rotationEnabled ? cmds.rotationSec : 0}
+            // Pin to the URL-forced scene (headless capture) by
+            // forcing rotation off. Without this, the rotator would
+            // cycle to a different scene before Playwright could snap.
+            rotationSec={
+              initialSceneFromUrl || !cmds.rotationEnabled
+                ? 0
+                : cmds.rotationSec
+            }
             paused={showAdmin}
             commentaryEnabled={settings.commentaryEnabled}
             tickerSpeedPxPerSec={settings.tickerSpeedPxPerSec}
-            forceSceneId={cmds.forceSceneId}
+            // URL ?scene=... wins over the runtime WS override when
+            // set — the headless navigates to a fresh URL per beat,
+            // so this is the authoritative scene for that capture.
+            forceSceneId={initialSceneFromUrl ?? cmds.forceSceneId}
             banner={cmds.banner}
             macroFire={cmds.macroFire}
             pinAgentId={cmds.pinAgentId}

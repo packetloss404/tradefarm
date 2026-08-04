@@ -2,8 +2,16 @@
 // view over all 10 subsystems in today's VOD pipeline. Cards on top,
 // expanded detail (with log tail) for the selected subsystem on the
 // bottom.
+//
+// The "Run pipeline" button at the top-right POSTs to the new
+// `/api/pipeline/run` endpoint (see tradefarm/api/pipeline.py) and
+// polls `/api/pipeline/runs/{run_id}` every 2s while the run is
+// pending or running. When the status flips to `done` / `failed`
+// the poll stops and the last_lines log panel shows the runner's
+// banner output.
 
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { api, type PipelineRunRow } from "../api";
 import { T } from "./tokens";
 import type { PipelineNode } from "./types";
 import { fmtInt, fmtMoney, ProgressBar, StatusDot } from "./widgets";
@@ -52,7 +60,15 @@ function Stat({
   );
 }
 
-function PipelineHeader({ vod }: { vod: VodMock }) {
+function PipelineHeader({
+  vod,
+  activeRun,
+  setActiveRun,
+}: {
+  vod: VodMock;
+  activeRun: PipelineRunRow | null;
+  setActiveRun: (r: PipelineRunRow | null) => void;
+}) {
   return (
     <div
       style={{
@@ -108,26 +124,157 @@ function PipelineHeader({ vod }: { vod: VodMock }) {
         <Stat label="LLM SPEND" value={"$" + vod.summary.llmSpend.toFixed(2)} />
       </div>
       <div style={{ width: 1, height: 36, background: T.border }} />
-      <PipelineActions vod={vod} />
+      <PipelineActions vod={vod} activeRun={activeRun} setActiveRun={setActiveRun} />
     </div>
   );
 }
 
-function PipelineActions({ vod }: { vod: VodMock }) {
+function PipelineActions({
+  vod,
+  activeRun,
+  setActiveRun,
+}: {
+  vod: VodMock;
+  activeRun: PipelineRunRow | null;
+  setActiveRun: (r: PipelineRunRow | null) => void;
+}) {
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Poll the run while it's in flight. Stops on terminal status
+  // (done / failed) or when the component unmounts.
+  useEffect(() => {
+    if (!activeRun) return;
+    if (activeRun.status !== "pending" && activeRun.status !== "running") return;
+    pollTimer.current = setTimeout(async () => {
+      try {
+        const next = await api.pipelineRunStatus(activeRun.run_id);
+        setActiveRun(next);
+      } catch {
+        // Swallow poll errors — the next tick will retry. The active
+        // run is the source of truth for the UI; if the backend is
+        // down for long, the operator can hit `clear` and retry.
+      }
+    }, 2000);
+    return () => {
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+    };
+  }, [activeRun, setActiveRun]);
+
   const queued = vod.pipeline.filter((p) => p.status === "queued").length;
-  const running = vod.pipeline.filter((p) => p.status === "running").length;
-  const done = vod.pipeline.filter((p) => p.status === "done").length;
+  const runningMock = vod.pipeline.filter((p) => p.status === "running").length;
+  const doneMock = vod.pipeline.filter((p) => p.status === "done").length;
+  const isRunning = activeRun?.status === "running" || activeRun?.status === "pending";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <div style={{ display: "flex", gap: 8, fontFamily: T.mono, fontSize: 11, color: T.text2 }}>
-        <span style={{ color: T.ok }}>● {done} done</span>
-        <span style={{ color: T.accent }}>● {running} running</span>
-        <span>● {queued} queued</span>
+        <span style={{ color: T.ok }}>● {doneMock} mock done</span>
+        <span style={{ color: T.accent }}>● {runningMock} mock running</span>
+        <span>● {queued} mock queued</span>
       </div>
-      <button style={{ ...pipelineBtn(T.accent), background: T.accent, color: "#1a1408" }}>
-        ▸ resume pipeline
+      <button
+        style={{
+          ...pipelineBtn(T.accent),
+          background: isRunning ? T.text3 : T.accent,
+          color: isRunning ? T.text : "#1a1408",
+          cursor: isRunning ? "wait" : "pointer",
+        }}
+        disabled={isRunning}
+        onClick={async () => {
+          try {
+            const res = await api.pipelineRun({
+              date: new Date().toISOString().slice(0, 10),
+              include_tts: false,
+              include_upload: false,
+            });
+            setActiveRun({
+              run_id: res.run_id,
+              session_id: res.session_id,
+              date: new Date().toISOString().slice(0, 10),
+              enabled: res.enabled,
+              force: false,
+              dry_run: false,
+              status: res.status as PipelineRunRow["status"],
+              created_at: new Date().toISOString(),
+              started_at: null,
+              finished_at: null,
+              error: null,
+              last_lines: [],
+            });
+          } catch {
+            // Network/500 errors leave activeRun null — the next click
+            // retries. Avoids a flash of stale "running" state.
+          }
+        }}
+        title="Run the VOD pipeline for today's date"
+      >
+        {isRunning ? "▸ running..." : "▸ run pipeline"}
       </button>
-      <button style={pipelineBtn()}>open out/</button>
+      <button
+        style={pipelineBtn()}
+        onClick={() => {
+          setActiveRun(null);
+        }}
+        disabled={!activeRun}
+        title="Clear the active-run panel"
+      >
+        clear
+      </button>
+    </div>
+  );
+}
+
+function RunPanel({ run }: { run: PipelineRunRow }) {
+  const statusColor =
+    run.status === "done"
+      ? T.ok
+      : run.status === "failed"
+        ? "#f87171"
+        : T.accent;
+  return (
+    <div
+      style={{
+        background: T.panel,
+        border: `1px solid ${T.border}`,
+        borderRadius: 6,
+        padding: 14,
+        marginTop: 12,
+        fontFamily: T.mono,
+        fontSize: 11,
+        color: T.text2,
+      }}
+    >
+      <div style={{ display: "flex", gap: 16, alignItems: "baseline", marginBottom: 8 }}>
+        <span style={{ color: T.text3 }}>RUN</span>
+        <span style={{ color: T.text }}>{run.run_id}</span>
+        <span style={{ color: T.text3 }}>·</span>
+        <span style={{ color: T.text }}>{run.session_id}</span>
+        <span style={{ color: T.text3 }}>·</span>
+        <span style={{ color: statusColor, fontWeight: 600 }}>{run.status}</span>
+        <span style={{ color: T.text3, marginLeft: "auto" }}>
+          enabled: {run.enabled.join(", ")}
+        </span>
+      </div>
+      {run.error && (
+        <div style={{ color: "#f87171", marginBottom: 6 }}>error: {run.error}</div>
+      )}
+      <div
+        style={{
+          background: T.bg,
+          border: `1px solid ${T.border}`,
+          borderRadius: 4,
+          padding: 8,
+          maxHeight: 160,
+          overflowY: "auto",
+          fontSize: 10.5,
+          lineHeight: 1.6,
+          whiteSpace: "pre-wrap",
+          color: T.text2,
+        }}
+      >
+        {(run.last_lines.length === 0 ? ["(no output yet)"] : run.last_lines).map((ln, i) => (
+          <div key={i}>{ln}</div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -399,6 +546,7 @@ function DetailPane({ vod, selectedId }: { vod: VodMock; selectedId: string }) {
 
 export function PipelineBoard({ vod }: { vod: VodMock }) {
   const [selected, setSelected] = useState("render");
+  const [activeRun, setActiveRun] = useState<PipelineRunRow | null>(null);
   return (
     <div
       style={{
@@ -412,7 +560,12 @@ export function PipelineBoard({ vod }: { vod: VodMock }) {
         overflow: "hidden",
       }}
     >
-      <PipelineHeader vod={vod} />
+      <PipelineHeader vod={vod} activeRun={activeRun} setActiveRun={setActiveRun} />
+      {activeRun && (
+        <div style={{ padding: "16px 28px 0" }}>
+          <RunPanel run={activeRun} />
+        </div>
+      )}
       <PipelineGraph vod={vod} selected={selected} setSelected={setSelected} />
       <DetailPane vod={vod} selectedId={selected} />
     </div>

@@ -37,6 +37,25 @@ export type StreamBannerPayload = {
 };
 export type StreamAudioPayload = { enabled: boolean; volume: number };
 
+/** VOD pipeline run progress event. Emitted by the backend as the
+ * pipeline walks its steps. ``kind="step"`` fires once per step
+ * transition; ``kind="stdout"`` fires per banner line (high-cadence
+ * for a live log panel); ``kind="start" | "done" | "fail"`` are
+ * terminal boundaries. */
+export type PipelineProgressPayload = {
+  run_id: string;
+  kind: "start" | "step" | "stdout" | "done" | "fail";
+  session_id?: string;
+  enabled?: string[];
+  line?: string;
+  step?: string;
+  step_index?: number;
+  step_total?: number;
+  error?: string;
+  trace?: string;
+  at?: string;
+};
+
 /** Discriminated union of all server-pushed events on /ws. */
 export type LiveEvent =
   | { type: "tick"; ts: string; payload: TickPayload }
@@ -54,7 +73,8 @@ export type LiveEvent =
   | { type: "stream_scene"; ts: string; payload: StreamScenePayload }
   | { type: "stream_banner"; ts: string; payload: StreamBannerPayload }
   | { type: "stream_audio"; ts: string; payload: StreamAudioPayload }
-  | { type: "stream_preroll"; ts: string; payload: Record<string, never> };
+  | { type: "stream_preroll"; ts: string; payload: Record<string, never> }
+  | { type: "pipeline_progress"; ts: string; payload: PipelineProgressPayload };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 

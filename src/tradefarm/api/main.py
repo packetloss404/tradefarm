@@ -21,6 +21,7 @@ from tradefarm.api.admin import router as admin_router
 from tradefarm.api.audience import router as audience_router
 from tradefarm.api.backtest import router as backtest_router
 from tradefarm.api.market_clock import router as market_clock_router
+from tradefarm.api.pipeline import router as pipeline_router
 from tradefarm.api.recap import router as recap_router
 from tradefarm.api.stream_control import router as stream_control_router
 from tradefarm.api.vod import router as vod_router
@@ -266,6 +267,7 @@ app.include_router(stream_control_router)
 app.include_router(audience_router)
 app.include_router(recap_router)
 app.include_router(vod_router)
+app.include_router(pipeline_router)
 
 
 @app.get("/metrics", response_class=PlainTextResponse)
