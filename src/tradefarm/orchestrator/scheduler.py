@@ -233,6 +233,13 @@ class Orchestrator:
         # Pairs agents need a per-cohort counter so consecutive pairs slots
         # get different pairs from the hardcoded list (modulo cycling).
         pairs_slot_idx = 0
+
+        def add_momentum(i: int, name: str, risk: RiskManager, symbol: str) -> None:
+            state = AgentState(
+                id=i, name=name, strategy=MomentumAgent.strategy_name, book=VirtualBook(agent_id=i, cash=D(settings.agent_starting_capital))
+            )
+            agents.append(MomentumAgent(state, risk, symbol=symbol))
+
         for i in range(settings.agent_count):
             symbol = universe[i % len(universe)]
             book = VirtualBook(agent_id=i, cash=D(settings.agent_starting_capital))
@@ -245,40 +252,38 @@ class Orchestrator:
 
             # 100-agent rotation, spread across 7 strategy slots.
             # LSTM/LSTM+LLM fall back to momentum if no trained model
-            # exists on disk for the assigned symbol (the original
-            # pre-0.7.0 behavior — keeps the sandbox runnable before
-            # any model is trained).
+            # exists on disk for the assigned symbol (or no LLM overlay
+            # for the LSTM+LLM slot) — the original pre-0.7.0 behavior.
+            # Keeps the sandbox runnable before any model is trained.
             slot = i % 7
             name = agent_display_name(i)
             if slot == 0:
-                strategy = MomentumAgent.strategy_name
-                state = AgentState(id=i, name=name, strategy=strategy, book=book)
-                agents.append(MomentumAgent(state, risk, symbol=symbol))
-            elif slot == 1 and has_model:
-                strategy = LstmAgent.strategy_name
-                state = AgentState(id=i, name=name, strategy=strategy, book=book)
-                agents.append(LstmAgent(state, risk, symbol=symbol))
-            elif slot == 2 and has_model and overlay is not None:
-                strategy = LstmLlmAgent.strategy_name
-                state = AgentState(id=i, name=name, strategy=strategy, book=book)
-                agents.append(LstmLlmAgent(state, risk, symbol=symbol, overlay=overlay))
+                add_momentum(i, name, risk, symbol)
+            elif slot == 1:
+                if has_model:
+                    state = AgentState(id=i, name=name, strategy=LstmAgent.strategy_name, book=book)
+                    agents.append(LstmAgent(state, risk, symbol=symbol))
+                else:
+                    add_momentum(i, name, risk, symbol)
+            elif slot == 2:
+                if has_model and overlay is not None:
+                    state = AgentState(id=i, name=name, strategy=LstmLlmAgent.strategy_name, book=book)
+                    agents.append(LstmLlmAgent(state, risk, symbol=symbol, overlay=overlay))
+                else:
+                    add_momentum(i, name, risk, symbol)
             elif slot == 3:
-                strategy = BollingerBandsAgent.strategy_name
-                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                state = AgentState(id=i, name=name, strategy=BollingerBandsAgent.strategy_name, book=book)
                 agents.append(BollingerBandsAgent(state, risk, symbol=symbol))
             elif slot == 4:
-                strategy = Rsi2Agent.strategy_name
-                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                state = AgentState(id=i, name=name, strategy=Rsi2Agent.strategy_name, book=book)
                 agents.append(Rsi2Agent(state, risk, symbol=symbol))
             elif slot == 5:
-                strategy = DonchianBreakoutAgent.strategy_name
-                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                state = AgentState(id=i, name=name, strategy=DonchianBreakoutAgent.strategy_name, book=book)
                 agents.append(DonchianBreakoutAgent(state, risk, symbol=symbol))
             else:  # slot == 6
                 pair = pair_for_slot(pairs_slot_idx)
                 pairs_slot_idx += 1
-                strategy = PairsZScoreAgent.strategy_name
-                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                state = AgentState(id=i, name=name, strategy=PairsZScoreAgent.strategy_name, book=book)
                 agents.append(PairsZScoreAgent(state, risk, symbol_a=pair[0], symbol_b=pair[1]))
         return cls(agents)
 
