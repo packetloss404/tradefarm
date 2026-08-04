@@ -9,6 +9,7 @@ predictable async stub.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -57,6 +58,27 @@ class _StubAgent:
 class _StubOrch:
     agents: list[_StubAgent] = field(default_factory=list)
     last_marks: dict[str, float] = field(default_factory=dict)
+    # Mirror of Orchestrator.recent_fills — the bounded ring buffer the
+    # production code reads. Tests that need the cost-gate to allow a
+    # commentary tick (or that need the prompt to include "N shares
+    # SYM" lines) seed this list with synthetic fill entries. The
+    # default of one fake AAPL fill matches the legacy "open position
+    # → fires cost-gate" expectation so the existing test suite keeps
+    # its current behavior; tests that specifically want a quiet
+    # market override to ``[]``.
+    recent_fills: list = field(
+        default_factory=lambda: [
+            {
+                "agent_id": 1,
+                "agent_name": "agent-001",
+                "symbol": "AAPL",
+                "side": "buy",
+                "qty": 10.0,
+                "price": 150.0,
+                "at": datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc),
+            }
+        ]
+    )
 
 
 def _make_agent(
@@ -72,6 +94,28 @@ def _make_agent(
         state=_StubState(id=agent_id, name=name, strategy=strategy, book=book),
         symbol=symbol,
     )
+
+
+def _make_fill(
+    agent: _StubAgent,
+    qty: float,
+    price: float,
+    symbol: str,
+    side: str = "buy",
+) -> dict[str, Any]:
+    """Build a ring-buffer entry matching the production ``Orchestrator``
+    shape. Tests seed ``_StubOrch.recent_fills`` with this so the
+    cost-gate / prompt assembly sees a real fill, not a position.
+    """
+    return {
+        "agent_id": agent.state.id,
+        "agent_name": agent.state.name,
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "price": price,
+        "at": datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc),
+    }
 
 
 def _captured_payloads(mock: AsyncMock) -> list[dict[str, Any]]:
@@ -168,9 +212,13 @@ async def test_llm_error_falls_back(monkeypatch):
 
 
 async def test_cost_gate_skips_when_quiet(monkeypatch):
-    # Agent has no open positions; SPY hasn't moved (baseline == mark).
+    # Agent has no open positions; SPY hasn't moved (baseline == mark);
+    # AND the recent-fills ring is empty (round-6 cost-gate keys on
+    # real fills, not on the existence of an open book).
     agent = _make_agent(equity=1000.0, positions={})
-    orch = _StubOrch(agents=[agent], last_marks={"SPY": 400.0})
+    orch = _StubOrch(
+        agents=[agent], last_marks={"SPY": 400.0}, recent_fills=[]
+    )
     loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
 
     stub_completion = AsyncMock(return_value='{"text": "should not be called", "kind": "color"}')
@@ -253,7 +301,13 @@ async def test_overlong_text_is_truncated(monkeypatch):
 
 async def test_spy_drift_overrides_cost_gate(monkeypatch):
     agent = _make_agent(equity=1000.0, positions={})
-    orch = _StubOrch(agents=[agent], last_marks={"SPY": 400.0})
+    # Empty recent-fills ring: cost-gate must NOT fire on a flat market
+    # even if the prior baseline was set in a prior tick. The SPY
+    # override test is below; this baseline is whatever the first call
+    # seeded.
+    orch = _StubOrch(
+        agents=[agent], last_marks={"SPY": 400.0}, recent_fills=[]
+    )
     loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
 
     stub_completion = AsyncMock(
@@ -364,7 +418,24 @@ def test_user_message_formats_fills_with_shares_and_notional():
         symbol="XLV",
         positions={"XLV": _StubPos(qty=1.0, avg_price=146.63)},
     )
-    orch = _StubOrch(agents=[agent], last_marks={"XLV": 146.63, "SPY": 400.0})
+    # Round-6 cost-gate: only real fills in the ring buffer appear in
+    # the prompt. Seed the XLV fill the test expects to see, and use an
+    # empty ring (no AAPL default) to avoid the spurious AAPL line.
+    orch = _StubOrch(
+        agents=[agent],
+        last_marks={"XLV": 146.63, "SPY": 400.0},
+        recent_fills=[
+            {
+                "agent_id": 88,
+                "agent_name": "agent-088",
+                "symbol": "XLV",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 146.63,
+                "at": datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc),
+            }
+        ],
+    )
     loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
 
     snap = loop._snapshot()
@@ -384,7 +455,25 @@ def test_user_message_formats_large_notional_without_decimals():
         symbol="AAPL",
         positions={"AAPL": _StubPos(qty=100, avg_price=150.0)},
     )
-    orch = _StubOrch(agents=[agent], last_marks={"AAPL": 150.0, "SPY": 400.0})
+    # Round-6 cost-gate: seed the actual AAPL 100-share fill so the
+    # prompt includes the expected "100 shares AAPL" line. Without
+    # this, only the open position would be considered (and the
+    # prompt wouldn't include the line).
+    orch = _StubOrch(
+        agents=[agent],
+        last_marks={"AAPL": 150.0, "SPY": 400.0},
+        recent_fills=[
+            {
+                "agent_id": 7,
+                "agent_name": "agent-007",
+                "symbol": "AAPL",
+                "side": "buy",
+                "qty": 100.0,
+                "price": 150.0,
+                "at": datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc),
+            }
+        ],
+    )
     loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
 
     snap = loop._snapshot()
@@ -455,6 +544,84 @@ def test_strip_hallucinated_magnitudes_ignores_word_boundary_letters():
     snap = _snap_with_max_notional(200.0)
     text = "Agent Mark and Karen are leaning long on XLV."
     assert cl._strip_hallucinated_magnitudes(text, snap) == text
+
+
+# ---------------------------------------------------------------------------
+# 12. _recent_fills_from_orch — reads from the bounded ring buffer, not
+#     open positions. Round-6 audit fix: the prior implementation
+#     misread "any open position" as "any recent fill" and made the
+#     cost-gate fire on quiet days whenever a position was open.
+# ---------------------------------------------------------------------------
+
+
+def test_recent_fills_from_orch_reads_ring_buffer_not_positions():
+    agent = _make_agent(
+        agent_id=1,
+        name="agent-001",
+        symbol="AAPL",
+        # An open long position should NOT be in the result — the
+        # cost-gate keys on actual fills now, not on the existence
+        # of an open book.
+        positions={"AAPL": _StubPos(qty=10, avg_price=150.0)},
+    )
+    # Empty ring + open position → no fills reported.
+    orch = _StubOrch(agents=[agent], last_marks={"AAPL": 150.0}, recent_fills=[])
+    loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
+
+    fills = loop._recent_fills_from_orch()
+
+    assert fills == []  # the open position does NOT count as a recent fill
+
+
+def test_recent_fills_from_orch_returns_newest_first_from_ring():
+    """Newest fill is at the END of orch.recent_fills (production order)
+    but the returned list is reversed to newest-first for the prompt."""
+    agent = _make_agent(agent_id=1, name="agent-001", symbol="AAPL")
+    older = _make_fill(agent, qty=1, price=140.0, symbol="AAPL", side="buy")
+    newer = _make_fill(agent, qty=2, price=160.0, symbol="AAPL", side="buy")
+    orch = _StubOrch(
+        agents=[agent],
+        last_marks={"AAPL": 160.0},
+        # Production appends to the right; the reader reverses for
+        # the prompt ("newest first").
+        recent_fills=[older, newer],
+    )
+    loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
+
+    fills = loop._recent_fills_from_orch()
+
+    assert len(fills) == 2
+    assert fills[0].price == 160.0  # newest first
+    assert fills[1].price == 140.0
+    assert fills[0].symbol == "AAPL"
+    assert fills[0].qty == 2.0
+
+
+def test_cost_gate_stays_quiet_with_positions_open_but_no_fills():
+    """Regression: cost-gate should NOT fire when agents have open
+    positions but no recent fills. The prior bug fired every 45s on a
+    flat market because the gate keyed on ``len(positions) == 0``.
+    """
+    agent = _make_agent(
+        agent_id=1,
+        name="agent-001",
+        symbol="AAPL",
+        positions={"AAPL": _StubPos(qty=10, avg_price=150.0)},
+    )
+    orch = _StubOrch(
+        agents=[agent],
+        last_marks={"AAPL": 150.0, "SPY": 400.0},
+        recent_fills=[],  # no fills — quiet stretch
+    )
+    loop = CommentaryLoop(orch=orch)  # type: ignore[arg-type]
+
+    snap = loop._snapshot()
+    msg = loop._user_message(snap)
+
+    # No fills, flat SPY — the LLM should not be called.
+    assert loop._is_quiet(snap) is True
+    # Prompt shouldn't include any "shares AAPL" line.
+    assert "shares AAPL" not in msg
 
 
 # ---------------------------------------------------------------------------

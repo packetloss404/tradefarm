@@ -393,7 +393,9 @@ async def test_write_script_uses_mocked_model(tmp_path: Path, monkeypatch):
         }
 
     monkeypatch.setattr(writer, "_call_model", fake_call_model)
-    script = await writer.write_script("s_mock", sessions_dir=tmp_path)
+    script = await writer.write_script(
+        "s_mock", sessions_dir=tmp_path, api_key="test-key"
+    )
 
     assert script.episode_title == "Mock Day"
     assert [b.beat_id for b in script.beats] == ["b1", "b2"]
@@ -448,7 +450,9 @@ async def test_write_script_retries_on_parse_failure(tmp_path: Path, monkeypatch
         }
 
     monkeypatch.setattr(writer, "_call_model", flaky_call_model)
-    script = await writer.write_script("s_retry", sessions_dir=tmp_path)
+    script = await writer.write_script(
+        "s_retry", sessions_dir=tmp_path, api_key="test-key"
+    )
 
     assert len(calls) == 2
     assert script.episode_title == "Recovered"
@@ -487,7 +491,9 @@ async def test_write_script_gives_up_after_max_retries(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(writer, "_call_model", always_garbage)
     with pytest.raises(RuntimeError, match="failed after"):
-        await writer.write_script("s_fail", sessions_dir=tmp_path, max_retries=1)
+        await writer.write_script(
+            "s_fail", sessions_dir=tmp_path, max_retries=1, api_key="test-key"
+        )
 
 
 async def test_write_script_missing_beats_raises(tmp_path: Path):
