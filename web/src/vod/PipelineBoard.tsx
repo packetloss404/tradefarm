@@ -5,7 +5,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { T } from "./tokens";
-import type { PipelineNode } from "./mockData";
+import type { PipelineNode } from "./types";
 import { fmtInt, fmtMoney, ProgressBar, StatusDot } from "./widgets";
 import type { VodMock } from "./useVodMock";
 

@@ -4,7 +4,8 @@
 // scores. All mocked — the episodes endpoint is net-new.
 
 import { useTheme } from "./ThemeContext";
-import { EPISODES, type Episode } from "./mockData";
+import { EPISODES } from "./data";
+import type { Episode } from "./types";
 import { fmtPct } from "../vod/widgets";
 
 // Controls whose backend wiring isn't built yet render dimmed +

@@ -136,6 +136,35 @@ class StreamAudio {
     });
   }
 
+  // Generic short cue — used for one-shot UI bursts (e.g. macro fired,
+  // broadcast scenes changing) that don't deserve a full musical motif.
+  // Currently implements a "burst" kind (rising sweep + quick decay);
+  // unknown kinds are silently dropped so the caller can be verbose.
+  cue(kind: string, opts: { volume?: number; durationMs?: number } = {}): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    const t = ctx.currentTime;
+    const dur = (opts.durationMs ?? 400) / 1000;
+    const vol = opts.volume ?? 0.35;
+
+    if (kind === "burst") {
+      // Rising sine sweep, quick attack, exponential decay.
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(200, t);
+      osc.frequency.exponentialRampToValueAtTime(900, t + dur);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(vol, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(gain).connect(this.master);
+      osc.start(t);
+      osc.stop(t + dur + 0.05);
+      return;
+    }
+    // Unknown cue kind — no-op. Add new kinds here as the UI needs them.
+  }
+
   private ready(): AudioContext | null {
     if (!this.enabled) return null;
     const ctx = this.ensureCtx();

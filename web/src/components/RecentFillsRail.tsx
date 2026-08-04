@@ -1,10 +1,11 @@
+import { useEffect, useState } from "react";
 import { LiveBadge, Panel } from "./Panel";
 import type { LiveEvent } from "../hooks/useLiveEvents";
 
 type FillEvent = Extract<LiveEvent, { type: "fill" }>;
 
-function ageLabel(iso: string): string {
-  const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+function ageLabel(iso: string, now: number): string {
+  const sec = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.round(sec / 60)}m`;
   return `${Math.round(sec / 3600)}h`;
@@ -20,6 +21,15 @@ function fmtNotional(n: number): string {
 }
 
 export function RecentFillsRail({ fills }: { fills: FillEvent[] }) {
+  // Tick `now` every second so a stale fill's age label stays accurate.
+  // The parent only re-renders on new fill events, so without this a
+  // 5-minute-old fill would still read "0s" until the next trade.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   return (
     <Panel
       title="Live Fills"
@@ -45,7 +55,7 @@ export function RecentFillsRail({ fills }: { fills: FillEvent[] }) {
                 className="grid grid-cols-[auto_1fr_auto] items-center gap-2 py-2 text-xs"
               >
                 <span className="font-mono text-[10px] text-zinc-500 tabular-nums w-8">
-                  {ageLabel(ev.ts)}
+                  {ageLabel(ev.ts, now)}
                 </span>
                 <div className="min-w-0">
                   <div className="flex items-baseline gap-1.5">

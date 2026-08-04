@@ -12,9 +12,8 @@ import {
   VOD_STRATEGY_LABEL,
   VOD_STRATEGY_SHORT,
   seededRngStr,
-  type Beat,
-  type BeatMeta,
-} from "./mockData";
+} from "./data";
+import type { Beat, BeatMeta } from "./types";
 import { fmtMoney, ScoreCircle, stratColor, SubLabel } from "./widgets";
 import type { VodMock } from "./useVodMock";
 

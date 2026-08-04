@@ -1,27 +1,13 @@
-// Dashboard mocks — episodes archive, multi-day pool history,
-// leaderboard history, storyline cards, admin defaults. The Today
-// page reuses the VOD mock (agents, beats, pipeline, summary); only
-// the dash-only fixtures live here.
+// Runtime values for the dashboard mock fixtures. The Today page
+// reuses the VOD mock (agents, beats, pipeline, summary); only the
+// dash-only fixtures live here.
+//
+// Split from the old mockData.ts so type-only consumers (admin config
+// props, episode card metadata) can import from ./types.ts and stay
+// out of the production bundle.
 
-import { seededRngStr, VOD_AGENTS, type Agent } from "../vod/mockData";
-
-export type Episode = {
-  number: number;
-  date: string;
-  title: string;
-  pnlPct: number;
-  pnlAbs: number;
-  duration: number;
-  views: number | null;
-  fills: number;
-  beats: number;
-  promotions: number;
-  demotions: number;
-  dayShape: { t: number; score: number; hue: number }[];
-  uploadedAt: string | null;
-  status: "published" | "rendering";
-  thumbHue: number;
-};
+import { seededRngStr, VOD_AGENTS } from "../vod/data";
+import type { DashAdminConfig, Episode, LbHistory, Storyline, StorylineKind } from "./types";
 
 const EPISODE_TITLES = [
   "Quiet open, ugly close",
@@ -94,23 +80,6 @@ function makeEpisodes(): Episode[] {
 export const EPISODES: Episode[] = makeEpisodes();
 
 // --- Storylines ---------------------------------------------------------
-
-export type StorylineKind = "rivalry" | "streak" | "leaderboard" | "strategy" | "cost";
-export type StorylineTrend = "escalating" | "hot" | "completed" | "declining" | "steady";
-
-export type Storyline = {
-  id: string;
-  kind: StorylineKind;
-  headline: string;
-  sub: string;
-  score: number;
-  daysActive: number;
-  startDate: string;
-  agents: number[];
-  standings: Record<number, number> | null;
-  trend: StorylineTrend;
-  nextHook: string;
-};
 
 export const STORYLINES: Storyline[] = [
   {
@@ -206,12 +175,9 @@ export const POOL_HISTORY: number[] = makePoolHistory();
 
 // --- Leaderboard history ------------------------------------------------
 
-export type LbDay = { day: number; ranks: { id: number; rank: number }[] };
-export type LbHistory = { agents: Agent[]; series: LbDay[] };
-
 export function makeLeaderboardHistory(): LbHistory {
   const days = 14;
-  const series: LbDay[] = [];
+  const series = [] as LbHistory["series"];
   const ranked = [...VOD_AGENTS].sort((a, b) => b.pnl - a.pnl).slice(0, 10);
   for (let d = 0; d < days; d++) {
     const r = seededRngStr(`lb-${d}`);
@@ -231,26 +197,6 @@ export function makeLeaderboardHistory(): LbHistory {
 export const LB_HISTORY: LbHistory = makeLeaderboardHistory();
 
 // --- Admin config defaults ---------------------------------------------
-
-export type DashAdminConfig = {
-  ai_enabled: boolean;
-  execution_mode: "simulated" | "alpaca_paper";
-  llm_provider: "anthropic" | "minimax";
-  llm_model: string;
-  anthropic_api_key: string;
-  minimax_api_key: string;
-  llm_min_confidence: number;
-  auto_tick_interval_sec: number;
-  tick_outside_rth: boolean;
-  agent_count: number;
-  agent_starting_capital: number;
-  disabled_strategies: string;
-  academy_eval_interval_sec: number;
-  academy_retrieval_enabled: boolean;
-  academy_retrieval_k: number;
-  academy_demote_drawdown_pct: number;
-  academy_demote_consecutive_losses: number;
-};
 
 export const DEFAULT_ADMIN_CONFIG: DashAdminConfig = {
   ai_enabled: true,

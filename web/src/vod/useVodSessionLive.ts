@@ -6,21 +6,19 @@
 // three studio surfaces continue to use useVodMock — flipping them to
 // "live" would just show empty state.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import useSWR from "swr";
 import { api, type AgentRow, type LlmStats, type AccountSummary, type DailyPnlPoint } from "../api";
 import { useEventFeed } from "../hooks/useEventFeed";
-import {
-  officeDisplay,
-  officeInitials,
-  VOD_STRATEGIES,
-  type Agent,
-  type Beat,
-  type DaySummary,
-  type PipelineNode,
-  type Strategy,
-  type StrategyRollup,
-} from "./mockData";
+import { officeDisplay, officeInitials, VOD_STRATEGIES } from "./data";
+import type {
+  Agent,
+  Beat,
+  DaySummary,
+  PipelineNode,
+  Strategy,
+  StrategyRollup,
+} from "./types";
 import type { VodMock } from "./useVodMock";
 
 const REFRESH_MS = 5_000;
@@ -175,13 +173,12 @@ export function useVodSessionLive(): VodSessionLive {
   // socket. mutators keep agents + pnl in sync on every tick event.
   const feed = useEventFeed({ mutateAgents, mutatePnl });
 
-  // 800ms heartbeat just for UI animations (pulse dots, cursor blink)
-  // — matches useVodMock so the surface feels alive even between ticks.
-  const [renderTick, setRenderTick] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => setRenderTick((t) => t + 1), 800);
-    return () => window.clearInterval(id);
-  }, []);
+  // 800ms heartbeat removed: it was driving a global re-render of the
+  // studio tree at 1.25 Hz just to power the ET clock's cursor blink.
+  // The leaf ETClock component (widgets.tsx) now owns its own 800ms
+  // timer. `renderTick` stays in the return so the VodMock shape
+  // doesn't drift between the mock and live paths.
+  const renderTick = 0;
 
   const acct = feed.account ?? account ?? null;
   const lastTickIso = feed.lastTick?.ts ?? acct?.last_tick_at ?? null;

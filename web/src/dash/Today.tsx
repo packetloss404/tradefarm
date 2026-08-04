@@ -12,7 +12,7 @@ import {
   SYMBOLS,
   VOD_STRATEGY_SHORT,
   seededRngStr,
-} from "../vod/mockData";
+} from "../vod/data";
 import { fmtMoney, fmtPct } from "../vod/widgets";
 import type { VodSessionLive } from "../vod/useVodSessionLive";
 import type { DashTweaks } from "./useDashTweaks";

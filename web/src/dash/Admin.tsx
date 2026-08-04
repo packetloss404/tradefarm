@@ -9,7 +9,8 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "r
 import useSWR from "swr";
 import { api, type AdminConfig as LiveConfig } from "../api";
 import { useTheme } from "./ThemeContext";
-import { DEFAULT_ADMIN_CONFIG, type DashAdminConfig } from "./mockData";
+import { DEFAULT_ADMIN_CONFIG } from "./data";
+import type { DashAdminConfig } from "./types";
 import { fmtMoney } from "../vod/widgets";
 
 // Recognise the backend's masked-secret sentinel so we never POST it

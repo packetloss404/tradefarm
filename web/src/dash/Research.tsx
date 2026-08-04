@@ -9,17 +9,15 @@ import {
   POOL_HISTORY,
   STORYLINES,
   STORYLINE_KIND_META,
-  type LbHistory,
-  type Storyline,
-} from "./mockData";
+} from "./data";
+import type { LbHistory, Storyline } from "./types";
 import {
   VOD_AGENTS,
   VOD_STRATEGY_LABEL,
   VOD_STRATEGY_SHORT,
   seededRngStr,
-  type Agent,
-  type Strategy,
-} from "../vod/mockData";
+} from "../vod/data";
+import type { Agent, Strategy } from "../vod/types";
 import { fmtMoney, fmtPct, stratColor } from "../vod/widgets";
 import type { VodSessionLive } from "../vod/useVodSessionLive";
 

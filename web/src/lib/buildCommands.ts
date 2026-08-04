@@ -2,19 +2,6 @@ import type { AgentRow } from "../api";
 import { MACROS, runMacro } from "../components/broadcast/BroadcastMacrosSection";
 import type { Command } from "./commands";
 
-const TOP_SYMBOLS = [
-  "SPY",
-  "QQQ",
-  "IWM",
-  "AAPL",
-  "MSFT",
-  "NVDA",
-  "AMZN",
-  "META",
-  "GOOGL",
-  "TSLA",
-] as const;
-
 const STREAM_SCENES: { id: string; pretty: string }[] = [
   { id: "hero", pretty: "Hero" },
   { id: "leaderboard", pretty: "Leaderboard" },
@@ -61,16 +48,18 @@ export function buildCommands(deps: BuildCommandsDeps): Command[] {
     });
   }
 
-  for (const sym of TOP_SYMBOLS) {
-    cmds.push({
-      id: `symbol-${sym}`,
-      label: `Find ${sym}`,
-      hint: "Filter agent grid by symbol",
-      section: "Navigation",
-      // TODO: wire to a real symbol filter on the agent grid.
-      action: () => {},
-    });
-  }
+  // Symbol filter on the agent grid is not implemented yet — the roster
+  // is a 25x4 pixel grid keyed by agent index, not by traded symbol, so
+  // there's no surface to filter today. Show a single placeholder so the
+  // command palette advertises the upcoming feature without exposing
+  // 10 dead "Find X" commands.
+  cmds.push({
+    id: "filter-by-symbol",
+    label: "Filter by symbol",
+    hint: "Coming soon — agent grid is index-keyed, not symbol-keyed",
+    section: "Navigation",
+    action: () => {},
+  });
 
   for (const scene of STREAM_SCENES) {
     cmds.push({

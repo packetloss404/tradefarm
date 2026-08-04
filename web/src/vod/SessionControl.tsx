@@ -9,8 +9,8 @@ import {
   SYMBOLS,
   VOD_STRATEGY_SHORT,
   seededRngStr,
-  type Agent,
-} from "./mockData";
+} from "./data";
+import type { Agent } from "./types";
 import { ETClock, fmtMoney, fmtInt } from "./widgets";
 import type { VodMock } from "./useVodMock";
 

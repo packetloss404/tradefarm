@@ -8,11 +8,8 @@ import {
   SESSION_ID,
   SESSION_LABEL,
   VOD_AGENTS,
-  type Agent,
-  type Beat,
-  type DaySummary,
-  type PipelineNode,
-} from "./mockData";
+} from "./data";
+import type { Agent, Beat, DaySummary, PipelineNode } from "./types";
 
 export type VodMock = {
   sessionDate: string;

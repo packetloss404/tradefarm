@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { streamAudio } from "../audio/StreamAudio";
 
 export type MacroFireEvent = {
   id: string;
@@ -26,6 +28,13 @@ const FLASH_BY_COLOR: Record<NonNullable<MacroFireEvent["color"]>, string> = {
  * (parent owns the slot and re-keys via a fresh `id`/`firedAt`).
  */
 export function MacroFireBurst({ event }: { event: MacroFireEvent | null }) {
+  // Fire a short audio cue keyed by event.id so each new burst gets a
+  // blip, but the same event being re-rendered (parent state churn)
+  // doesn't retrigger the sound.
+  useEffect(() => {
+    if (event) streamAudio.cue("burst");
+  }, [event?.id]);
+
   const colorKey = event?.color ?? "neutral";
   return (
     <div className="absolute inset-0 pointer-events-none z-30">
@@ -74,5 +83,3 @@ export function MacroFireBurst({ event }: { event: MacroFireEvent | null }) {
     </div>
   );
 }
-
-// TODO: wire a "blip"/"swoosh" via streamAudio once StreamAudio exposes a generic cue method.

@@ -1,8 +1,23 @@
-// VOD pipeline mock — one simulated trading day (2026-05-19), the beat
-// list, the 10-subsystem pipeline state, and the day's PnL roll-up.
-// Ported 1:1 from the design prototype's vod-data.jsx so the four
-// surfaces have a coherent fixture without depending on a running
-// backend.
+// Runtime values for the VOD pipeline mock — one simulated trading day
+// (2026-05-19), the beat list, the 10-subsystem pipeline state, and the
+// day's PnL roll-up. Ported 1:1 from the design prototype's vod-data.jsx
+// so the four surfaces have a coherent fixture without depending on a
+// running backend.
+//
+// Split from the old mockData.ts so type-only consumers can import the
+// shapes from ./types.ts and stay out of the production bundle.
+
+import type {
+  Agent,
+  Beat,
+  BeatKind,
+  BeatMeta,
+  DaySummary,
+  PipelineNode,
+  Rank,
+  Strategy,
+  StrategyRollup,
+} from "./types";
 
 export const OFFICE_FIRSTS = [
   "michael", "jennifer", "david", "sarah", "james", "lisa", "robert", "amy",
@@ -51,7 +66,6 @@ export function officeInitials(id: number): string {
 }
 
 export const VOD_STRATEGIES = ["momentum", "lstm", "llm"] as const;
-export type Strategy = (typeof VOD_STRATEGIES)[number];
 
 export const VOD_STRATEGY_LABEL: Record<Strategy, string> = {
   momentum: "momentum_sma20",
@@ -70,7 +84,6 @@ export const VOD_STRATEGY_HUE: Record<Strategy, number> = {
 };
 
 export const VOD_RANKS = ["intern", "junior", "senior", "principal"] as const;
-export type Rank = (typeof VOD_RANKS)[number];
 
 // Deterministic PRNG so the mock day reproduces between renders.
 function seededRng(seed: number): () => number {
@@ -101,21 +114,6 @@ export const SYMBOLS = [
   "SPY", "QQQ", "IWM", "DIA", "GLD", "ARKK", "LLY", "ORCL", "CRM", "NFLX",
 ];
 
-export type Agent = {
-  id: number;
-  name: string;
-  display: string;
-  initials: string;
-  strategy: Strategy;
-  rank: Rank;
-  equity: number;
-  pnl: number;
-  pnlPct: number;
-  sparkline: number[];
-  trades: number;
-  wins: number;
-};
-
 function makeVodAgents(): Agent[] {
   const agents: Agent[] = [];
   for (let i = 0; i < 100; i++) {
@@ -130,7 +128,7 @@ function makeVodAgents(): Agent[] {
     else pnl = (r() - 0.4) * 260;
     const equity = baseEquity + pnl;
     const rankIdx = Math.min(3, Math.floor(Math.pow(r(), 2.2) * 4));
-    const rank = VOD_RANKS[rankIdx] ?? "intern";
+    const rank: Rank = VOD_RANKS[rankIdx] ?? "intern";
     const spark: number[] = [];
     let v = baseEquity;
     for (let k = 0; k < 40; k++) {
@@ -158,35 +156,6 @@ function makeVodAgents(): Agent[] {
 }
 
 export const VOD_AGENTS: Agent[] = makeVodAgents();
-
-export type BeatKind =
-  | "open"
-  | "big_fill"
-  | "divergence"
-  | "near_miss"
-  | "streak"
-  | "chapter_change"
-  | "top_loser"
-  | "llm_bet"
-  | "leaderboard_shift"
-  | "agent_rivalry"
-  | "promotion"
-  | "recap";
-
-export type Beat = {
-  id: string;
-  t: string;
-  tMs: number;
-  kind: BeatKind;
-  score: number;
-  scene: string;
-  headline: string;
-  sub: string;
-  duration: number;
-  refs: string[];
-  agents: number[];
-  selected: boolean;
-};
 
 export const BEATS: Beat[] = [
   {
@@ -282,7 +251,6 @@ export const BEATS: Beat[] = [
   },
 ];
 
-export type BeatMeta = { label: string; hue: number; accent: string };
 export const BEAT_KIND_META: Record<BeatKind, BeatMeta> = {
   open:              { label: "OPEN",       hue: 200, accent: "#86c5ff" },
   big_fill:          { label: "BIG FILL",   hue: 145, accent: "#34d399" },
@@ -296,24 +264,6 @@ export const BEAT_KIND_META: Record<BeatKind, BeatMeta> = {
   agent_rivalry:     { label: "RIVALRY",    hue: 12,  accent: "#fb923c" },
   promotion:         { label: "PROMOTION",  hue: 145, accent: "#34d399" },
   recap:             { label: "RECAP",      hue: 200, accent: "#86c5ff" },
-};
-
-export type PipelineStatus = "done" | "running" | "queued" | "failed";
-
-export type PipelineNode = {
-  id: string;
-  label: string;
-  cmd: string;
-  status: PipelineStatus;
-  started: string | null;
-  finished: string | null;
-  durationSec: number | null;
-  progress?: number;
-  progressLabel?: string;
-  output: string;
-  outputSize: string | null;
-  summary: string;
-  tail: string[];
 };
 
 export const PIPELINE: PipelineNode[] = [
@@ -408,31 +358,6 @@ export const PIPELINE: PipelineNode[] = [
     tail: ["[—] waiting on metadata"],
   },
 ];
-
-export type StrategyRollup = {
-  agents: number;
-  equity: number;
-  pnl: number;
-  pnlPct: number;
-  fills: number;
-};
-
-export type DaySummary = {
-  totalEquity: number;
-  allocated: number;
-  totalPnl: number;
-  pnlPct: number;
-  byStrategy: Record<Strategy, StrategyRollup>;
-  topAgents: Agent[];
-  botAgents: Agent[];
-  promotions: number;
-  demotions: number;
-  fillCount: number;
-  decisionCount: number;
-  llmCalls: number;
-  llmSkipped: number;
-  llmSpend: number;
-};
 
 function makeDaySummary(agents: Agent[]): DaySummary {
   const totalEquity = agents.reduce((s, a) => s + a.equity, 0);

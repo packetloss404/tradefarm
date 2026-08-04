@@ -5,7 +5,8 @@
 
 import { useEffect, useState } from "react";
 import { T } from "./tokens";
-import { VOD_STRATEGY_HUE, type Strategy } from "./mockData";
+import { VOD_STRATEGY_HUE } from "./data";
+import type { Strategy } from "./types";
 
 // One-time keyframe injection — the prototype attaches @keyframes
 // pulse-dot and cursor-blink via inline <style>. We need them anywhere
