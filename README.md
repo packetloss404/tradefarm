@@ -104,7 +104,7 @@ tests/               # pytest — virtual book, journal, ranks, retrieval,
                      #   curriculum, risk-exits
 scripts/             # make_favicon.py
 docs/                # vod-build-roadmap.md, vod-pivot.md,
-                     #   session-runner-spec.md, screenshots/
+                     #   session-runner-spec.md, broadcast_os.md
 dev/                 # design notes — feature-backlog.md, audit-findings.md,
                      #   _archive/ (plan_product.md, plan_tech.md,
                      #   PROJECT_PLAN.md)
