@@ -5,7 +5,10 @@
 - AnthropicProvider  — Claude Haiku 4.5 with ephemeral prompt caching on the
                        shared system prompt.
 - MinimaxProvider    — MiniMax M2.7-highspeed via their OpenAI-compatible
-                       chat/completions endpoint. No prompt caching.
+                       chat/completions endpoint. No prompt caching. Uses
+                       the shared httpx client (round-5 AA) with retry on
+                       transient 5xx/429/network (round-6 MED-minimax) and
+                       an https+host allowlist on the base URL.
 
 A third can be added by implementing the `decide(ctx) -> LlmDecision` coroutine.
 """
@@ -14,7 +17,6 @@ from __future__ import annotations
 
 from typing import Protocol
 
-import httpx
 from anthropic import AsyncAnthropic
 
 from tradefarm.agents.llm_overlay_types import (
@@ -25,6 +27,7 @@ from tradefarm.agents.llm_overlay_types import (
     parse_decision,
     user_message,
 )
+from tradefarm.runtime.http import get_shared_client, validate_minimax_base_url, with_retries
 
 __all__ = [
     "AnthropicProvider",
@@ -52,6 +55,23 @@ def _parse_decision_json(raw: str) -> LlmDecision:
     :class:`LlmParseError` so callers distinguish them from call failures.
     """
     return parse_decision(raw)
+
+
+async def _post_chat_completions(
+    client: object,
+    url: str,
+    body: dict,
+    headers: dict,
+) -> dict:
+    """POST a chat-completions request and return the parsed JSON body.
+
+    Pulled out of :meth:`MinimaxProvider.decide` so the retry helper can
+    re-invoke the same call. Raises :class:`httpx.HTTPStatusError` on
+    4xx/5xx (the retry helper decides whether to retry based on status).
+    """
+    response = await client.post(url, json=body, headers=headers, timeout=30.0)  # type: ignore[attr-defined]
+    response.raise_for_status()
+    return response.json()
 
 
 class AnthropicProvider:
@@ -97,6 +117,11 @@ class MinimaxProvider:
     ) -> None:
         if not api_key:
             raise RuntimeError("MINIMAX_API_KEY not configured")
+        # Round-6 audit fix (MED-minimax): https+host allowlist. Raises
+        # ValueError when the operator points minimax_base_url at a
+        # non-https scheme or an unknown host. The Authorization bearer
+        # token would otherwise leak to whatever URL was provided.
+        validate_minimax_base_url(base_url)
         self.model = model or DEFAULT_MINIMAX_MODEL
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -116,10 +141,14 @@ class MinimaxProvider:
                 {"role": "user", "content": user_message(ctx)},
             ],
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json=body, headers=headers)
-            r.raise_for_status()
-            data = r.json()
+        # Reuse the shared client (round-5 AA) and wrap in the retry helper
+        # (round-6 MED-minimax) so transient 5xx/429/network errors don't
+        # waste a full decision cycle.
+        client = await get_shared_client()
+        data = await with_retries(
+            lambda: _post_chat_completions(client, url, body, headers),
+            label="minimax",
+        )
         raw = data["choices"][0]["message"]["content"]
         return _parse_decision_json(raw)
 

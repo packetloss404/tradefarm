@@ -15,7 +15,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from tradefarm.api.events import MAX_QUEUE, bus
 from tradefarm.session import replay_query
@@ -219,3 +219,31 @@ async def ws_stream(ws: WebSocket) -> None:
         return
 
     await _stream_live(ws)
+
+
+# Round-6 audit fix (B3-WS): queryable stream-gap report. The WS layer
+# silently dropped events whose subscriber queue was at MAX_QUEUE
+# (events.py). The frontend can now poll this endpoint on reconnect
+# to learn how many events were lost and trigger a state re-fetch.
+# The counter is read-and-reset atomically so a polling client that
+# never connects again doesn't cause the report to grow without bound.
+@router.get("/stream-gap")
+async def stream_gap(
+    since: str | None = Query(
+        None,
+        description=(
+            "Optional client-supplied ISO-8601 timestamp. The current "
+            "implementation always returns drops since the previous "
+            "consume_dropped() call; `since` is accepted so the "
+            "frontend can pass its last-seen event ts without "
+            "changing the wire shape when per-subscriber gap tracking "
+            "is added later."
+        ),
+    ),
+) -> dict:
+    payload = await bus.consume_dropped()
+    # Echo `since` back so a client that batched multiple reconnect
+    # windows can correlate the response with its own clock.
+    if since is not None:
+        payload["since"] = since
+    return payload
