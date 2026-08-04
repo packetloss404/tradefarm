@@ -33,6 +33,7 @@ KNOWN_STRATEGIES = (
     "mean_reversion_bb",  # 20-period Bollinger Bands, ±2σ extremes
     "rsi2",  # Connors' 2-period RSI, deep-oversold/overbought
     "donchian_breakout",  # 20-period Donchian channel, upper/lower breakouts
+    "pairs_zscore",  # A-B dollar spread z-score mean reversion (long-only)
     "lstm_v1",
     "lstm_llm_v1",
 )
