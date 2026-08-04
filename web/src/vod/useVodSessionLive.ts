@@ -23,8 +23,11 @@ import type { VodMock } from "./useVodMock";
 
 const REFRESH_MS = 5_000;
 
-// Backend strategy strings (`momentum_sma20`, `lstm_v1`, `lstm_llm_v1`)
-// → VOD studio's three-bucket enum.
+// Backend strategy strings (`momentum_12_1`, `mean_reversion_bb`, `rsi2`,
+// `donchian_breakout`, `pairs_zscore`, `lstm_v1`, `lstm_llm_v1`) → VOD
+// studio's three-bucket enum. The new rule-based strategies all bucket
+// as "momentum" in the VOD studio's 3-bucket view; expand the union
+// here if the studio needs a per-strategy bucket.
 function mapStrategy(s: string): Strategy {
   if (s.includes("llm")) return "llm";
   if (s.includes("lstm")) return "lstm";

@@ -3,13 +3,21 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { AgentDecision } from "../hooks/useStreamCommands";
 
 const STRATEGY_BADGE: Record<string, string> = {
-  momentum_sma20: "bg-amber-500/15 text-amber-300 border-amber-500/40",
+  momentum_12_1: "bg-amber-500/15 text-amber-300 border-amber-500/40",
+  mean_reversion_bb: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
+  rsi2: "bg-pink-500/15 text-pink-300 border-pink-500/40",
+  donchian_breakout: "bg-orange-500/15 text-orange-300 border-orange-500/40",
+  pairs_zscore: "bg-teal-500/15 text-teal-300 border-teal-500/40",
   lstm_v1: "bg-sky-500/15 text-sky-300 border-sky-500/40",
   lstm_llm_v1: "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/40",
 };
 
 const STRATEGY_SHORT: Record<string, string> = {
-  momentum_sma20: "MOM",
+  momentum_12_1: "MOM",
+  mean_reversion_bb: "BB",
+  rsi2: "RSI2",
+  donchian_breakout: "DON",
+  pairs_zscore: "PAIR",
   lstm_v1: "LSTM",
   lstm_llm_v1: "LSTM+LLM",
 };

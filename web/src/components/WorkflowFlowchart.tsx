@@ -12,7 +12,14 @@ import { useState } from "react";
  * Pure SVG, no chart lib, no animation libs.
  * ------------------------------------------------------------------ */
 
-type StrategyId = "momentum_sma20" | "lstm_v1" | "lstm_llm_v1";
+type StrategyId =
+  | "momentum_12_1"
+  | "mean_reversion_bb"
+  | "rsi2"
+  | "donchian_breakout"
+  | "pairs_zscore"
+  | "lstm_v1"
+  | "lstm_llm_v1";
 
 type NodeKind =
   | "input"     // grey rounded-rect — data into the step
@@ -64,27 +71,129 @@ const KIND_STYLE: Record<NodeKind, { fill: string; stroke: string; text: string 
   io:       { fill: "#155e75", stroke: "#06b6d4", text: "#cffafe" },
 };
 
-// -- Strategy 1: momentum_sma20 -------------------------------------
+// -- Strategy 1: momentum_12_1 --------------------------------------
 
-const MOMENTUM: Strategy = {
-  id: "momentum_sma20",
-  title: "momentum_sma20",
+const MOMENTUM_12_1: Strategy = {
+  id: "momentum_12_1",
+  title: "momentum_12_1",
   blurb:
-    "Baseline SMA(5/20) crossover. Pure deterministic compute, no model, no LLM.",
+    "Jegadeesh-Titman 12-month return, skipping the most-recent month. Buys when the 12-1m return is positive AND rising; sells when negative AND falling.",
   nodes: [
     { id: "bars",   kind: "input",    label: "Daily bars", sub: "EODHD cache", x: 200, y: 20 },
-    { id: "fast",   kind: "compute",  label: "SMA(5) + SMA(20)", x: 200, y: 100 },
-    { id: "cross",  kind: "decision", label: "Crossover?", sub: "fast vs slow", x: 190, y: 180 },
-    { id: "buy",    kind: "action",   label: "BUY 20% cash", sub: "reason: golden cross", x: 20,  y: 320 },
-    { id: "sell",   kind: "action",   label: "SELL all qty", sub: "reason: death cross",  x: 380, y: 320 },
+    { id: "mom",    kind: "compute",  label: "12-1m return", sub: "closes[t-21]/closes[t-273] - 1", x: 200, y: 100 },
+    { id: "cross",  kind: "decision", label: "rising or falling?", sub: "current vs previous bar", x: 190, y: 180 },
+    { id: "sign",   kind: "decision", label: "sign?", sub: "+ or -", x: 190, y: 320 },
+    { id: "buy",    kind: "action",   label: "BUY 20% cash", sub: "reason: mom12-1 rising …", x: 20,  y: 460 },
+    { id: "sell",   kind: "action",   label: "SELL all qty", sub: "reason: mom12-1 falling …",  x: 380, y: 460 },
+    { id: "wait",   kind: "skip",     label: "wait", x: 200, y: 460 },
+  ],
+  edges: [
+    { from: "bars",  to: "mom" },
+    { from: "mom",   to: "cross" },
+    { from: "cross", to: "sign" },
+    { from: "sign",  to: "buy",  label: "+ & rising" },
+    { from: "sign",  to: "sell", label: "- & falling" },
+    { from: "sign",  to: "wait", label: "otherwise" },
+  ],
+};
+
+// -- Strategy 2: mean_reversion_bb ---------------------------------
+
+const BB: Strategy = {
+  id: "mean_reversion_bb",
+  title: "mean_reversion_bb",
+  blurb:
+    "Bollinger Bands (20-period SMA ± 2σ). Fades extremes: buy on close < lower, sell on close > upper.",
+  nodes: [
+    { id: "bars",   kind: "input",    label: "Daily bars", sub: "EODHD cache", x: 200, y: 20 },
+    { id: "bb",     kind: "compute",  label: "20d SMA + ±2σ", x: 200, y: 100 },
+    { id: "ext",    kind: "decision", label: "close vs band?", x: 190, y: 180 },
+    { id: "buy",    kind: "action",   label: "BUY 20% cash", sub: "reason: bb oversold", x: 20,  y: 320 },
+    { id: "sell",   kind: "action",   label: "SELL all qty", sub: "reason: bb overbought",  x: 380, y: 320 },
     { id: "wait",   kind: "skip",     label: "wait", x: 200, y: 320 },
   ],
   edges: [
-    { from: "bars",  to: "fast" },
-    { from: "fast",  to: "cross" },
-    { from: "cross", to: "buy",  label: "golden + flat" },
-    { from: "cross", to: "sell", label: "death + long" },
-    { from: "cross", to: "wait", label: "neither" },
+    { from: "bars", to: "bb" },
+    { from: "bb",   to: "ext" },
+    { from: "ext",  to: "buy",  label: "< lower (flat)" },
+    { from: "ext",  to: "sell", label: "> upper (long)" },
+    { from: "ext",  to: "wait", label: "inside bands" },
+  ],
+};
+
+// -- Strategy 3: rsi2 ----------------------------------------------
+
+const RSI2: Strategy = {
+  id: "rsi2",
+  title: "rsi2",
+  blurb:
+    "Connors' 2-period RSI. Buy on deep-oversold (RSI(2) < 5), sell on deep-overbought (RSI(2) > 95). Fast-firing, low-compute.",
+  nodes: [
+    { id: "bars",   kind: "input",    label: "Daily bars", sub: "EODHD cache", x: 200, y: 20 },
+    { id: "rsi",    kind: "compute",  label: "2-period RSI", sub: "avg gain / (avg gain + avg loss)", x: 200, y: 100 },
+    { id: "level",  kind: "decision", label: "RSI(2) level?", x: 190, y: 180 },
+    { id: "buy",    kind: "action",   label: "BUY 20% cash", sub: "reason: rsi2 oversold", x: 20,  y: 320 },
+    { id: "sell",   kind: "action",   label: "SELL all qty", sub: "reason: rsi2 overbought",  x: 380, y: 320 },
+    { id: "wait",   kind: "skip",     label: "wait", x: 200, y: 320 },
+  ],
+  edges: [
+    { from: "bars",  to: "rsi" },
+    { from: "rsi",   to: "level" },
+    { from: "level", to: "buy",  label: "< 5 (flat)" },
+    { from: "level", to: "sell", label: "> 95 (long)" },
+    { from: "level", to: "wait", label: "neutral" },
+  ],
+};
+
+// -- Strategy 4: donchian_breakout ---------------------------------
+
+const DONCHIAN: Strategy = {
+  id: "donchian_breakout",
+  title: "donchian_breakout",
+  blurb:
+    "Turtle-style 20-day channel breakout. Buy on close > 20d high, sell on close < 20d low.",
+  nodes: [
+    { id: "bars",   kind: "input",    label: "Daily bars", sub: "EODHD cache", x: 200, y: 20 },
+    { id: "chan",   kind: "compute",  label: "20d high / 20d low", sub: "max / min over prior 20 bars", x: 200, y: 100 },
+    { id: "break",  kind: "decision", label: "breakout?", x: 190, y: 180 },
+    { id: "buy",    kind: "action",   label: "BUY 20% cash", sub: "reason: upper break", x: 20,  y: 320 },
+    { id: "sell",   kind: "action",   label: "SELL all qty", sub: "reason: lower break",  x: 380, y: 320 },
+    { id: "wait",   kind: "skip",     label: "wait", x: 200, y: 320 },
+  ],
+  edges: [
+    { from: "bars",  to: "chan" },
+    { from: "chan",  to: "break" },
+    { from: "break", to: "buy",  label: "> high (flat)" },
+    { from: "break", to: "sell", label: "< low (long)" },
+    { from: "break", to: "wait", label: "inside" },
+  ],
+};
+
+// -- Strategy 5: pairs_zscore --------------------------------------
+
+const PAIRS: Strategy = {
+  id: "pairs_zscore",
+  title: "pairs_zscore",
+  blurb:
+    "A-B dollar spread z-score. Buys A when spread is in the lower tail (z < -2), sells A when in the upper tail (z > +2). Long-only sandbox.",
+  nodes: [
+    { id: "bars",   kind: "input",    label: "Daily bars (A+B)", sub: "EODHD cache", x: 200, y: 20 },
+    { id: "spread", kind: "compute",  label: "spread = A - B", sub: "simple dollar spread", x: 200, y: 100 },
+    { id: "z",      kind: "compute",  label: "60-bar z-score", sub: "(spread - μ) / σ", x: 200, y: 180 },
+    { id: "level",  kind: "decision", label: "|z| vs entry?", sub: "default 2.0", x: 190, y: 260 },
+    { id: "sign",   kind: "decision", label: "sign of z?", x: 190, y: 400 },
+    { id: "buy",    kind: "action",   label: "BUY 20% cash (A)", sub: "reason: pairs_zscore z<…", x: 20,  y: 540 },
+    { id: "sell",   kind: "action",   label: "SELL all qty (A)", sub: "reason: pairs_zscore z>…",  x: 380, y: 540 },
+    { id: "wait",   kind: "skip",     label: "wait", x: 200, y: 540 },
+  ],
+  edges: [
+    { from: "bars",   to: "spread" },
+    { from: "spread", to: "z" },
+    { from: "z",      to: "level" },
+    { from: "level",  to: "sign", label: "|z| ≥ entry" },
+    { from: "level",  to: "wait", label: "|z| < entry" },
+    { from: "sign",   to: "buy",  label: "z<0" },
+    { from: "sign",   to: "sell", label: "z>0" },
   ],
 };
 
@@ -151,7 +260,7 @@ const LSTM_LLM: Strategy = {
   ],
 };
 
-const STRATEGIES: Strategy[] = [MOMENTUM, LSTM_V1, LSTM_LLM];
+const STRATEGIES: Strategy[] = [MOMENTUM_12_1, BB, RSI2, DONCHIAN, PAIRS, LSTM_V1, LSTM_LLM];
 
 // Optional shared "outer loop" diagram showing what the orchestrator does
 // around every agent's decide() call. Rendered above the per-strategy panes.

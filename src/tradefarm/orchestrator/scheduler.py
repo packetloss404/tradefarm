@@ -12,13 +12,18 @@ import pandas as pd
 import structlog
 
 from tradefarm.agents.base import Agent, AgentState, Signal
+from tradefarm.agents.bollinger_bands import BollingerBandsAgent
+from tradefarm.agents.donchian_breakout import DonchianBreakoutAgent
 from tradefarm.agents.llm_overlay import LlmOverlay
 from tradefarm.agents.lstm_agent import LstmAgent
 from tradefarm.agents.lstm_llm_agent import LstmLlmAgent
 from tradefarm.agents.lstm_model import model_path
 from tradefarm.agents.momentum import MomentumAgent
 from tradefarm.agents.names import agent_display_name
+from tradefarm.agents.pairs_zscore import PairsZScoreAgent
+from tradefarm.agents.rsi2 import Rsi2Agent
 from tradefarm.config import settings
+from tradefarm.data.pairs import pair_for_slot
 from tradefarm.runtime.clock import now_utc as _runtime_clock_now_utc
 from tradefarm.data.eodhd import EodhdClient
 from tradefarm.data.universe import default_universe
@@ -225,6 +230,9 @@ class Orchestrator:
         rank_map = rank_map or {}
 
         agents: list[Agent] = []
+        # Pairs agents need a per-cohort counter so consecutive pairs slots
+        # get different pairs from the hardcoded list (modulo cycling).
+        pairs_slot_idx = 0
         for i in range(settings.agent_count):
             symbol = universe[i % len(universe)]
             book = VirtualBook(agent_id=i, cash=D(settings.agent_starting_capital))
@@ -235,20 +243,43 @@ class Orchestrator:
             )
             has_model = model_path(symbol).exists()
 
-            slot = i % 3  # 0=momentum, 1=lstm, 2=lstm+llm
+            # 100-agent rotation, spread across 7 strategy slots.
+            # LSTM/LSTM+LLM fall back to momentum if no trained model
+            # exists on disk for the assigned symbol (the original
+            # pre-0.7.0 behavior — keeps the sandbox runnable before
+            # any model is trained).
+            slot = i % 7
             name = agent_display_name(i)
-            if slot == 2 and has_model and overlay is not None:
-                strategy = LstmLlmAgent.strategy_name
+            if slot == 0:
+                strategy = MomentumAgent.strategy_name
                 state = AgentState(id=i, name=name, strategy=strategy, book=book)
-                agents.append(LstmLlmAgent(state, risk, symbol=symbol, overlay=overlay))
+                agents.append(MomentumAgent(state, risk, symbol=symbol))
             elif slot == 1 and has_model:
                 strategy = LstmAgent.strategy_name
                 state = AgentState(id=i, name=name, strategy=strategy, book=book)
                 agents.append(LstmAgent(state, risk, symbol=symbol))
-            else:
-                strategy = MomentumAgent.strategy_name
+            elif slot == 2 and has_model and overlay is not None:
+                strategy = LstmLlmAgent.strategy_name
                 state = AgentState(id=i, name=name, strategy=strategy, book=book)
-                agents.append(MomentumAgent(state, risk, symbol=symbol))
+                agents.append(LstmLlmAgent(state, risk, symbol=symbol, overlay=overlay))
+            elif slot == 3:
+                strategy = BollingerBandsAgent.strategy_name
+                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                agents.append(BollingerBandsAgent(state, risk, symbol=symbol))
+            elif slot == 4:
+                strategy = Rsi2Agent.strategy_name
+                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                agents.append(Rsi2Agent(state, risk, symbol=symbol))
+            elif slot == 5:
+                strategy = DonchianBreakoutAgent.strategy_name
+                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                agents.append(DonchianBreakoutAgent(state, risk, symbol=symbol))
+            else:  # slot == 6
+                pair = pair_for_slot(pairs_slot_idx)
+                pairs_slot_idx += 1
+                strategy = PairsZScoreAgent.strategy_name
+                state = AgentState(id=i, name=name, strategy=strategy, book=book)
+                agents.append(PairsZScoreAgent(state, risk, symbol_a=pair[0], symbol_b=pair[1]))
         return cls(agents)
 
     async def persist_initial_state(self) -> None:

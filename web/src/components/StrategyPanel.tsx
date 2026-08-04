@@ -20,13 +20,25 @@ export type StrategyTimeseriesPoint = {
   equity_total: number;
 };
 
-const STRATEGIES = ["momentum_sma20", "lstm_v1", "lstm_llm_v1"] as const;
+const STRATEGIES = [
+  "momentum_12_1",
+  "mean_reversion_bb",
+  "rsi2",
+  "donchian_breakout",
+  "pairs_zscore",
+  "lstm_v1",
+  "lstm_llm_v1",
+] as const;
 type StrategyKey = (typeof STRATEGIES)[number];
 
 const STRATEGY_COLOR: Record<StrategyKey, string> = {
-  momentum_sma20: "#fbbf24", // amber-400
+  momentum_12_1: "#f59e0b", // amber-500
+  mean_reversion_bb: "#10b981", // emerald-500
+  rsi2: "#ec4899", // pink-500
+  donchian_breakout: "#f97316", // orange-500
+  pairs_zscore: "#14b8a6", // teal-500
   lstm_v1: "#38bdf8", // sky-400
-  lstm_llm_v1: "#34d399", // emerald-400
+  lstm_llm_v1: "#a78bfa", // violet-400
 };
 
 const fetcher = async <T,>(url: string): Promise<T> => {
@@ -162,7 +174,7 @@ export function StrategyPanel() {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
         {rows.map((r) => <StrategyCard key={r.strategy} row={r} />)}
       </div>
       <MiniChart series={series} />

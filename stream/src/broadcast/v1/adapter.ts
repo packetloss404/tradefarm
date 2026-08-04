@@ -78,9 +78,19 @@ const RANKS_ORDER = ["intern", "junior", "senior", "principal"] as const;
 type RankKey = (typeof RANKS_ORDER)[number];
 
 function strategyKey(s: string): StrategyKey {
-  // Backend uses long-form ids (`momentum_sma20`, `lstm_v1`, `lstm_llm_v1`);
-  // collapse to the design's three-bucket palette.
+  // Backend uses long-form ids (`momentum_12_1`, `mean_reversion_bb`,
+  // `rsi2`, `donchian_breakout`, `pairs_zscore`, `lstm_v1`, `lstm_llm_v1`);
+  // collapse to the design's three-bucket palette. The 5 rule-based
+  // strategies all bucket as "momentum" in the broadcast view.
   if (s.startsWith("momentum")) return "momentum";
+  if (
+    s === "mean_reversion_bb" ||
+    s === "rsi2" ||
+    s === "donchian_breakout" ||
+    s === "pairs_zscore"
+  ) {
+    return "momentum";
+  }
   if (s.startsWith("lstm_llm")) return "llm";
   return "lstm";
 }

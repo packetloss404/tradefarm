@@ -145,8 +145,14 @@ def _build_reason(
         return _short_reason_lstm(verdict, lstm)
     if strategy == "lstm_llm_v1":
         return _short_reason_lstm_llm(verdict, lstm, last_decision)
-    # Unknown strategy — degrade gracefully rather than raise on a hot path.
-    return f"{strategy} — {verdict}"
+    # All non-LSTM rule-based strategies surface the signal's own
+    # reason on a trade and a generic "no signal — wait" on a quiet
+    # tick. The signal.reason string already carries the specific
+    # numeric condition (e.g. "bb oversold px=99.5<lower=100.2"),
+    # so duplicating it here would be noise.
+    if verdict == "trade" and signals:
+        return signals[0].reason or f"{strategy} — trade"
+    return f"{strategy} — wait"
 
 
 def build_decision_payload(

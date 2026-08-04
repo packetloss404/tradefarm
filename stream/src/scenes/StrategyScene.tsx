@@ -15,7 +15,11 @@ type StrategyAgg = {
 };
 
 const PRETTY: Record<string, string> = {
-  momentum_sma20: "Momentum (SMA20)",
+  momentum_12_1: "Momentum (12-1m)",
+  mean_reversion_bb: "Mean Reversion (BB)",
+  rsi2: "RSI(2) (Connors)",
+  donchian_breakout: "Donchian Breakout",
+  pairs_zscore: "Pairs (z-score)",
   lstm_v1: "LSTM v1",
   lstm_llm_v1: "LSTM + LLM v1",
 };
