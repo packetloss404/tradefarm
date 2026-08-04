@@ -288,7 +288,7 @@ async def test_rank_distribution_counts(academy_db):
                 Agent(
                     id=2,
                     name="agent-002",
-                    strategy="momentum_sma20",
+                    strategy="momentum_12_1",
                     starting_capital=1000.0,
                     cash=1000.0,
                     status="waiting",
@@ -297,7 +297,7 @@ async def test_rank_distribution_counts(academy_db):
                 Agent(
                     id=3,
                     name="agent-003",
-                    strategy="momentum_sma20",
+                    strategy="momentum_12_1",
                     starting_capital=1000.0,
                     cash=1000.0,
                     status="waiting",
@@ -306,7 +306,7 @@ async def test_rank_distribution_counts(academy_db):
                 Agent(
                     id=4,
                     name="agent-004",
-                    strategy="momentum_sma20",
+                    strategy="momentum_12_1",
                     starting_capital=1000.0,
                     cash=1000.0,
                     status="waiting",

@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.io/v1"
 
-    # CSV of strategy names to freeze (e.g. "momentum_sma20,lstm_v1"). Agents
+    # CSV of strategy names to freeze (e.g. "momentum_12_1,lstm_v1"). Agents
     # in a frozen strategy keep existing positions but skip all decisions.
     disabled_strategies: str = ""
 

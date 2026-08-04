@@ -199,7 +199,7 @@ def test_agents_payload_pads_with_silent_roster():
     snaps, marks = fold_to(_manifest(events), OPEN + timedelta(minutes=10))
     silent = [
         {"id": 1, "name": "trader_001", "strategy": "lstm_v1", "rank": "intern"},
-        {"id": 2, "name": "trader_002", "strategy": "momentum_sma20", "rank": "intern"},
+        {"id": 2, "name": "trader_002", "strategy": "momentum_12_1", "rank": "intern"},
         {"id": 3, "name": "trader_003", "strategy": "lstm_llm_v1", "rank": "intern"},
     ]
     payload = agents_payload(snaps, marks, static_meta_by_id={1: silent[0]}, include_silent=silent)

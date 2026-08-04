@@ -247,7 +247,7 @@ async def test_per_pass_demotion_cap(curriculum_db, monkeypatch):
                 Agent(
                     id=i,
                     name=f"agent-{i:03d}",
-                    strategy="momentum_sma20",
+                    strategy="momentum_12_1",
                     starting_capital=1000.0,
                     cash=1000.0,
                     status="waiting",

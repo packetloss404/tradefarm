@@ -22,7 +22,17 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # Canonical list of strategy names currently in the codebase. Orchestrator uses
 # these when building agents. Surface them here so the admin UI can render
 # one toggle per strategy without having to query the orchestrator.
-KNOWN_STRATEGIES = ("momentum_sma20", "lstm_v1", "lstm_llm_v1")
+#
+# `momentum_sma20` is kept as a known (but legacy) name so existing SQLite
+# dev DBs with rows referencing the placeholder strategy don't trip the
+# "unknown strategy" guard in the per-strategy toggle endpoint. The
+# orchestrator no longer assigns that name; new agents get `momentum_12_1`.
+KNOWN_STRATEGIES = (
+    "momentum_sma20",  # legacy placeholder — pre-0.7.0; orchestrator no longer assigns
+    "momentum_12_1",  # cross-sectional 12-1 month momentum (default since 0.7.0)
+    "lstm_v1",
+    "lstm_llm_v1",
+)
 
 # Keys the admin panel is allowed to mutate. Secrets are masked on GET.
 EDITABLE: dict[str, type] = {

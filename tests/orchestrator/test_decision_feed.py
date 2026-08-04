@@ -69,14 +69,14 @@ def test_momentum_wait_payload() -> None:
     agent = _StubAgent(
         agent_id=1,
         name="agent-001",
-        strategy="momentum_sma20",
+        strategy="momentum_12_1",
         symbol="SPY",
     )
     payload = build_decision_payload(agent, signals=[], marks={"SPY": 500.0})
 
     assert payload["agent_id"] == 1
     assert payload["agent_name"] == "agent-001"
-    assert payload["strategy"] == "momentum_sma20"
+    assert payload["strategy"] == "momentum_12_1"
     assert payload["symbol"] == "SPY"
     assert payload["verdict"] == "wait"
     assert payload["lstm_probs"] is None
@@ -95,7 +95,7 @@ def test_momentum_trade_payload_uses_signal_reason() -> None:
     agent = _StubAgent(
         agent_id=2,
         name="agent-002",
-        strategy="momentum_sma20",
+        strategy="momentum_12_1",
         symbol="QQQ",
     )
     payload = build_decision_payload(
@@ -235,7 +235,7 @@ def test_lstm_llm_skipped_call_falls_back_to_lstm_shape() -> None:
 
 def test_build_decisions_batch_envelope() -> None:
     """The batch helper wraps per-agent payloads into the documented envelope."""
-    a1 = _StubAgent(agent_id=10, name="a-010", strategy="momentum_sma20", symbol="SPY")
+    a1 = _StubAgent(agent_id=10, name="a-010", strategy="momentum_12_1", symbol="SPY")
     a2 = _StubAgent(
         agent_id=11,
         name="a-011",

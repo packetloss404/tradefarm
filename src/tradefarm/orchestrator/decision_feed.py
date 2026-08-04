@@ -139,7 +139,7 @@ def _build_reason(
     last_decision: Any | None,
     signals: list[Signal],
 ) -> str:
-    if strategy == "momentum_sma20":
+    if strategy in ("momentum_sma20", "momentum_12_1"):
         return _short_reason_momentum(verdict, signals)
     if strategy == "lstm_v1":
         return _short_reason_lstm(verdict, lstm)

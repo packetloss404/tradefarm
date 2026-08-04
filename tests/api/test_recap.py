@@ -123,7 +123,7 @@ async def recap_db(monkeypatch):
             Agent(
                 id=1,
                 name="agent-001",
-                strategy="momentum_sma20",
+                strategy="momentum_12_1",
                 starting_capital=1000.0,
                 cash=1000.0,
                 status="waiting",
