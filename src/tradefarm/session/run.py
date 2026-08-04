@@ -12,8 +12,6 @@ CLI:
 Output:
     out/sessions/<session_id>/manifest.json
     DB rows in trades/pnl_snapshots/agent_notes tagged with the session_id
-
-Skeleton — implementation lives in this file; see TODOs.
 """
 
 from __future__ import annotations

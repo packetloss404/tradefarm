@@ -15,12 +15,12 @@ dependencies = [
     # Upper bounds added in round 4 ship-readiness audit: protect
     # the project from silent major-version drift on `uv lock --upgrade`.
     "anthropic>=0.40,<1",
-    # NOTE (round-4 audit): pandas is intentionally LOOSE for now —
-    # the venv is on 3.0.2 (from a prior `uv lock --upgrade`) which
-    # introduces CoW-default + removed APIs. Adding `<3.0` would
-    # force a downgrade we haven't tested. Action item: explicitly
-    # adopt 3.x with audit, OR rebuild the venv with `<3.0`.
-    "pandas>=2.2",
+    # Round-6 audit fix: pin pandas<3. pandas 3.x introduces copy-on-write
+    # default + removed APIs that the venv has never been tested against.
+    # `>=2.2,<3` keeps the current major (2.x) which is what every
+    # lockfile refresh has used since 2025. The pandas 3.x migration
+    # is its own audit/upgrade — not a silent `uv lock --upgrade` step.
+    "pandas>=2.2,<3",
     "pyarrow>=17.0",
     "numpy>=2.0",
     "pandas-market-calendars>=4.4,<6",

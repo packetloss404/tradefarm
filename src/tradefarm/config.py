@@ -3,6 +3,14 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Round-6 audit fix (H14): env-var shadowing. pydantic-settings loads from
+# the shell environment FIRST and from ``.env`` only on top of that. If
+# the operator started the backend with ``ANTHROPIC_API_KEY=...`` in the
+# shell, the admin panel's later ``.env`` write is invisible on the
+# next restart. Log a warning at boot when an env-prefixed field is
+# set BOTH in the shell AND in ``.env`` so the operator can tell at a
+# glance that their ``.env`` edit was swallowed.
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -198,3 +206,42 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _check_env_shadows() -> None:
+    """Log a warning for each env-var whose shell value disagrees with
+    the file-resolved value.
+
+    Runs at module-import time. Each pydantic-settings field has a
+    matching env-var name (uppercase). We compare
+    ``os.environ[FIELD]`` (the shell value) to ``getattr(settings,
+    field)`` (the .env-resolved value, which ``pydantic-settings``
+    applies on top of the shell). If they differ, the shell wins on
+    restart — and the operator's ``.env`` edit is invisible.
+
+    This is a warning, not an error: some operators intentionally set
+    the shell env to override ``.env`` (e.g. for a one-off experiment).
+    """
+    import logging as _logging
+    import os as _os
+
+    log = _logging.getLogger(__name__)
+    for fname in type(settings).model_fields:
+        env_key = fname.upper()
+        shell_val = _os.environ.get(env_key)
+        if shell_val is None:
+            continue
+        file_val = getattr(settings, fname)
+        if file_val is None:
+            continue
+        # Compare as strings — pydantic-settings stores both sides as
+        # their typed-coerced value, so str() of the two should match
+        # when the operator's ``.env`` value is actually applied.
+        if str(file_val) != shell_val and str(shell_val) != str(file_val):
+            log.warning(
+                "env_shadow: %s is set in both shell and .env; shell wins on restart",
+                env_key,
+            )
+
+
+_check_env_shadows()

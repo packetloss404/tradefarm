@@ -3,8 +3,6 @@
 The session runner builds one of these per run by querying DB rows tagged
 with the session_id. The manifest is the *only* output the next pipeline
 stages need; they don't talk to the DB directly.
-
-Skeleton — implementation lives in this file; see TODOs.
 """
 
 from __future__ import annotations

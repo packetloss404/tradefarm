@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime
+from urllib.parse import urlparse
 
 import structlog
 from alpaca.trading.client import TradingClient
@@ -36,7 +37,13 @@ class AlpacaBroker:
         self.client = TradingClient(
             api_key=settings.alpaca_api_key,
             secret_key=settings.alpaca_api_secret,
-            paper="paper-api" in settings.alpaca_base_url,
+            # Round-6 audit fix: paper-mode detection was a fragile
+            # substring match. The Alpaca paper endpoint has historically
+            # been ``paper-api.alpaca.markets`` (v1) and is now
+            # ``paper-api.alpaca.markets`` (v2) — explicit host check
+            # matches both, survives v3+ renames better than substring.
+            paper=(urlparse(settings.alpaca_base_url).hostname or "")
+            == "paper-api.alpaca.markets",
         )
         # RTH-only gate for now. If someone explicitly opts in to extended
         # hours, we skip the is_market_open() check AND construct the

@@ -6,8 +6,6 @@ The caller (session/run.py) is responsible for:
 - Constructing the Orchestrator (typically via Orchestrator.build_default)
 - Iterating across days (this module handles one day at a time)
 - DB init (so trade/snapshot writes don't fail on missing tables)
-
-Skeleton — implementation lives in this file; see TODOs.
 """
 
 from __future__ import annotations

@@ -4,8 +4,6 @@ After the last trading day, persist each agent's closing state
 (equity, realized PnL, unrealized PnL, current positions) tagged with
 the active session_id. This is the data Phase 2's --continue-from
 flag will read to rehydrate books at the start of a follow-up session.
-
-Skeleton — implementation lives in this file; see TODOs.
 """
 
 from __future__ import annotations
