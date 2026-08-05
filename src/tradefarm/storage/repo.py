@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -13,7 +14,7 @@ from tradefarm.runtime.money import D
 from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
-from tradefarm.storage.models import Agent, PnlSnapshot, Position, Trade
+from tradefarm.storage.models import Agent, PnlSnapshot, PipelineRun, Position, Trade
 
 log = structlog.get_logger(__name__)
 
@@ -29,6 +30,12 @@ __all__ = [
     "set_agent_disabled",
     "set_agents_disabled_bulk",
     "get_disabled_agent_ids",
+    "create_pipeline_run",
+    "update_pipeline_run",
+    "get_pipeline_run",
+    "list_pipeline_runs",
+    "list_pipeline_runs_for_date",
+    "pipeline_run_with_terminal_state_for_date",
     "journal",
 ]
 
@@ -418,3 +425,199 @@ async def strategy_equity_timeseries(days: int = 7) -> list[dict]:
             )
         ).all()
     return [{"date": str(d), "strategy": s, "equity_total": float(e)} for d, s, e in rows]
+
+
+# ---------------------------------------------------------------------------
+# VOD pipeline run state — DB-backed replacement for the in-memory _RUNS deque.
+# The HTTP wrapper (``tradefarm.api.pipeline``) keeps a small in-process cache
+# for hot reads; every write goes through here so a backend restart
+# preserves the audit trail.
+# ---------------------------------------------------------------------------
+
+
+def _decode_lines(raw: str | None) -> list[str]:
+    """Parse the JSON-encoded ring buffer from ``pipeline_runs.last_lines_json``.
+
+    Tolerates the empty / malformed case (returns []) so a row that was
+    inserted by a pre-1.0 schema (or via raw DDL during a debug session)
+    never crashes the read path.
+    """
+    if not raw:
+        return []
+    try:
+        out = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return out if isinstance(out, list) else []
+
+
+def _encode_lines(lines: list[str]) -> str:
+    """Serialise a list[str] into the JSON string the column stores.
+
+    Defensive: a None input (caller passed no buffer) writes the
+    empty-list encoding rather than NULL, so reads always see a
+    valid JSON string.
+    """
+    return json.dumps(list(lines) if lines else [])
+
+
+async def create_pipeline_run(run: PipelineRun) -> None:
+    """Insert a new pipeline run row.
+
+    The row's ``id`` is set by the caller (the HTTP wrapper currently
+    uses ``uuid4().hex[:12]`` to match the legacy in-memory id shape;
+    the orchestrator's scheduler loop does the same). No dedupe here —
+    a duplicate ``id`` will raise ``IntegrityError``, which is the
+    caller's signal that they should generate a fresh id and retry.
+    The ``enabled`` list is serialised to JSON by SQLAlchemy's ``JSON``
+    column type. ``last_lines_json`` is taken as-is from the input
+    row (the caller — ``api.pipeline.PipelineRun.to_row()`` — fills
+    it from its in-memory ring buffer at the call site).
+    """
+    async with SessionLocal() as session:
+        # If the caller passed the in-memory dataclass (it has
+        # ``last_lines``), translate to the column. If they passed
+        # the SQLAlchemy row, ``last_lines_json`` is already there.
+        last_lines_json = getattr(run, "last_lines_json", None)
+        if last_lines_json is None and hasattr(run, "last_lines"):
+            last_lines_json = _encode_lines(run.last_lines or [])
+        # Status defaults to "pending" via the model's server_default
+        # + Python default — preserve whatever the caller set, defaulting
+        # to "pending" if empty.
+        status = (getattr(run, "status", None) or "pending")
+        row = PipelineRun(
+            id=run.id,
+            session_id=run.session_id,
+            date=run.date,
+            enabled=list(getattr(run, "enabled", None) or []),
+            force=bool(getattr(run, "force", False)),
+            dry_run=bool(getattr(run, "dry_run", False)),
+            status=status,
+            created_at=getattr(run, "created_at", None) or now_utc(),
+            started_at=getattr(run, "started_at", None),
+            finished_at=getattr(run, "finished_at", None),
+            error=getattr(run, "error", None),
+            last_lines_json=last_lines_json or "[]",
+        )
+        session.add(row)
+        await session.commit()
+
+
+async def update_pipeline_run(run_id: str, **fields: object) -> None:
+    """Partial update of a pipeline run row.
+
+    Recognised fields: ``status``, ``started_at``, ``finished_at``,
+    ``error``, ``enabled``, ``force``, ``dry_run``, ``last_lines``.
+    Anything else raises ``TypeError`` (mirrors the project's "no
+    silent typos" style) so a renamed column is loud, not silent.
+
+    ``last_lines`` is accepted as a list[str] and serialised through
+    the JSON column; ``enabled`` is also serialised. ``started_at`` /
+    ``finished_at`` accept ``datetime`` or ISO strings.
+    """
+    if not fields:
+        return
+    # Coerce the ring-buffer arg into the column shape. Doing it
+    # outside the session loop keeps the hot path (one row update) cheap.
+    if "last_lines" in fields:
+        fields["last_lines_json"] = _encode_lines(fields.pop("last_lines"))  # type: ignore[arg-type]
+    if "enabled" in fields:
+        # JSON column coerces list → string under SQLite, so write the
+        # JSON-encoded form explicitly for cross-dialect consistency.
+        raw = fields["enabled"]
+        if isinstance(raw, list):
+            fields["enabled"] = list(raw)
+    async with SessionLocal() as session:
+        existing = (
+            await session.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+        ).scalar_one_or_none()
+        if existing is None:
+            # Silent no-op: the scheduler / HTTP wrapper should treat an
+            # unknown id as a stale write (the run was probably wiped
+            # by a manual cleanup). Not raising keeps the per-step
+            # retry loop robust to a half-deleted row.
+            log.info("update_pipeline_run_not_found", run_id=run_id)
+            return
+        for k, v in fields.items():
+            if not hasattr(existing, k):
+                raise TypeError(f"PipelineRun has no column {k!r}")
+            setattr(existing, k, v)
+        await session.commit()
+
+
+async def get_pipeline_run(run_id: str) -> PipelineRun | None:
+    """Return the run row by id, or None if no such row.
+
+    The shape returned is the SQLAlchemy model — callers that need a
+    plain dict should call ``to_dict()`` on it (the api.pipeline layer
+    already has a helper for this).
+    """
+    async with SessionLocal() as session:
+        return (
+            await session.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+        ).scalar_one_or_none()
+
+
+async def list_pipeline_runs(*, limit: int = 20) -> list[PipelineRun]:
+    """Return the most recent N runs, newest first.
+
+    Mirrors the in-memory deque's bounded behaviour: the API surface
+    only ever shows the last ``limit`` runs (default 20), so an old
+    run that fell off the bottom of the cache is still queryable
+    directly via ``get_pipeline_run``.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(PipelineRun).order_by(PipelineRun.created_at.desc()).limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return list(rows)
+
+
+async def list_pipeline_runs_for_date(date: str) -> list[PipelineRun]:
+    """Return all run rows whose ``date`` column equals ``date`` (ISO).
+
+    The orchestrator's daily scheduler uses this to compute the
+    per-day idempotency check; the HTTP layer uses it for the live
+    data hook ("show me today's run state"). Newest first.
+    """
+    async with SessionLocal() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(PipelineRun)
+                    .where(PipelineRun.date == date)
+                    .order_by(PipelineRun.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return list(rows)
+
+
+async def pipeline_run_with_terminal_state_for_date(date: str) -> PipelineRun | None:
+    """Return the newest pipeline run for ``date`` whose status is
+    ``done`` or ``failed`` — the per-day idempotency check the
+    scheduler reads before kicking off a new run.
+
+    Returns None if no such row exists (no run today, or every run
+    today is still ``pending``/``running``). The status filter
+    matters: a ``running`` row also satisfies the "don't double-fire"
+    predicate via the broader call below.
+    """
+    async with SessionLocal() as session:
+        return (
+            await session.execute(
+                select(PipelineRun)
+                .where(PipelineRun.date == date)
+                .where(PipelineRun.status.in_(("done", "failed")))
+                .order_by(PipelineRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()

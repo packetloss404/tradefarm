@@ -25,7 +25,12 @@ SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=
 # _INDEX_MIGRATIONS) lands. Recorded in the `schema_version` table on every
 # successful init for observability — it is NOT a gate (migrations stay
 # idempotent and self-detecting), just a breadcrumb of what code last ran.
-SCHEMA_VERSION = 1
+# v2: pipeline_runs table added (autonomy sprint). create_all picks it up
+# on the next boot; the dedicated ``_ensure_pipeline_runs`` helper is
+# defensive against a code path that bypasses create_all (none today, but
+# the helper is cheap and matches the existing pattern of belt-and-braces
+# index/column guards).
+SCHEMA_VERSION = 2
 
 
 # (table, column, sqlite DDL fragment — just the "type + defaults" part)
@@ -214,9 +219,51 @@ async def _ensure_schema_version(conn) -> None:
         log.info("schema_version_recorded", version=SCHEMA_VERSION)
 
 
+async def _ensure_pipeline_runs(conn) -> None:
+    """Defensive: create the ``pipeline_runs`` table if it's missing.
+
+    ``create_all`` (called in ``init_db`` before this helper) handles the
+    normal case — the model is registered in ``Base.metadata`` and
+    ``create_all`` is idempotent. This guard exists so a pre-existing
+    DB that was bootstrapped against an older version of ``models.py``
+    (and somehow lost the table — e.g. a manual ``DROP TABLE``) doesn't
+    crash the boot on the first ``INSERT INTO pipeline_runs`` from
+    ``repo.create_pipeline_run``. It also covers the test pattern of
+    pointing the engine at a pre-existing SQLite file that lacks the
+    table (some tests build the engine first, then call ``init_db``).
+    """
+    # Use a cheap existence check rather than re-running create_all for
+    # one table — keeps the per-boot cost near zero for the hot path.
+    if _dialect_name(conn) == "postgresql":
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_name = 'pipeline_runs'"
+                )
+            )
+        ).first()
+    else:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'pipeline_runs'"
+                )
+            )
+        ).first()
+    if rows is None:
+        # Import locally to avoid a circular import at module load
+        # (models.py imports from sqlalchemy; repo.py imports from here).
+        from tradefarm.storage.models import Base
+
+        await conn.run_sync(Base.metadata.tables["pipeline_runs"].create)
+
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
         await _ensure_indexes(conn)
+        await _ensure_pipeline_runs(conn)
         await _ensure_schema_version(conn)

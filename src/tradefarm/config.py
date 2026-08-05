@@ -146,6 +146,36 @@ class Settings(BaseSettings):
     academy_demote_cap_pct: float = Field(default=0.10, ge=0.0, le=1.0)
 
     # -------------------------------------------------------------------------
+    # VOD autonomy — daily pipeline scheduler + webhook notifications.
+    #
+    # `vod_pipeline_enabled`: master switch. When False (default), the
+    # orchestrator's `run_vod_scheduler()` loop sleeps forever, so the
+    # operator can ship this code dark and flip the switch without a
+    # restart. When True, the scheduler loop fires the render pipeline
+    # once per trading day, after the post-close cool-off.
+    #
+    # `vod_market_close_offset_min`: minutes after today's RTH close to
+    # wait before firing. Lets data settle (4pm close + 5 min for the
+    # broker feeds to flush). Mirrors what the operator would do
+    # manually — `sleep 16:05 && uv run python -m tradefarm.render.pipeline`.
+    #
+    # `vod_publish_at_et`: "HH:MM" ET clock time used as the YouTube
+    # `publish_at` for private uploads. The chain's `yt.metadata` already
+    # reads this; the scheduler's job is to fire the run so the upload
+    # step lands with the right publish_at. Default 16:30 = 30 min
+    # after close, matches the existing `default_publish_at()` default.
+    #
+    # `vod_notify_webhook`: URL to POST a JSON notification to when a
+    # run reaches a terminal state. Empty (default) disables
+    # notifications. Compatible with Discord/Slack incoming webhooks,
+    # ntfy.sh topics, or any json-post endpoint.
+    # -------------------------------------------------------------------------
+    vod_pipeline_enabled: bool = False
+    vod_market_close_offset_min: int = Field(default=5, ge=0, le=120)
+    vod_publish_at_et: str = "16:30"
+    vod_notify_webhook: str = ""
+
+    # -------------------------------------------------------------------------
     # YouTube Live Chat — poll the active broadcast's live chat via the
     # YouTube Data API v3 and republish new messages on the WS as
     # ``chat_message`` events. Credentials live in `.env` only (NOT exposed in

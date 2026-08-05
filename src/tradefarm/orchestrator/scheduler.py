@@ -30,6 +30,7 @@ from tradefarm.data.universe import default_universe
 from tradefarm.execution.broker import Broker, SimulatedBroker
 from tradefarm.execution.virtual_book import VirtualBook
 from tradefarm.market.hours import is_market_open
+from tradefarm.market_clock import is_market_closed_for_n_minutes
 from tradefarm.risk.manager import RiskManager
 from tradefarm.runtime.money import D, quantize_qty
 from tradefarm.api.events import publish_event
@@ -158,6 +159,12 @@ class Orchestrator:
         # so readers don't observe a half-appended entry under the GIL.
         self._recent_fills: deque[dict[str, Any]] = deque(maxlen=50)
         self._curriculum_task: asyncio.Task | None = None
+        # VOD autonomy: the daily scheduler loop runs as a sibling of
+        # the main tick loop. It's a separate ``asyncio.Task`` so a
+        # long render doesn't block the tick and vice versa. Gated on
+        # ``settings.vod_pipeline_enabled`` (env var, default off) —
+        # the operator flips the switch without a code change.
+        self._vod_task: asyncio.Task | None = None
         # Issue #6: the presentation/interactivity layer (auto-director,
         # streak watcher, commentary, youtube chat, predictions, audience)
         # plus the broadcast ledger/scheduler arbiter is owned by a single
@@ -708,6 +715,321 @@ class Orchestrator:
                 log.exception("scheduled_tick_failed", error=str(e))
             await asyncio.sleep(interval)
 
+    async def run_vod_scheduler(self) -> None:
+        """Daily VOD pipeline scheduler. Fires once per NYSE trading day,
+        after the post-close cool-off (``settings.vod_market_close_offset_min``,
+        default 5). Gated on ``settings.vod_pipeline_enabled`` (env var,
+        default off — opt-in).
+
+        The loop polls every minute, and each tick:
+
+        1. Checks the master switch — if off, sleep forever (the task
+           is essentially idle). The operator can flip the env var
+           and bounce the process to enable.
+        2. Asks ``is_market_closed_for_n_minutes(N)`` — True only on
+           a real trading day, after the close, after the cool-off.
+           False on weekends / holidays / pre-open / mid-session.
+        3. Idempotency: looks for an existing ``pipeline_runs`` row
+           for today's ISO date with status ``done`` or ``failed``
+           (a ``running`` row also wins, via the in-flight check).
+           If found, skip — a previous process already fired today.
+        4. Generates a fresh ``session_id`` for today's date and
+           invokes the render pipeline in-process (no HTTP). The
+           pipeline is fire-and-forget from the scheduler's POV —
+           we kick it off on a thread and let the WS layer
+           republish progress.
+        5. Sleeps until tomorrow's window opens. We don't try to
+           re-fire the same day on a transient failure — the
+           failed row already exists for today, and the operator
+           can manually re-trigger from the dashboard.
+
+        The published ``pipeline_progress`` events are the same
+        shape the HTTP endpoint emits, so the existing dashboard
+        live data hook picks them up without change.
+        """
+        if not settings.vod_pipeline_enabled:
+            log.info("vod_scheduler_disabled")
+            # Block forever; the task is parked. Cancellation is
+            # the only way out (from stop_background). Sleeping
+            # here (rather than returning) keeps the task handle
+            # valid for clean cancellation.
+            await asyncio.Event().wait()
+            return
+
+        offset = settings.vod_market_close_offset_min
+        log.info("vod_scheduler_started", offset_min=offset)
+
+        # Re-check each minute. The check is cheap (a calendar lookup
+        # + a tz comparison), so 60s polling is fine; the
+        # alternative (sleep until the next "interesting moment")
+        # is fiddly across day boundaries and DST.
+        poll_sec = 60
+
+        while True:
+            try:
+                fired_today = await self._maybe_fire_vod_run(offset)
+                if fired_today:
+                    # The run was kicked off on its own thread; we
+                    # just need to wait until tomorrow's window opens
+                    # so we don't re-fire the same date.
+                    await self._sleep_until_next_window(offset)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # A transient calendar/DB error shouldn't kill the
+                # loop. Log + continue; the next tick (60s later)
+                # gets another shot.
+                log.exception("vod_scheduler_loop_failed", error=str(exc))
+            await asyncio.sleep(poll_sec)
+
+    async def _maybe_fire_vod_run(self, offset_min: int) -> bool:
+        """Return True if a run was fired today; False if not yet time
+        or already done.
+
+        Extracted from the loop body so tests can drive the
+        "should I fire?" predicate without spinning the event loop.
+        """
+        if not is_market_closed_for_n_minutes(offset_min):
+            return False
+
+        # Use the ET date for the per-day key, not UTC. A 16:30 ET
+        # close on Friday should fire under Friday's date, not
+        # Saturday's UTC date.
+        from tradefarm.market.hours import ET as _ET
+
+        today = _runtime_clock_now_utc().astimezone(_ET).date().isoformat()
+
+        # Idempotency: a row with status done/failed for today means
+        # a previous run already covered this date — don't re-fire.
+        existing = await repo.pipeline_run_with_terminal_state_for_date(today)
+        if existing is not None:
+            log.info(
+                "vod_scheduler_skip_already_ran",
+                date=today,
+                run_id=existing.id,
+                status=existing.status,
+            )
+            return False
+
+        # Also skip if a run is in-flight today (status=running) —
+        # a restart mid-render shouldn't double-fire.
+        from sqlalchemy import select as _select
+
+        from tradefarm.storage.models import PipelineRun as _PipelineRun
+
+        async with repo.SessionLocal() as session:
+            in_flight = (
+                await session.execute(
+                    _select(_PipelineRun.id)
+                    .where(_PipelineRun.date == today)
+                    .where(_PipelineRun.status == "running")
+                    .limit(1)
+                )
+            ).first()
+        if in_flight is not None:
+            log.info("vod_scheduler_skip_in_flight", date=today, run_id=in_flight[0])
+            return False
+
+        return await self._kick_vod_run(today)
+
+    async def _kick_vod_run(self, today: str) -> bool:
+        """Generate a fresh session_id for today, write a pipeline_runs
+        row, and invoke the render pipeline in-process on a worker
+        thread. Returns True on successful kickoff (the row was
+        written); False if the row write failed (logged + dropped).
+        """
+        import uuid as _uuid
+
+        from tradefarm.api.pipeline import PipelineRun as _PipelineRun
+        from tradefarm.api.pipeline import (
+            _fire_webhook as _fire_webhook,
+        )
+        from tradefarm.api.pipeline import (
+            _persist_run_state as _persist,
+        )
+        from tradefarm.render import pipeline as _pipeline_mod
+
+        session_id = f"s_{today}_{_uuid.uuid4().hex[:6]}"
+        # Default enabled set: same shape as the HTTP wrapper's
+        # "no flags" run. TTS + upload are explicit opt-in even
+        # from the scheduler — the operator flips those by
+        # editing the config / hitting the dashboard button.
+        enabled = sorted(
+            {step.key for step in _pipeline_mod.STEPS if step.enabled_by_default}
+        )
+
+        run = _PipelineRun(
+            run_id=_uuid.uuid4().hex[:12],
+            session_id=session_id,
+            date=today,
+            enabled=enabled,
+            force=False,
+            dry_run=False,
+        )
+        # Build the row for the repo (the dataclass is the in-memory
+        # mirror; the repo needs the SQLAlchemy model).
+        from tradefarm.storage.models import PipelineRun as _Row
+
+        row = _Row(
+            id=run.run_id,
+            session_id=run.session_id,
+            date=run.date,
+            enabled=run.enabled,
+            force=run.force,
+            dry_run=run.dry_run,
+            status="pending",
+            created_at=__import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ),
+            last_lines_json="[]",
+        )
+        try:
+            await repo.create_pipeline_run(row)
+        except Exception as exc:  # noqa: BLE001
+            log.error("vod_scheduler_create_run_failed", error=str(exc), date=today)
+            return False
+
+        log.info("vod_scheduler_fired", run_id=run.run_id, session_id=session_id, date=today)
+        # Publish the same start event the HTTP wrapper would emit, so
+        # the dashboard's live data hook picks up the run without
+        # needing to know it was started by the scheduler.
+        await publish_event(
+            "pipeline_progress",
+            {
+                "run_id": run.run_id,
+                "kind": "start",
+                "session_id": run.session_id,
+                "enabled": run.enabled,
+                "at": run.created_at,
+            },
+        )
+
+        # Invoke the pipeline on a worker thread (matches the HTTP
+        # wrapper's contract — pipeline.run_pipeline is synchronous
+        # and can run for minutes). The thread updates the in-memory
+        # ``run`` object's status + last_lines; we mirror those back
+        # to the DB at step boundaries via ``_persist_run_state``.
+        async def _runner() -> None:
+            # Inline mini-loop mirroring ``_run_pipeline_task`` from
+            # the HTTP wrapper. We re-implement here (rather than
+            # importing the helper) so the scheduler's failure path
+            # can be tuned independently — and so a future move to a
+            # separate worker process doesn't drag the FastAPI app's
+            # HTTP layer with it.
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
+
+            run.status = "running"
+            run.started_at = _dt.now(_tz.utc).isoformat()
+            await _persist(run)
+            from pathlib import Path as _Path
+
+            opts = _pipeline_mod.PipelineOpts(
+                sessions_dir=_Path("out/sessions"),
+                music=None,
+                tts_provider="auto",
+                tts_voice="alloy",
+                upload_dry_run=True,
+                stitch_xfade=0.4,
+                force=False,
+            )
+            sink_msgs: list[str] = []
+            from tradefarm.api.pipeline import _make_sink as _make_sink
+
+            def sink(msg: str) -> None:
+                sink_msgs.append(msg)
+                run.last_lines.append(msg)
+                if len(run.last_lines) > 200:
+                    run.last_lines = run.last_lines[-200:]
+
+            try:
+                await asyncio.to_thread(
+                    _pipeline_mod.run_pipeline,
+                    session_id=run.session_id,
+                    opts=opts,
+                    enabled=set(run.enabled),
+                    force=run.force,
+                    dry_run=run.dry_run,
+                    sink=sink,
+                )
+                run.status = "done"
+                run.finished_at = _dt.now(_tz.utc).isoformat()
+                await _persist(run)
+                await publish_event(
+                    "pipeline_progress",
+                    {
+                        "run_id": run.run_id,
+                        "kind": "done",
+                        "at": run.finished_at,
+                    },
+                )
+                _fire_webhook(run)
+            except SystemExit as exc:
+                run.status = "failed"
+                run.error = str(exc)
+                run.finished_at = _dt.now(_tz.utc).isoformat()
+                await _persist(run)
+                await publish_event(
+                    "pipeline_progress",
+                    {
+                        "run_id": run.run_id,
+                        "kind": "fail",
+                        "error": str(exc),
+                        "at": run.finished_at,
+                    },
+                )
+                _fire_webhook(run)
+            except Exception as exc:  # noqa: BLE001
+                run.status = "failed"
+                run.error = f"{type(exc).__name__}: {exc}"
+                run.finished_at = _dt.now(_tz.utc).isoformat()
+                await _persist(run)
+                await publish_event(
+                    "pipeline_progress",
+                    {
+                        "run_id": run.run_id,
+                        "kind": "fail",
+                        "error": run.error,
+                        "at": run.finished_at,
+                    },
+                )
+                _fire_webhook(run)
+
+        # Schedule the runner on the loop. We don't await it (it runs
+        # for minutes); the scheduler loop just needs to know the
+        # kickoff succeeded (which it did, by the time we got here).
+        asyncio.create_task(_runner())
+        return True
+
+    async def _sleep_until_next_window(self, offset_min: int) -> None:
+        """Sleep until the next "market closed for N minutes" window.
+
+        Called after a successful kickoff so the loop doesn't keep
+        firing every 60s. We compute the next 04:00 ET (premarket
+        start) on the following trading day and sleep until then —
+        rough but correct. The 60s poll on the next iteration will
+        see the cool-off has lapsed and re-evaluate.
+
+        On weekends / holidays this just sleeps ~24h to the next
+        weekday's premarket — close enough for the per-day cadence.
+        """
+        from datetime import timedelta as _td
+
+        from tradefarm.market.hours import ET as _ET
+        from tradefarm.runtime.clock import now_utc as _now
+
+        now = _now().astimezone(_ET)
+        # Sleep until 04:00 ET tomorrow. If it's already past 04:00
+        # today (we shouldn't get here in that case, but defensive),
+        # sleep until 04:00 ET tomorrow.
+        next_open = now.replace(hour=4, minute=0, second=0, microsecond=0)
+        if next_open <= now:
+            next_open = next_open + _td(days=1)
+        delta = (next_open - now).total_seconds()
+        # Cap the sleep at 24h+ a few minutes so a clock skew can't
+        # put us in a long stall.
+        await asyncio.sleep(min(delta, 24 * 3600 + 600))
+
     def reload_llm_overlay(self) -> dict[str, str | None]:
         """Rebuild the shared LLM overlay (e.g. after the admin panel flips
         provider / key / model) and re-point every LSTM+LLM agent at it.
@@ -749,6 +1071,15 @@ class Orchestrator:
     async def start_background(self) -> None:
         if settings.auto_tick_interval_sec > 0 and self._task is None:
             self._task = self._spawn_loop(self.run_scheduled(), name="orch_scheduler")
+
+        # VOD autonomy: spawn the daily scheduler loop regardless of
+        # whether the operator has enabled it — the loop itself
+        # parks on an asyncio.Event() when the master switch is off.
+        # Doing it this way means the operator can flip the env var
+        # and bounce the process to enable, without the orchestrator
+        # having to be re-instantiated.
+        if self._vod_task is None:
+            self._vod_task = self._spawn_loop(self.run_vod_scheduler(), name="orch_vod")
 
         if settings.execution_mode == "alpaca_paper" and self._recon_task is None:
             # Lazy import to avoid pulling alpaca-py in simulated mode.
@@ -920,8 +1251,8 @@ class Orchestrator:
         return applied
 
     async def stop_background(self) -> None:
-        # Cancel the main scheduler + reconciler loops first.
-        for t in (self._task, self._recon_task):
+        # Cancel the main scheduler + reconciler + VOD loops first.
+        for t in (self._task, self._recon_task, self._vod_task):
             if t is None:
                 continue
             t.cancel()
@@ -931,6 +1262,7 @@ class Orchestrator:
                 pass
         self._task = None
         self._recon_task = None
+        self._vod_task = None
         await self.stop_curriculum()
         # Issue #6: drain the broadcast presentation layer as a unit. The
         # suite stops every sidecar first (they may still emit broadcast

@@ -52,6 +52,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
+
 from tradefarm.session import replay_query
 
 
@@ -421,10 +423,49 @@ async def render_session(
     skip_kinds: frozenset[str] | None = None,
     allow_scenes: frozenset[str] | None = None,
     purge_stale: bool = True,
+    _probe: bool = True,
 ) -> RenderSummary:
     """Top-level entrypoint. Loads beats.json + manifest, renders each
     job sequentially, returns a summary. Skipped beats are recorded
-    but don't count as failures."""
+    but don't count as failures.
+
+    `_probe` is an internal test escape hatch: when False, the stream
+    liveness probe at the top is skipped. The probe exists because a
+    10-beat session with no stream Vite means a 5-minute hang on the
+    first goto's 30s timeout, repeated per beat; the probe turns that
+    into a 2s fast-fail with a clear "start `cd stream && npm run dev`"
+    message.
+    """
+
+    # Stream liveness probe. Runs synchronously at the very top of the
+    # function so a missing dev server fails the run in <2s instead of
+    # the prior 30s/beat * N beats. The probe is GET-only, 2s timeout,
+    # and accepts any 2xx/3xx (vite serves 200 on /, some setups hit
+    # a redirect to /index.html). Anything else raises with an
+    # actionable error string. We do this BEFORE the path-traversal
+    # guard below so a probe failure on a bad session_id still shows
+    # the operator the real problem (stream not up) rather than a
+    # misleading "session_id rejected" message.
+    if _probe:
+        # Strip the trailing slash from stream_base for the probe URL
+        # (build_url appends a / for the navigation URL; here we want
+        # just the root). The 2s timeout is a hard cap — vite cold
+        # start is usually <500ms.
+        probe_url = stream_base.rstrip("/") + "/"
+        try:
+            resp = httpx.get(probe_url, timeout=2.0)
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"stream Vite not reachable at {probe_url} "
+                f"({type(exc).__name__}: {exc}). "
+                f"Start the dev server with `cd stream && npm run dev`."
+            ) from exc
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"stream Vite not reachable at {probe_url} "
+                f"(HTTP {resp.status_code}). "
+                f"Start the dev server with `cd stream && npm run dev`."
+            )
 
     # Reject path-traversal-shaped session_ids at the CLI boundary too —
     # the REST + WS entrypoints already guard, but the renderer was

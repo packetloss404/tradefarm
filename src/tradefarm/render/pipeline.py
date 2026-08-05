@@ -47,8 +47,10 @@ is skipped (use ``--force`` to re-run).
 from __future__ import annotations
 
 import argparse
+import asyncio
 import io
 import sys
+import time
 import uuid
 from contextlib import redirect_stdout
 from dataclasses import dataclass
@@ -135,6 +137,17 @@ class PipelineOpts:
     upload_dry_run: bool
     stitch_xfade: float
     force: bool
+    # Per-step retry knobs. ``max_attempts`` is the total attempt
+    # count (1 = no retry, 2 = one retry on top of the first try).
+    # ``retry_backoff_sec`` is the linear backoff between attempts
+    # (we don't exponential-back per-step because the per-step cost
+    # is already minutes; 30s of settle time is plenty for a
+    # transient Chromium crash or a transient HTTP 5xx). The retry
+    # only fires on the transient-exception tuple below — NEVER on
+    # ``SystemExit`` (a real failure inside the inner CLI, not a
+    # transient blip).
+    max_attempts: int = 2
+    retry_backoff_sec: float = 30.0
 
 
 def _build_session_argv(session_id: str, sessions_dir: Path, opts: PipelineOpts) -> list[str]:
@@ -363,25 +376,97 @@ def _run_step(
 ) -> None:
     """Run one step's inner main() with the resolved argv, capturing
     its stdout so we can prefix every line with the step name.
+
+    Retries on transient-looking exceptions
+    (``OSError``, ``httpx.HTTPError``, playwright errors). Never
+    retries on ``SystemExit`` — that's a deliberate, in-band
+    failure signal from the inner CLI, not a transient blip.
     """
     argv = step.build_argv(session_id, opts.sessions_dir, opts)
     sink(f"$ python -m {step.module}  {' '.join(argv)}")
-    buf = io.StringIO()
+
+    # Import inside the function so the test fixture can monkeypatch
+    # the playwright errors tuple without paying the import cost
+    # elsewhere. ``httpx`` and ``OSError`` are stdlib/HTTPX already
+    # imported transitively in most code paths, but we re-import
+    # here to keep the retry-tuple definition close to the loop.
+    import httpx
+
+    transient_types: tuple[type[BaseException], ...] = (OSError, httpx.HTTPError)
     try:
-        with redirect_stdout(buf):
-            step.run(argv)
-    except SystemExit as exc:
-        # Inner CLIs raise SystemExit(1) on bad input. Re-emit the
-        # captured output for context, then propagate the same exit code
-        # so the pipeline as a whole fails fast.
-        sys.stdout.write(buf.getvalue())
-        sys.stdout.flush()
-        code = exc.code if isinstance(exc.code, int) else 1
-        raise SystemExit(f"step {step.key!r} failed (exit {code})") from exc
-    except Exception as exc:  # noqa: BLE001
-        sys.stdout.write(buf.getvalue())
-        sys.stdout.flush()
-        raise SystemExit(f"step {step.key!r} failed: {type(exc).__name__}: {exc}") from exc
+        # Playwright's errors are dynamically constructed; importing
+        # the module is best-effort. If playwright isn't installed
+        # (the test suite strips the optional dep), the retry tuple
+        # just won't include its errors — the OSError + httpx
+        # coverage is the high-value path anyway.
+        from playwright._impl._errors import Error as _PlaywrightError
+
+        transient_types = transient_types + (_PlaywrightError,)
+    except ImportError:  # pragma: no cover — env-dependent
+        pass
+
+    max_attempts = max(1, int(opts.max_attempts))
+    backoff = max(0.0, float(opts.retry_backoff_sec))
+    last_exc: BaseException | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                step.run(argv)
+            # Success — fall through to the stdout fan-out below.
+            break
+        except SystemExit as exc:
+            # Inner CLIs raise SystemExit(1) on bad input. NEVER
+            # retry — this is a real failure, not a transient blip.
+            sys.stdout.write(buf.getvalue())
+            sys.stdout.flush()
+            code = exc.code if isinstance(exc.code, int) else 1
+            raise SystemExit(f"step {step.key!r} failed (exit {code})") from exc
+        except asyncio.CancelledError:
+            # Propagate cancellation immediately — don't retry a
+            # Ctrl-C / task cancel. Mirrors the existing asyncio
+            # contract throughout the codebase.
+            raise
+        except transient_types as exc:
+            last_exc = exc
+            if attempt >= max_attempts:
+                # Out of retries. Emit the captured output (so the
+                # operator sees the inner failure) and raise as a
+                # plain SystemExit so the pipeline's "first failure
+                # wins" semantics stay intact.
+                sys.stdout.write(buf.getvalue())
+                sys.stdout.flush()
+                raise SystemExit(
+                    f"step {step.key!r} failed after {max_attempts} attempts: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            sink(
+                f"step {step.key!r} transient failure (attempt {attempt}/{max_attempts}): "
+                f"{type(exc).__name__}: {exc} — retrying in {backoff:.0f}s"
+            )
+            # Emit the partial stdout so the operator sees the
+            # failure context, then sleep, then loop.
+            sys.stdout.write(buf.getvalue())
+            sys.stdout.flush()
+            if backoff > 0:
+                time.sleep(backoff)
+            continue
+        except Exception as exc:  # noqa: BLE001
+            # Non-transient exception. Don't retry — the inner CLI
+            # raised a real error (ValueError, KeyError, etc.).
+            sys.stdout.write(buf.getvalue())
+            sys.stdout.flush()
+            raise SystemExit(f"step {step.key!r} failed: {type(exc).__name__}: {exc}") from exc
+    else:
+        # All attempts exhausted — should have raised in the loop
+        # above, but defensive in case of an unexpected fall-through.
+        if last_exc is not None:
+            raise SystemExit(
+                f"step {step.key!r} failed after {max_attempts} attempts: "
+                f"{type(last_exc).__name__}: {last_exc}"
+            ) from last_exc
+
     # Forward the step's stdout (filtered) to the pipeline's stdout so
     # the operator sees what happened. Skip blank-line spam.
     for line in buf.getvalue().splitlines():

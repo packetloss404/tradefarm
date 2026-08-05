@@ -2,9 +2,11 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -177,4 +179,67 @@ class AcademyPromotion(Base):
             "at",
             name="uq_academy_promotions_unique_crossing",
         ),
+    )
+
+
+class PipelineRun(Base):
+    """VOD pipeline run state — DB-backed replacement for the in-memory
+    ``_RUNS`` deque in ``tradefarm.api.pipeline``.
+
+    One row per pipeline run (a `run_id` is a 12-char hex, same shape
+    the old in-memory deque used). Status moves through
+    ``pending -> running -> done | failed``. The same row is also
+    written by the orchestrator's daily scheduler loop, which checks
+    ``status IN ('done', 'running')`` for the current date as its
+    per-day idempotency guard.
+
+    `last_lines_json` is a JSON-encoded list[str] ring buffer
+    (capped at 200) mirroring the per-run log tail the HTTP layer
+    used to keep in process memory. Storing it here makes a
+    backend restart preserve the log for the dashboard.
+    """
+
+    __tablename__ = "pipeline_runs"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128))
+    # ISO date the run targets (e.g. "2026-08-04"). The scheduler
+    # uses this for the "already ran today" idempotency check. NULL
+    # for ad-hoc runs against a session_id without a date.
+    date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # JSON-encoded list[str] — the resolved enabled step keys
+    # (e.g. ["session", "beats", "headless", ...]). Using the
+    # SQLAlchemy JSON type so the dialect handles serialization
+    # (TEXT under SQLite, JSONB under Postgres).
+    enabled: Mapped[list] = mapped_column(JSON, default=list)
+    force: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # pending | running | done | failed. App-level enum, kept as a
+    # String for forward-compat (an "awaiting_approval" status can
+    # be added later without a migration).
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON-encoded list[str] — ring buffer of the last 200 banner
+    # lines for the live-log panel. TEXT for SQLite/Postgres
+    # portability; the in-memory deque used to be the source of
+    # truth for this, but a process restart wiped it.
+    last_lines_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+
+    __table_args__ = (
+        # Hot path: "all runs for this session" (the live data
+        # hook asks this when surfacing a session's pipeline state).
+        Index("ix_pipeline_runs_session_id_created_at", "session_id", "created_at"),
+        # Hot path: scheduler's per-day idempotency check
+        # ("any done/running row for today's date?"). Partial
+        # constraint would be cleaner but SQLite doesn't support
+        # partial indexes on arbitrary expressions the same way,
+        # so a plain composite index over (status, created_at) is
+        # the portable compromise — the date filter still wins
+        # because the scheduler passes an exact `date = today`.
+        Index("ix_pipeline_runs_status_created_at", "status", "created_at"),
     )
