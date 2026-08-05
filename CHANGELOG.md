@@ -13,6 +13,92 @@ commit on GitHub.
 
 ---
 
+## [0.7.0] — 2026-08-04
+
+A breadth release: the strategy roster grows from 3 to 7, the operator
+gets per-agent toggles + a live VOD pipeline runner button, and the
+headless replay path is now end-to-end tested. 690 tests pass
+(up from 580 at 0.6.0); no breaking schema changes.
+
+### Added — 5 new strategies + per-agent admin
+
+- **Momentum 12-1** (`e062869`). 12-month return minus the most
+  recent month, the Jegadeesh-Titman classic. Replaces the
+  `momentum_sma20` placeholder.
+- **Bollinger Bands mean reversion** (`b9db31a`,
+  `mean_reversion_bb`). 20-period SMA ±2σ; enter at the band, exit
+  at the SMA.
+- **RSI-2 (Connors)** (`3109e84`, `rsi2`). 2-period RSI, oversold=5,
+  overbought=95.
+- **Donchian breakout** (`4c1c185`, `donchian_breakout`).
+  20-period channel breakout; uses the *prior* 20 bars, not the
+  current one (subagent flagged the spec ambiguity).
+- **Pairs z-score** (`7da7b8d`, `pairs_zscore`). 14 hardcoded US
+  equity pairs (`src/tradefarm/data/pairs.py`); long A on
+  z < -2, exit at |z| < 0.5. Sandbox constraint: long-only.
+- **Per-agent admin toggles** (`ad2ccc9`). `Agent.disabled` Boolean
+  column + 3 REST endpoints (`GET /admin/agents` carries the flag,
+  `POST /admin/agents/{id}/disabled`, `POST /admin/agents/disabled-bulk`)
+  + an Agent Override section in the VOD admin tab.
+- **Orchestrator 7-strategy rotation** (`de909a5`, `746e2d9`).
+  `i % 7` slot rotation: momentum, lstm_v1, lstm_llm_v1, bb, rsi2,
+  donchian, pairs. The two LSTM slots fall back to momentum when
+  no model/overlay is loaded — explicit, not silent.
+- 100 agents spread: 44 momentum, 14 each of bb/rsi2/donchian/pairs.
+
+### Added — VOD studio live surface
+
+- **Episode review live MP4 preview + working download** (`9cbf43c`).
+  `<video controls poster>` against the new `/vod/{id}/reel.mp4`
+  endpoint; session picker + `<a download>`. 9 endpoint tests.
+- **One-shot VOD pipeline runner** (`11732fb`,
+  `python -m tradefarm.render.pipeline`). 8-step chain
+  (session → beats → headless → stitch → tts → mix → metadata →
+  upload) with skip/force/dry-run controls, structured progress,
+  and a `sink` callback so the HTTP wrapper can fan out to the WS
+  bus.
+- **Live pipeline runner + render button** (`f8d1ec8`). POST
+  `/pipeline/run` returns a `run_id`; the VOD studio polls
+  `/pipeline/runs/{id}` every 2s and shows a real `RunPanel` with
+  status pill + log tail. The 10-subsystem pills merge with the
+  active run when one is in flight, falling back to the mock
+  subsystem counts otherwise.
+- **Stream-side `?scene=` URL pin** (`f8d1ec8`). `stream/src/App.tsx`
+  reads `?scene=<id>` and pins the rotator (`rotationSec=0`,
+  `forceSceneId`) so the headless renderer's URL builder can lock
+  a scene for capture.
+- **10-card subsystem state merge** (`f1e31a8`,
+  `web/src/vod/derivePipelineNodes.ts`). Pure helper that maps
+  each of the 10 prototype cards to a real `tradefarm.render.pipeline`
+  step (session/beats/headless/stitch/tts/mix/metadata/upload) and
+  derives per-card status from the run's `last_lines` tail. The
+  two prototype-only cards (script writer, thumbnail) stay in the
+  grid with an honest "no matching step" note.
+
+### Added — Replay chain coverage
+
+- **End-to-end replay chain test** (`1ede68f`,
+  `tests/api/test_ws_replay.py`, 11 tests). Pins the contract
+  between `headless.build_url()` and the stream app's
+  `URLSearchParams` parser; the canonical `{type, ts, payload}`
+  envelope shape from `manifest_event_to_ws_envelope`; and a
+  real `TestClient` WS round-trip with the in-process `/ws`
+  endpoint that drives the full
+  URL → handshake → `events_in_window` → envelope chain.
+  Also covers path-traversal rejection, missing-manifest error
+  envelope, invalid-timestamp error envelope, and
+  `speed=0` (as-fast-as-possible) mode.
+
+### Changed
+
+- `KNOWN_STRATEGIES` now lists 7 strategies
+  (`momentum_12_1`, `mean_reversion_bb`, `rsi2`,
+  `donchian_breakout`, `pairs_zscore`, `lstm_v1`, `lstm_llm_v1`).
+  `momentum_sma20` is kept as a back-compat alias for existing
+  DB rows.
+
+---
+
 ## [0.6.0] — 2026-06-18
 
 A correctness-flavor release: every high-priority finding from the

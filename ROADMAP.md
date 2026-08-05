@@ -6,14 +6,17 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.6.0 shipped 2026-06-18.** Correctness-flavor release — every
-senior-review top-10 issue closed, money is `Decimal` end-to-end, the
-orchestrator is no longer a god object, security is correct by default,
-and the LLM surface is schema-validated. CI gates mypy, ruff, and
-ESLint. 556 tests passing across 72 files (up from 31 at 0.5.0). See
-[CHANGELOG.md](./CHANGELOG.md) for the full release notes. The current
-focus is operational hardening + the post-0.6.0 audit findings
-(catalogued in `REPO_REVIEW.md` + `BACKLOG.md`).
+**0.7.0 shipped 2026-08-04.** Breadth release — strategy roster
+grows from 3 to 7 (momentum_12_1, mean_reversion_bb, rsi2,
+donchian_breakout, pairs_zscore + the two LSTM strategies), per-agent
+admin toggles land, the VOD studio gets a live pipeline runner button
+plus an MP4 preview in Episode Review, and the headless replay chain
+is end-to-end tested. 690 tests passing (up from 580). See
+[CHANGELOG.md](./CHANGELOG.md) for the full release notes. The
+current focus is the post-0.7.0 audit findings (catalogued in
+`REPO_REVIEW.md` + `BACKLOG.md`) plus the carryover follow-ups from
+this round (per-step timing in `PipelineRun`, recap scene replay,
+real LLM/TTS keys for the optional pipeline steps).
 
 Status legend:
 
@@ -26,16 +29,11 @@ Status legend:
 
 ## Now — current focus
 
-The 0.5.0-era "Stream Vibe v2" broadcast-app polish (day/night, weather,
-tick countdown, equity sparkline, CRT toggle, recap scene) shipped in
-v0.5.0 (2026-05-09). The 0.6.0 release (2026-06-18) closed all
-senior-review top-10 issues (Decimal money, broker_order_id dedup,
-fail-fast bind, default-safe CORS, 60fps render, sidecar awaits,
-ScheduledMoment state, migration hardening, atomic persist, LLM parse
-validation, dead UI disabled) and added the BroadcastSuite extraction,
-mypy + ESLint in CI, and a daily LLM budget gate. **The current focus
-is operational hardening + the new findings from this audit round** —
-not new features.
+The 0.7.0 release (2026-08-04) grew the strategy roster to 7, landed
+per-agent admin toggles, gave the VOD studio a live pipeline runner
+button + MP4 preview, and pinned the headless replay chain with an
+end-to-end test. **The current focus is the post-0.7.0 audit findings
++ the carryover follow-ups from this round** — not new features.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
