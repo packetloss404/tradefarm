@@ -107,12 +107,18 @@ SCENE_FOR_KIND: dict[str, str] = {
     "recap": "recap",
     "agent_rivalry": "showdown",
     "promotion": "leaderboard",
+    # Strategy Wars — weekly multi-strategy leaderboard beat. Plays on
+    # the existing `strategy` scene (which is already in
+    # SCENES_WITH_REPLAY_SUPPORT for the per-strategy trades scenes).
+    "strategy_war": "strategy",
 }
 
 # Default duration per kind (seconds). Tuned to keep total reel around
 # 8-12 minutes when ~10 beats fire. Rivalry gets a longer slot so the
 # showdown scene can frame both agents' sides; promotion stays short —
-# it's a "by the way" beat, not a chapter.
+# it's a "by the way" beat, not a chapter. Strategy Wars gets a full
+# 30s because the show-and-tell of 7 strategies on one screen is the
+# whole point.
 DURATION_FOR_KIND: dict[str, int] = {
     "open": 12,
     "big_fill": 30,
@@ -124,13 +130,16 @@ DURATION_FOR_KIND: dict[str, int] = {
     "recap": 36,
     "agent_rivalry": 34,
     "promotion": 16,
+    "strategy_war": 30,
 }
 
 # Tiebreaker when scores are equal: higher = preferred. Mirrors the
 # operator's mental priority — disagreement is more interesting than a
 # single big number, single-agent stories beat aggregate ones.
 # Rivalry sits at the top of the body tier; promotion below streak so
-# the headline moments still surface first.
+# the headline moments still surface first. Strategy Wars sits between
+# the top-tier character beats and the single-agent streaks — it's an
+# aggregate view, not a single-agent story.
 KIND_PRIORITY: dict[str, int] = {
     "agent_rivalry": 7,
     "divergence": 6,
@@ -139,6 +148,7 @@ KIND_PRIORITY: dict[str, int] = {
     "streak": 3,
     "big_fill": 2,
     "promotion": 2,
+    "strategy_war": 2,
     "closing_burst": 1,
     "open": 99,  # always pinned first
     "recap": 99,  # always pinned last
@@ -849,6 +859,129 @@ def _score_recap(
     )
 
 
+def _score_strategy_war(
+    manifest: dict[str, Any],
+    last_week_rollup: dict[str, Any] | None,
+) -> Beat | None:
+    """Strategy Wars — the weekly multi-strategy leaderboard beat.
+
+    Reads the manifest's `strategy_rollup` (written by `session/run.py`
+    at session close) and emits a beat that ranks the strategies by
+    realized PnL. When the previous week's rollup is available, the
+    headline includes a "vs last week" delta so the operator can
+    pattern-match regime shifts ("momentum down 4 weeks running",
+    "pairs up 3 weeks running", etc.).
+
+    Returns `None` when no strategy rollup is in the manifest — the
+    detector runs on the manifest alone (no DB), and a missing rollup
+    means the runner didn't write one for this session (rare; future
+    rebuilds after a crash can land here). The skip is silent: the
+    next-day run will have it.
+
+    Score is a clamped function of the strategy count + total PnL
+    dispersion; rivalry-style aggregate views earn a slightly higher
+    floor than single-agent beats because the operator's "what's the
+    state of the league" scan benefits from a higher priority.
+    """
+    rollup = manifest.get("strategy_rollup")
+    if not rollup or not isinstance(rollup, dict):
+        return None
+    if len(rollup) < 2:
+        # Need at least 2 strategies to make a "war" — a single
+        # strategy isn't a war.
+        return None
+    ended = manifest.get("ended_at")
+    if not ended:
+        return None
+    t = _parse_iso(ended)
+
+    # Rank by realized PnL. Show all strategies in the headline (the
+    # studio's `strategy` scene handles 7 strategies on one screen).
+    by_pnl = sorted(
+        ((k, v.get("pnl", 0.0)) for k, v in rollup.items()),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    n = len(by_pnl)
+    winner = by_pnl[0]
+    loser = by_pnl[-1]
+    total_pnl = sum(p for _, p in by_pnl)
+
+    # Per-strategy pnlPct for the studio's `strategy` scene (which
+    # already reads `strategy_rollup` from the manifest). The metadata
+    # field carries the same numbers the studio would compute, so the
+    # rendered card matches the beat metadata one-to-one.
+    per_strategy: dict[str, dict[str, Any]] = {}
+    for strat, info in rollup.items():
+        per_strategy[strat] = {
+            "agents": int(info.get("agents", 0) or 0),
+            "equity": float(info.get("equity", 0.0) or 0.0),
+            "pnl": float(info.get("pnl", 0.0) or 0.0),
+            "pnlPct": float(info.get("pnlPct", 0.0) or 0.0),
+            "fills": int(info.get("fills", 0) or 0),
+        }
+
+    # "vs last week" deltas. If the previous week's rollup has the
+    # same strategy keys, surface them so the headline reads
+    # "momentum +2.1% (vs +0.8% last week)" rather than just
+    # "momentum +2.1%". Missing deltas are dropped (the strategy is
+    # new this week, or it was retired).
+    vs_last_week: dict[str, float] = {}
+    if last_week_rollup and isinstance(last_week_rollup, dict):
+        last_rollup = last_week_rollup.get("strategy_rollup") or {}
+        if isinstance(last_rollup, dict):
+            for strat, info in rollup.items():
+                last_info = last_rollup.get(strat)
+                if last_info and "pnlPct" in last_info:
+                    vs_last_week[strat] = round(
+                        float(info.get("pnlPct", 0.0))
+                        - float(last_info.get("pnlPct", 0.0)),
+                        2,
+                    )
+
+    # Headline reads like:
+    #   "Strategy Wars — week N: momentum +14.2% (vs +0.8% last),
+    #    pairs +5.4%, BB -2.1%, 7 strategies, +$3,420 pool PnL"
+    # but we cap at 3 strategies + the winner/loser for readability.
+    if vs_last_week:
+        winner_delta = vs_last_week.get(winner[0])
+        delta_str = (
+            f" (vs {winner_delta:+.1f}% last)" if winner_delta is not None else ""
+        )
+    else:
+        delta_str = ""
+    headline = (
+        f"Strategy Wars · {n} strategies · winner {winner[0]} "
+        f"{winner[1]:+.1f}{delta_str} · pool {total_pnl:+.0f}"
+    )
+    sub = f"loser {loser[0]} {loser[1]:+.1f} · {n} strategies go head-to-head"
+
+    # Score: 0.6 floor (always include if we got here), +0.4 ceiling
+    # when the gap between winner and loser is wide (a dramatic week).
+    gap = abs(winner[1] - loser[1])
+    score = _clamp(0.6 + min(gap / 200.0, 0.4))
+    return Beat(
+        id="b_strategy_war",
+        t=t.isoformat(),
+        kind="strategy_war",
+        score=score,
+        scene_hint=SCENE_FOR_KIND["strategy_war"],
+        headline=headline,
+        sub=sub,
+        duration_sec=DURATION_FOR_KIND["strategy_war"],
+        event_refs=[],
+        agent_ids=[],
+        symbol=None,
+        metadata={
+            "per_strategy": per_strategy,
+            "vs_last_week": vs_last_week,
+            "total_pnl": total_pnl,
+            "winner": winner[0],
+            "loser": loser[0],
+        },
+    )
+
+
 # ----- dedup + selection ----------------------------------------------------
 
 
@@ -925,6 +1058,7 @@ def detect_beats(
     *,
     thresholds: DetectorThresholds | None = None,
     promotion_events: Iterable[Any] | None = None,
+    weekly_rollup: dict[str, Any] | None = None,
 ) -> list[Beat]:
     """Run every scorer over the manifest, dedup, select, return.
 
@@ -934,6 +1068,13 @@ def detect_beats(
     the promotion scorer is skipped (it can't read the DB by itself —
     that would couple the detector to SQLAlchemy and break the
     "pure function of the manifest" property).
+
+    `weekly_rollup` is the previous week's rollup (read from
+    `out/weekly/<week_id>/rollup.json` by the runner). When provided,
+    the Strategy Wars detector includes "vs last week" deltas in the
+    beat headline + metadata. When omitted, the Strategy Wars beat
+    still fires (if the manifest has a strategy_rollup) but without
+    the deltas.
     """
 
     th = thresholds or DetectorThresholds()
@@ -957,6 +1098,9 @@ def detect_beats(
     recap = _score_recap(manifest, pnls, fills)
     if recap is not None:
         candidates.append(recap)
+    strategy_war = _score_strategy_war(manifest, weekly_rollup)
+    if strategy_war is not None:
+        candidates.append(strategy_war)
 
     deduped = _dedup(candidates, th)
     return _select(deduped, th)
