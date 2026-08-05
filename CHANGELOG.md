@@ -13,6 +13,102 @@ commit on GitHub.
 
 ---
 
+## [0.10.0] — 2026-08-04
+
+A "weekly formats ship + autonomy hardening" release. The
+research doc's top 3 weekly episode formats now have at
+least one studio surface: **Intern Watch** (12-min
+Friday) and **Rivalry Week** (7-min format) are full
+studio surfaces, with a new `/vod/{id}/extras` endpoint
+that surfaces the 0.9.0 manifest extras. **Asset
+archival** lands as a best-effort tar-on-done
+(`vod_archive_path`), so a destroyed local box no
+longer takes the source artifacts with it. 833 tests
+pass (up from 823 at 0.9.0).
+
+### Added — VOD studio weekly formats
+
+- **Intern Watch surface** (`commit 24e5943`,
+  `web/src/vod/InternWatch.tsx`). 12-min Friday format
+  that profiles the 5 lowest-cash intern agents at
+  session start. Reads `manifest.lowest_ranks` (a 0.9.0
+  manifest extra — full cast list with id, name, rank,
+  rank_index, strategy, starting_capital). Falls back
+  to a synthetic cast from the existing agents list
+  when the manifest predates 0.9.0. New `InternCastRow`
+  type in `web/src/vod/types.ts`.
+- **Rivalry Week surface** (`commit 24e5943`,
+  `web/src/vod/RivalryWeek.tsx`). 7-min format that
+  profiles the two agents with the highest opposite-side
+  count over the past 5 sessions, side-by-side with
+  their per-side PnL. Reads `manifest.rivalries`
+  (a 0.8.0 manifest extra). New `RivalryRow` type in
+  `web/src/vod/types.ts`.
+- **`GET /vod/{session_id}/extras`** (`commit 24e5943`,
+  `src/tradefarm/api/vod.py`). Returns the four 0.9.0-era
+  manifest extras (`rivalries`, `lowest_ranks`,
+  `strategy_rollup`, `interns_under_watch`) as one JSON
+  payload so the Intern Watch + Rivalry Week surfaces
+  can pull all three with a single fetch. The
+  InternWatch + RivalryWeek studio fall back to mock
+  data when this fetch fails (the studio's
+  fault-tolerance pattern is "show something rather
+  than nothing").
+- **VOD studio tab nav extended** (`commit 24e5943`).
+  Two new tabs after Episode Review: "Intern Watch"
+  (`#vod-studio/interns`) and "Rivalry Week"
+  (`#vod-studio/rivalries`). Tab count goes 4 → 6; the
+  header still collapses cleanly at 1280px and the URL
+  hash routing covers the new ids.
+
+### Added — Autonomy hardening
+
+- **Asset archival on run-done** (`commit 648103b`,
+  `src/tradefarm/render/archive.py`). On
+  `run.status == "done"` (and optionally on `failed`),
+  the session dir is tar-balled (gzip, excluding
+  `clips/` and `intermediates/`) to
+  `<archive_root>/<YYYY-MM-DD>/<sid>.tar.gz`. Wired
+  from the HTTP wrapper and the orchestrator's
+  scheduler; both paths share the same fire-and-forget
+  pattern. New env vars in `config.py`:
+  - `vod_archive_path: str = ""` — empty = no-op (the
+    default — operators opt in)
+  - `vod_archive_on_failure: bool = False` —
+    diagnostic state backup for failed runs
+- CLI: `python -m tradefarm.render.archive <session_id>
+  --out <dir>` for ad-hoc archival from a dev box.
+
+### Tests + ops
+
+- +10 active tests (823 → 833). 1 new test file:
+  - `tests/render/test_archive.py` (7) — happy path,
+    skip-on-no-root, skip-on-failed, missing src,
+    temp-file cleanup on failure, nested archive
+    root, clips/intermediates exclusion
+  - 3 new tests on `test_vod_assets.py::get_manifest_extras`
+- Full gauntlet: 833 passed, 8 skipped. `ruff`,
+  `mypy --strict`, `web tsc --noEmit`, `stream tsc
+  --noEmit` all clean.
+
+### Known carryovers (deferred to 0.11)
+
+- TTS still opt-in via `--include-tts`; needs a real
+  ElevenLabs or OpenAI key for the `auto` default to
+  produce VO. The renderer + chain are wired; the
+  missing piece is operator-supplied credentials.
+- Shorts `crop=ih*9/16:ih` smart-crop is unit-tested
+  for the contract but **not visually verified**
+  against a real stream clip with the LLM-reason
+  lower-third. 30s manual QA on the next render.
+- `web/src/vod/useVodSessionLive.ts` still uses the
+  3-bucket legacy `StrategyLegacy` for the Session
+  Control view. The 8-bucket `data.live.ts` hook
+  carries the wider view; the legacy hook is a
+  cosmetic carryover.
+
+---
+
 ## [0.9.0] — 2026-08-04
 
 A "tighten the autonomy loop" release. The 0.8.0 known gaps are

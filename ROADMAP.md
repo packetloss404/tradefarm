@@ -6,24 +6,18 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.9.0 shipped 2026-08-04.** A "tighten the autonomy loop" release —
-the 0.8.0 known gaps are addressed one-by-one. The scheduler's
-power-loss race is closed (`live_today`), the headless renderer
-captures 9:16 shorts + recap clips on the same loop, every
-published video gets a real thumbnail, the recap endpoint is
-replay-aware, the VOD studio's intern cast data is now full
-shape, the pipeline persists per-step timings, and the weekly
-Strategy Wars beat + rollup infra ship. 823 tests passing
-(up from 690). See [CHANGELOG.md](./CHANGELOG.md) for the full
-release notes. The current focus is the post-0.9.0 audit
-findings (the 0.9.0 carryovers — TTS defaults, asset
-archival, shorts visual verification — live in
-[CHANGELOG.md](./CHANGELOG.md#known-carryovers-deferred-to-010))
-plus the content side's [youtube-interesting
-doc](./docs/research/youtube-interesting.md) recommends the
-Intern Watch / Strategy Wars / Rivalry Week weekly formats
-(Strategy Wars shipped; Intern Watch and Rivalry Week surfaces
-still pending).
+**0.10.0 shipped 2026-08-04.** A "weekly formats ship + autonomy
+hardening" release. The research doc's top 3 weekly formats
+now have at least one studio surface: **Intern Watch** and
+**Rivalry Week** are full VOD studio tabs reading from a new
+`/vod/{id}/extras` endpoint, and **Strategy Wars** is
+already in the beats layer (0.9.0). Asset archival
+(`vod_archive_path`) is the missing piece that closes the
+"destroyed local box loses source artifacts" gap. 833 tests
+passing (up from 823). See [CHANGELOG.md](./CHANGELOG.md) for
+the full release notes. The current focus is the post-0.10.0
+audit findings (TTS defaults, shorts visual verification,
+the legacy `StrategyLegacy` carryover) — not new features.
 
 Status legend:
 
@@ -36,16 +30,14 @@ Status legend:
 
 ## Now — current focus
 
-The 0.9.0 release (2026-08-04) closed every 0.8.0 known gap: the
-scheduler's `live_today` flag, the recap-scene replay path, the
-thumbnail pipeline step, the full intern cast list, the
-per-step timing roll-up, the weekly rollup + Strategy Wars
-detector. The rivalry beat's duration now scales with its
-90-min window so the headless renderer's clip is long
-enough to show the full back-and-forth. **The current focus is
-the post-0.9.0 audit findings + the remaining content
-formats** (Intern Watch and Rivalry Week surfaces still
-pending; the Strategy Wars detector is shipped), not new
+The 0.10.0 release (2026-08-04) shipped Intern Watch +
+Rivalry Week studio surfaces (the missing weekly formats
+from the research doc) and asset archival on run-done
+(`vod_archive_path`). The autonomy policy ("auto private +
+publish_at 16:30 ET") and the daily scheduler loop are
+unchanged from 0.9.0. **The current focus is the post-0.10.0
+audit findings** (TTS operator credentials, shorts visual
+QA, the legacy `StrategyLegacy` carryover) — not new
 features. The research docs at `docs/research/` are the
 source of truth for what's left.
 
