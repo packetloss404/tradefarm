@@ -13,6 +13,83 @@ commit on GitHub.
 
 ---
 
+## [0.13.0] — 2026-08-05
+
+A "frontend audit followup" release. Closes the remaining
+post-0.10.0 frontend audit-followup items. The two
+operator-visible changes are: (1) the Broadcast panel's
+audio + cadence controls stay clickable when the stream
+heartbeat goes stale (the OfflineWarning banner is enough
+to flag the situation — greying out the controls was a
+double-fault) and (2) the heavy mock-data fixtures in
+`web/src/vod/data.ts` and `web/src/dash/data.ts` are
+gated behind `import.meta.env.DEV` so they don't ship in
+the production bundle. Several other audit items
+(RecentFillsRail age label, single WS per tab, a11y pass
+on modals, 800ms heartbeat removal) were already shipped in
+prior rounds — ROADMAP now reflects that. 861 tests pass
+(no new test files this release; the changes are
+type-checked + production-build-verified).
+
+### Changed — dev-only mock data
+
+- **`web/src/vod/data.ts`** — heavy exports (VOD_AGENTS,
+  BEATS, PIPELINE, DAY_SUMMARY) now return `[]` /
+  empty-shell values in production builds. The 3 dev
+  presets that the studio reads on the "mock" toggle
+  (when the operator is testing without a backend) still
+  work — they're just stripped from the prod bundle. Vite
+  tree-shakes the dev branch based on the static
+  `import.meta.env.DEV === 'false'` literal, so the
+  production bundle is the 360 KB / 108 KB gzipped it
+  would be without the fixtures.
+- **`web/src/dash/data.ts`** — same pattern. EPISODES,
+  STORYLINES, POOL_HISTORY, LB_HISTORY, and the
+  `anthropic_api_key: "••••GH8X"` placeholder in
+  DEFAULT_ADMIN_CONFIG all return empty / redacted in
+  production. The form's live `/admin/config` fetch
+  populates the real values; the dev preset is a
+  development convenience.
+- **`web/src/vite-env.d.ts`** — new file with
+  `/// <reference types="vite/client" />` so TypeScript
+  recognises `import.meta.env.DEV` in the gated exports.
+
+### Fixed — Broadcast controls stay live when stream goes stale
+
+- **`web/src/components/broadcast/BroadcastAudioSection.tsx`**
+  and **`BroadcastCadenceSection.tsx`** — both had
+  `const disabled = !isOnline` greying out the audio
+  toggle + cadence slider whenever the stream heartbeat
+  went stale. The BroadcastPanel already renders an
+  `OfflineWarning` banner at the top when offline (see
+  `web/src/components/broadcast/OfflineWarning.tsx`,
+  shipped in round 7), and the backend's command queue
+  handles offline gracefully + surfaces failures via the
+  per-section `err` display. So greying out the controls
+  was a double-fault: operator saw the warning + a slate
+  of disabled buttons, and the disable state actively
+  prevented them from queuing a cadence change for when
+  the stream reconnects. The `isOnline` prop is dropped
+  from both sections; the warning banner alone flags the
+  situation.
+
+### Carryover
+
+- **861 → 861 tests pass.** No new test files; changes
+  are TS-checked + production-build-verified.
+- **No DB schema changes.** `SCHEMA_VERSION` still at 4.
+- **No new env vars.**
+- **ROADMAP cleanup**: most of the "frontend audit
+  followup" items in the ROADMAP were already shipped
+  across rounds 7-11. The RecentFillsRail age-label fix
+  (round 7), the single-WS-per-tab via context provider
+  (round 7), the a11y pass on AdminModal + BacktestModal
+  (rounds 4-7), and the 800ms heartbeat removal (rounds
+  10-11) all landed in prior commits. 0.13.0 closes the
+  two remaining real gaps.
+
+---
+
 ## [0.12.0] — 2026-08-05
 
 A "backend audit followup" release. Closes the remaining

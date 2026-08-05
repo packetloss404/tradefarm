@@ -206,7 +206,6 @@ export function BroadcastPanel() {
             <BroadcastAudioSection
               audioEnabled={ss.audioEnabled}
               volume={ss.volume}
-              isOnline={ss.isOnline}
             />
           </div>
 
@@ -214,7 +213,6 @@ export function BroadcastPanel() {
             <BroadcastCadenceSection
               rotationSec={ss.rotationSec}
               layoutMode={ss.layoutMode}
-              isOnline={ss.isOnline}
             />
           </div>
 

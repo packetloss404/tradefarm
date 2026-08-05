@@ -6,17 +6,22 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.12.0 shipped 2026-08-05.** A "backend audit followup"
-release. Closes the remaining post-0.10.0 backend items from
-the 16-item "audit-followup quick wins" list: the shared
-httpx-client migration followup (commentary loop + tts
-elevenlabs + yt upload 4 callsites) and the
-audience-coordinator race + deque O(N) rebuild. 861 tests
-passing (up from 848). See [CHANGELOG.md](./CHANGELOG.md) for
-the full release notes. The current focus is the **frontend
-audit followup** (a11y, mock-data gating, single-WS-per-tab,
-the RecentFillsRail age label bug) — the backend audit list
-is now closed.
+**0.13.0 shipped 2026-08-05.** A "frontend audit followup"
+release. Closes the last of the post-0.10.0 frontend
+audit-followup items: the heavy mock-data fixtures in
+`web/src/vod/data.ts` and `web/src/dash/data.ts` are now
+gated behind `import.meta.env.DEV` so they don't ship in
+the production bundle, and the BroadcastPanel's audio
++ cadence controls stay clickable when the stream
+heartbeat goes stale (the OfflineWarning banner is
+enough — the disable was a double-fault). Most of the
+"frontend audit" items in the ROADMAP were already
+shipped across rounds 7-11; 0.13.0 closes the two
+remaining real gaps. 861 tests pass (no new test files
+this release; the changes are TS-checked +
+production-build-verified). See
+[CHANGELOG.md](./CHANGELOG.md) for the full release
+notes.
 
 Status legend:
 
@@ -29,16 +34,16 @@ Status legend:
 
 ## Now — current focus
 
-The 0.12.0 release (2026-08-05) closed the last of the
-backend audit-followup items from the post-0.10.0 review
-(shared-httpx-client migration followup + audience race +
-deque O(N) rebuild). The remaining audit-followup items are
-all **frontend**: the `RecentFillsRail` age-label bug, the
-single-WS-per-tab refactor, mock-data gating behind
-`import.meta.env.DEV`, the a11y pass on the legacy modals,
-and the `disabled={!isOnline}` → warning-banner refactor.
-The current focus is shipping 0.13.0 with the frontend
-half of the audit followup.
+The 0.13.0 release (2026-08-05) closed the last of the
+frontend audit-followup items from the post-0.10.0
+review. **The audit-followup quick-wins list is now
+exhausted on both the backend and frontend sides.**
+The remaining operator work is the 0.13.0 → next
+batch shift: visual QA on the Broadcast panel changes
+(no more disabled-when-offline), TTS provider switching
++ the podcast episode format from the research doc, and
+the carryover to 0.14+ (shorts visual verification,
+intraday data path, OBS WebSocket integration, etc.).
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
@@ -77,11 +82,15 @@ by impact — pick any one when the operator wants a small, contained PR.
 - **Frontend — replace `disabled={!isOnline}` with a warning banner.**
   If the stream heartbeat ever goes stale, the entire Broadcast
   panel greys out at the worst possible moment. *~½ day.*
-- **Docs — prune tracked debug screenshots** in
-  `docs/screenshots/2026-05-17/` (28 PNGs, 12 MB, not referenced).
-  *~10 min.*
-- **Docs — move/rename `dev/design_handoff_*` to `dev/_archive/`.**
-  The 3 handoff trees are now historical. *~10 min.*
+
+**Docs:**
+
+- ✅ ~~**Docs — prune tracked debug screenshots** in
+  `docs/screenshots/2026-05-17/`.~~ Already pruned — the
+  directory no longer exists.
+- ✅ ~~**Docs — move/rename `dev/design_handoff_*` to `dev/_archive/`.**~~
+  Already moved — the handoffs live at
+  `dev/_archive/design_handoffs_2026-04/`.
 
 ---
 

@@ -14,9 +14,8 @@ async function postCmd(type: string, payload: Record<string, unknown>): Promise<
 export function BroadcastAudioSection(props: {
   audioEnabled: boolean | null;
   volume: number | null;
-  isOnline: boolean;
 }) {
-  const { audioEnabled, volume, isOnline } = props;
+  const { audioEnabled, volume } = props;
 
   const [localEnabled, setLocalEnabled] = useState(false);
   const [localVolume, setLocalVolume] = useState(70);
@@ -50,7 +49,13 @@ export function BroadcastAudioSection(props: {
     }
   };
 
-  const disabled = !isOnline;
+  // 0.13.0 — keep the controls clickable when the stream is offline.
+  // The BroadcastPanel already shows an `OfflineWarning` banner at the
+  // top; greying out every control in the section was a double-fault
+  // (operator sees the warning + a slate of disabled buttons) and
+  // the backend's command queue already handles offline gracefully
+  // (the per-section `err` display surfaces command failures).
+  const disabled = false;
 
   const streamLabel = (() => {
     if (audioEnabled === null || volume === null) return "stream: —";
@@ -87,7 +92,7 @@ export function BroadcastAudioSection(props: {
       </div>
       <button
         onClick={onApply}
-        disabled={disabled || busy}
+        disabled={busy}
         className="w-full rounded-sm border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
       >
         {busy ? "applying…" : "Apply audio"}

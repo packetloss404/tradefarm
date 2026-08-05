@@ -6,6 +6,15 @@
 //
 // Split from the old mockData.ts so type-only consumers can import the
 // shapes from ./types.ts and stay out of the production bundle.
+//
+// 0.13.0 — gated behind `import.meta.env.DEV` so the heavy mock
+// fixtures (VOD_AGENTS, BEATS, PIPELINE, DAY_SUMMARY) don't ship in
+// the production bundle. Vite replaces `import.meta.env.DEV` with
+// `false` at build time, so Rollup tree-shakes the dev branch and
+// the production export is `[]` / a noop factory. The studio's
+// "mock" toggle still works in dev (the operator's normal flow).
+// In prod the studio runs against the live data hook + the
+// /api/agents + /api/account + /api/pnl/daily endpoints.
 
 import type {
   Agent,
@@ -18,6 +27,8 @@ import type {
   StrategyBucket,
   StrategyRollup,
 } from "./types";
+
+const _IS_DEV = import.meta.env.DEV;
 
 export const OFFICE_FIRSTS = [
   "michael", "jennifer", "david", "sarah", "james", "lisa", "robert", "amy",
@@ -188,9 +199,9 @@ function makeVodAgents(): Agent[] {
   return agents;
 }
 
-export const VOD_AGENTS: Agent[] = makeVodAgents();
+export const VOD_AGENTS: Agent[] = _IS_DEV ? makeVodAgents() : [];
 
-export const BEATS: Beat[] = [
+export const BEATS: Beat[] = _IS_DEV ? [
   {
     id: "b01", t: "09:30", tMs: 0,
     kind: "open", score: 0.62, scene: "preroll",
@@ -282,7 +293,7 @@ export const BEATS: Beat[] = [
     sub: "momentum +2.1%, lstm +1.2%, lstm_llm +2.4%. 1 promo, 0 demos.",
     duration: 36, refs: ["close_16_00"], agents: [98], selected: true,
   },
-];
+] : [];
 
 export const BEAT_KIND_META: Record<BeatKind, BeatMeta> = {
   open:              { label: "OPEN",       hue: 200, accent: "#86c5ff" },
@@ -299,7 +310,7 @@ export const BEAT_KIND_META: Record<BeatKind, BeatMeta> = {
   recap:             { label: "RECAP",      hue: 200, accent: "#86c5ff" },
 };
 
-export const PIPELINE: PipelineNode[] = [
+export const PIPELINE: PipelineNode[] = _IS_DEV ? [
   {
     id: "session", label: "Session runner", cmd: "tradefarm.session.run",
     status: "done", started: "16:00:04", finished: "16:01:12", durationSec: 68,
@@ -390,7 +401,7 @@ export const PIPELINE: PipelineNode[] = [
     summary: "unlisted · scheduled 16:30 ET · auto-publish",
     tail: ["[—] waiting on metadata"],
   },
-];
+] : [];
 
 function makeDaySummary(agents: Agent[]): DaySummary {
   const totalEquity = agents.reduce((s, a) => s + a.equity, 0);
@@ -422,7 +433,22 @@ function makeDaySummary(agents: Agent[]): DaySummary {
   };
 }
 
-export const DAY_SUMMARY: DaySummary = makeDaySummary(VOD_AGENTS);
+export const DAY_SUMMARY: DaySummary = _IS_DEV ? makeDaySummary(VOD_AGENTS) : {
+  totalEquity: 0,
+  allocated: 0,
+  totalPnl: 0,
+  pnlPct: 0,
+  byStrategy: {} as Record<StrategyBucket, StrategyRollup>,
+  topAgents: [],
+  botAgents: [],
+  promotions: 0,
+  demotions: 0,
+  fillCount: 0,
+  decisionCount: 0,
+  llmCalls: 0,
+  llmSkipped: 0,
+  llmSpend: 0,
+};
 
 export const CAPTION_STYLES = ["minimal", "kinetic", "news-chyron", "serif"] as const;
 export const COLOR_THEMES = ["studio dark", "studio light", "amber CRT"] as const;

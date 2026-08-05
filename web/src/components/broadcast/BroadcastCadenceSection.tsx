@@ -14,9 +14,8 @@ async function postCmd(type: string, payload: Record<string, unknown>): Promise<
 export function BroadcastCadenceSection(props: {
   rotationSec: number | null;
   layoutMode: "scenes" | "v1-broadcast" | null;
-  isOnline: boolean;
 }) {
-  const { rotationSec, layoutMode, isOnline } = props;
+  const { rotationSec, layoutMode } = props;
 
   const [localSec, setLocalSec] = useState(30);
   const [hydrated, setHydrated] = useState(false);
@@ -44,7 +43,14 @@ export function BroadcastCadenceSection(props: {
     }
   };
 
-  const disabled = !isOnline;
+  // 0.13.0 — keep the cadence slider live when the stream is offline.
+  // The BroadcastPanel surfaces an `OfflineWarning` banner at the top
+  // when the heartbeat goes stale; greying out the slider was a
+  // double-fault that prevented the operator from queuing a
+  // cadence change for when the stream reconnects. The backend's
+  // command queue handles offline gracefully and the per-section
+  // `err` display surfaces command failures.
+  const disabled = false;
   const dimmed = layoutMode === "v1-broadcast";
   const display = localSec === 0 ? "off (Hero)" : `${localSec}s`;
 

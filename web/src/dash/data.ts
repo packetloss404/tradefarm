@@ -5,9 +5,17 @@
 // Split from the old mockData.ts so type-only consumers (admin config
 // props, episode card metadata) can import from ./types.ts and stay
 // out of the production bundle.
+//
+// 0.13.0 — gated behind `import.meta.env.DEV` (see the matching
+// comment in `vod/data.ts`). The dash-only heavy exports
+// (EPISODES, STORYLINES, POOL_HISTORY, LB_HISTORY, DEFAULT_ADMIN_CONFIG)
+// are noop/empty in production builds. Vite tree-shakes the dev
+// branch based on the static `import.meta.env.DEV` literal.
 
 import { seededRngStr, VOD_AGENTS } from "../vod/data";
 import type { DashAdminConfig, Episode, LbHistory, Storyline, StorylineKind } from "./types";
+
+const _IS_DEV = import.meta.env.DEV;
 
 const EPISODE_TITLES = [
   "Quiet open, ugly close",
@@ -77,11 +85,11 @@ function makeEpisodes(): Episode[] {
   return eps.reverse();
 }
 
-export const EPISODES: Episode[] = makeEpisodes();
+export const EPISODES: Episode[] = _IS_DEV ? makeEpisodes() : [];
 
 // --- Storylines ---------------------------------------------------------
 
-export const STORYLINES: Storyline[] = [
+export const STORYLINES: Storyline[] = _IS_DEV ? [
   {
     id: "sl_brian_lisa",
     kind: "rivalry",
@@ -147,7 +155,7 @@ export const STORYLINES: Storyline[] = [
     trend: "steady",
     nextHook: "Healthy — gate working as designed",
   },
-];
+] : [];
 
 export const STORYLINE_KIND_META: Record<StorylineKind, { label: string; accent: string; hue: number }> = {
   rivalry:     { label: "RIVALRY",     accent: "#fb923c", hue: 12 },
@@ -171,7 +179,7 @@ export function makePoolHistory(): number[] {
   return points;
 }
 
-export const POOL_HISTORY: number[] = makePoolHistory();
+export const POOL_HISTORY: number[] = _IS_DEV ? makePoolHistory() : [];
 
 // --- Leaderboard history ------------------------------------------------
 
@@ -194,26 +202,51 @@ export function makeLeaderboardHistory(): LbHistory {
   return { agents: ranked, series };
 }
 
-export const LB_HISTORY: LbHistory = makeLeaderboardHistory();
+export const LB_HISTORY: LbHistory = _IS_DEV ? makeLeaderboardHistory() : { agents: [], series: [] };
 
 // --- Admin config defaults ---------------------------------------------
-
-export const DEFAULT_ADMIN_CONFIG: DashAdminConfig = {
-  ai_enabled: true,
-  execution_mode: "simulated",
-  llm_provider: "anthropic",
-  llm_model: "claude-haiku-4-5",
-  anthropic_api_key: "••••••••••••GH8X",
-  minimax_api_key: "",
-  llm_min_confidence: 0.4,
-  auto_tick_interval_sec: 300,
-  tick_outside_rth: false,
-  agent_count: 100,
-  agent_starting_capital: 1000,
-  disabled_strategies: "",
-  academy_eval_interval_sec: 600,
-  academy_retrieval_enabled: true,
-  academy_retrieval_k: 3,
-  academy_demote_drawdown_pct: 0.08,
-  academy_demote_consecutive_losses: 5,
-};
+//
+// In dev, the operator can poke at the admin form with realistic
+// placeholder values. In prod, the live ``/admin/config`` fetch
+// returns the real values, and the form falls back to a
+// minimal/empty shell so a missing backend doesn't leak a
+// placeholder API key like ``"••••GH8X"`` into a production build.
+export const DEFAULT_ADMIN_CONFIG: DashAdminConfig = _IS_DEV
+  ? {
+      ai_enabled: true,
+      execution_mode: "simulated",
+      llm_provider: "anthropic",
+      llm_model: "claude-haiku-4-5",
+      anthropic_api_key: "••••••••••••GH8X",
+      minimax_api_key: "",
+      llm_min_confidence: 0.4,
+      auto_tick_interval_sec: 300,
+      tick_outside_rth: false,
+      agent_count: 100,
+      agent_starting_capital: 1000,
+      disabled_strategies: "",
+      academy_eval_interval_sec: 600,
+      academy_retrieval_enabled: true,
+      academy_retrieval_k: 3,
+      academy_demote_drawdown_pct: 0.08,
+      academy_demote_consecutive_losses: 5,
+    }
+  : {
+      ai_enabled: true,
+      execution_mode: "simulated",
+      llm_provider: "anthropic",
+      llm_model: "",
+      anthropic_api_key: "",
+      minimax_api_key: "",
+      llm_min_confidence: 0.4,
+      auto_tick_interval_sec: 300,
+      tick_outside_rth: false,
+      agent_count: 100,
+      agent_starting_capital: 1000,
+      disabled_strategies: "",
+      academy_eval_interval_sec: 600,
+      academy_retrieval_enabled: true,
+      academy_retrieval_k: 3,
+      academy_demote_drawdown_pct: 0.08,
+      academy_demote_consecutive_losses: 5,
+    };
