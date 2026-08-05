@@ -1,8 +1,8 @@
-"""One-shot VOD pipeline runner — chains the eight steps from manifest
+"""One-shot VOD pipeline runner — chains the nine steps from manifest
 to published episode behind a single CLI with skip/force controls and
 structured progress.
 
-The VOD chain lives in eight separate CLIs that each take a session id
+The VOD chain lives in nine separate CLIs that each take a session id
 and do one job:
     1. session.run       replay the orchestrator for a date range -> manifest.json
     2. session.beats     score dramatic moments in the manifest -> beats.json
@@ -10,13 +10,14 @@ and do one job:
     4. render.stitch     ffmpeg concatenates the clips -> silent_reel.mp4
     5. tts.run           synthesise per-line VO wavs -> vo/
     6. render.mix        combine silent_reel + VOs + music -> reel.mp4
-    7. yt.metadata       build episode.yaml from the artifacts
-    8. yt.upload         POST reel.mp4 + thumbnail to YouTube
+    7. render.thumb      extract one frame from the reel -> thumb.jpg
+    8. yt.metadata       build episode.yaml from the artifacts
+    9. yt.upload         POST reel.mp4 + thumbnail to YouTube
 
 Each one is already shipped and tested in isolation. The pipeline
 runner just sequences them, surfaces a single progress stream, and
 short-circuits on the first failure with a clear "which step, which
-args" message. It is the operator-facing surface — the existing eight
+args" message. It is the operator-facing surface — the existing nine
 CLIs stay available for hand-driven debugging.
 
 Usage
@@ -65,6 +66,7 @@ from typing import Callable, Sequence
 from tradefarm.render import headless as render_headless
 from tradefarm.render import mix as render_mix
 from tradefarm.render import stitch as render_stitch
+from tradefarm.render import thumb as render_thumb
 from tradefarm.session import beats as session_beats
 from tradefarm.session import run as session_run
 from tradefarm.tts import run as tts_run
@@ -122,6 +124,7 @@ def _run_headless(argv: list[str]) -> None: render_headless.main(argv)
 def _run_stitch(argv: list[str]) -> None: render_stitch.main(argv)
 def _run_tts(argv: list[str]) -> None: tts_run.main(argv)
 def _run_mix(argv: list[str]) -> None: render_mix.main(argv)
+def _run_thumb(argv: list[str]) -> None: render_thumb.main(argv)
 def _run_metadata(argv: list[str]) -> None: yt_metadata.main(argv)
 def _run_upload(argv: list[str]) -> None: yt_upload.main(argv)
 
@@ -212,6 +215,14 @@ def _build_mix_argv(session_id: str, sessions_dir: Path, opts: PipelineOpts) -> 
     return argv
 
 
+def _build_thumb_argv(session_id: str, sessions_dir: Path, opts: PipelineOpts) -> list[str]:
+    # thumb is a pure single-frame ffmpeg extraction; no flags from the
+    # pipeline runner today. Kept as a separate builder so future
+    # --at/--quality CLI flags on the runner can pass through without
+    # changing the Step shape.
+    return [session_id, "--out", str(sessions_dir)]
+
+
 def _build_metadata_argv(session_id: str, sessions_dir: Path, opts: PipelineOpts) -> list[str]:
     return [
         session_id,
@@ -286,6 +297,15 @@ STEPS: tuple[Step, ...] = (
         run=_run_mix,
     ),
     Step(
+        key="thumb",
+        label="render.thumb  (silent_reel -> thumb.jpg)",
+        module="tradefarm.render.thumb",
+        enabled_by_default=True,
+        outputs=(),  # checked via _outputs_for -> thumb.jpg
+        build_argv=_build_thumb_argv,
+        run=_run_thumb,
+    ),
+    Step(
         key="metadata",
         label="yt.metadata  (reel -> episode.yaml)",
         module="tradefarm.yt.metadata",
@@ -333,6 +353,8 @@ def _outputs_for(step: Step, session_id: str, opts: PipelineOpts) -> tuple[Path,
         return (s / "vo",)
     if step.key == "mix":
         return (s / "reel.mp4",)
+    if step.key == "thumb":
+        return (s / "thumb.jpg",)
     if step.key == "metadata":
         return (s / "episode.yaml",)
     if step.key == "upload":
@@ -538,7 +560,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         description=(
             "One-shot VOD chain runner. Sequences session.run → session.beats → "
             "render.headless → render.stitch → tts.run → render.mix → "
-            "yt.metadata → yt.upload with skip / force / dry-run controls."
+            "render.thumb → yt.metadata → yt.upload with skip / force / "
+            "dry-run controls."
         ),
     )
     src = parser.add_mutually_exclusive_group(required=True)
