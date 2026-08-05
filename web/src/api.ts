@@ -167,6 +167,12 @@ export type AdminConfig = {
   minimax_api_key: AdminSecretField;
   minimax_base_url: string;
   llm_min_confidence: number;
+  // 0.14.0 — daily LLM spend cap (USD). Backend enforces this via
+  // ``runtime.llm_budget``; the dashboard surfaces it as the
+  // "of $X/day" cap on the API Spend widget + the admin form's
+  // "Daily LLM budget" row. Optional for backends that don't
+  // expose it yet.
+  llm_daily_budget_usd?: number;
   auto_tick_interval_sec: number;
   tick_outside_rth: boolean;
   execution_mode: "simulated" | "alpaca_paper";
@@ -221,6 +227,7 @@ export type AdminPatch = Partial<{
   minimax_api_key: string;
   minimax_base_url: string;
   llm_min_confidence: number;
+  llm_daily_budget_usd?: number;
   auto_tick_interval_sec: number;
   tick_outside_rth: boolean;
   execution_mode: "simulated" | "alpaca_paper";

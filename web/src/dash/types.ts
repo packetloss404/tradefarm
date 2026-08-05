@@ -51,6 +51,10 @@ export type DashAdminConfig = {
   anthropic_api_key: string;
   minimax_api_key: string;
   llm_min_confidence: number;
+  // 0.14.0 — daily LLM spend cap (USD). Optional for older backends
+  // that don't expose it; the admin form falls back to "0" (no cap)
+  // when the field is missing.
+  llm_daily_budget_usd?: number;
   auto_tick_interval_sec: number;
   tick_outside_rth: boolean;
   agent_count: number;

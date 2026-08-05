@@ -196,6 +196,14 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
                 className="w-full"
               />
             </Row>
+            <Row label={`Daily LLM budget ($${d.llm_daily_budget_usd ?? 0}/day)`} hint="0 disables the cap; backend will keep spending">
+              <input
+                type="number" min={0} step={0.5}
+                value={d.llm_daily_budget_usd ?? 0}
+                onChange={(e) => setField("llm_daily_budget_usd", parseFloat(e.target.value) || 0)}
+                className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-100"
+              />
+            </Row>
             <Row label={`Tick every ${d.auto_tick_interval_sec ?? 0}s`} hint="0 disables the scheduler">
               <input
                 type="number" min={0} step={30}

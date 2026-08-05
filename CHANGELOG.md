@@ -13,6 +13,108 @@ commit on GitHub.
 
 ---
 
+## [0.14.0] — 2026-08-05
+
+A "dashboard UX quick wins" release. The active queue from
+`dev/feature-backlog.md` (tick countdown ring, equity
+sparkline, open-positions sparkline strip, API spend
+widget, keyboard map) was already shipped in earlier
+rounds — 0.14.0 closes the two remaining real gaps: an
+operator-controllable daily LLM spend cap dial in the
+admin form, and `T` (manual tick) + `A` (open admin) global
+shortcuts documented in the keyboard map. Plus a 5-test
+carryover fix: pre-existing `render_session` unit tests
+were failing when the stream Vite wasn't running because
+the round-9 liveness probe runs before the test's
+expected error path — the tests now pass `_probe=False`
+to bypass the live dependency. 861 tests pass (no new
+tests; 5 pre-existing failures fixed).
+
+### Added — daily LLM spend cap dial
+
+- **`web/src/components/AdminModal.tsx`** — new
+  "Daily LLM budget ($X/day)" row in the Tuning section.
+  Field binds to `llm_daily_budget_usd` on `AdminConfig`
+  + `AdminPatch`; operator can dial the cap from 0
+  (disables the cap) up to whatever they want. The
+  backend's `runtime.llm_budget` module already enforced
+  this — the form just wasn't exposing it.
+- **`web/src/components/ApiSpendWidget.tsx`** — the
+  "Est. Since Boot" + cap progress bar now read the cap
+  from the live `/admin/config` SWR feed (refresh 30s) so
+  the gauge updates when the operator changes the dial.
+  When the cap is 0 the gauge stays at 0% and reads
+  "no cap configured — set one in Admin → Tuning" so the
+  operator isn't left wondering why the bar is empty.
+- **`web/src/api.ts`** — `llm_daily_budget_usd?: number`
+  on `AdminConfig` + `AdminPatch` (optional because older
+  backends might not return the field).
+- **`web/src/dash/data.ts`** + **`web/src/dash/types.ts`**
+  — added the field to the `DEFAULT_ADMIN_CONFIG` and
+  `DashAdminConfig` types so the form's initial state
+  matches the live backend.
+
+### Added — global keyboard shortcuts
+
+- **`web/src/App.tsx`** — `T` (manual tick) and `A`
+  (open Admin modal) global shortcuts, wired in a
+  small `useEffect` with the same editable-target guard
+  as the existing `?` (keyboard map) handler. Shift+T
+  and Shift+A are intentionally NOT bound so the
+  shortcuts can't fire on accidental caps-lock.
+- **`web/src/components/KeyboardMapOverlay.tsx`** —
+  expanded `SHORTCUTS` from 2 groups to 3:
+  - Global: Ctrl+K, ?, T, A, Esc
+  - Command palette: arrows, Enter, Esc
+  - Admin modal (when open): Esc, Save button
+  The new "Admin modal" group documents that Esc closes
+  without saving (matching the existing `useEffect`
+  escape handler) and the Save button has no shortcut
+  (deliberate — the Admin form uses a debounced PATCH
+  with masked-secret guards, not a hotkey).
+
+### Fixed — render_session unit tests bypass stream probe
+
+- **`tests/render/test_headless.py`** + **`tests/test_audit_fixes.py`** —
+  5 pre-existing tests that called `render_session()`
+  directly were failing when the stream Vite wasn't
+  running, because the round-9 liveness probe runs
+  synchronously at the top of `render_session` and
+  raises `RuntimeError` on connect timeout — before the
+  tests' expected error paths (missing beats,
+  all-skipped, path traversal). Each of the 5 tests
+  now passes `_probe=False` to bypass the live
+  dependency. The escape hatch has existed since round
+  9; the tests just predated it.
+
+### Carryover — already shipped
+
+- **Stream `TopTicker` tick countdown ring** — shipped
+  in round 7. The radial SVG progress + mm:ss label is
+  wired to `auto_tick_interval_sec` from `/admin/config`
+  and `account.last_tick_at` (see
+  `stream/src/components/TopTicker.tsx:171-237`).
+- **Stream `TopTicker` equity sparkline** — shipped in
+  round 7. 30-tick rolling buffer of `account.total_equity`
+  rendered as an inline SVG polyline
+  (`TopTicker.tsx:36-48`).
+- **Dashboard open-positions sparkline strip** — shipped
+  in round 7. One card per symbol with mark, qty, P&L
+  + a 20-tick sparkline that builds over time
+  (`web/src/components/PositionsSparklineStrip.tsx`).
+- **API spend widget** — shipped in round 7
+  (`web/src/components/ApiSpendWidget.tsx`). 0.14.0
+  adds the operator-controllable cap dial (above).
+- **Keyboard map** — shipped in round 7
+  (`web/src/components/KeyboardMapOverlay.tsx`). 0.14.0
+  adds the T/A shortcuts + Admin modal group (above).
+- **861 → 861 tests pass.** No new test files; 5
+  pre-existing failures fixed.
+- **No DB schema changes.** `SCHEMA_VERSION` still at 4.
+- **No new env vars.**
+
+---
+
 ## [0.13.0] — 2026-08-05
 
 A "frontend audit followup" release. Closes the remaining

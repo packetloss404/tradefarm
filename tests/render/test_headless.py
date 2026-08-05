@@ -240,8 +240,14 @@ def test_plan_jobs_empty_returns_empty(tmp_path: Path):
 async def test_render_session_missing_beats_raises(tmp_path: Path):
     from tradefarm.render.headless import render_session
 
+    # 0.14.0 — the stream liveness probe (added in round 9) runs
+    # BEFORE the beats.json check and fails the call with a
+    # RuntimeError when no stream Vite is reachable. These
+    # `render_session` unit tests are about the post-probe
+    # behavior (missing beats, all-skipped, purge logic) so
+    # they need `_probe=False` to bypass the live dependency.
     with pytest.raises(FileNotFoundError):
-        await render_session("never_existed", sessions_dir=tmp_path)
+        await render_session("never_existed", sessions_dir=tmp_path, _probe=False)
 
 
 async def test_render_session_only_recap_short_circuits(tmp_path: Path):
@@ -256,7 +262,7 @@ async def test_render_session_only_recap_short_circuits(tmp_path: Path):
         json.dumps([_beat(id="b_chap", kind="chapter_change", scene="chapter")])
     )
     (sdir / "manifest.json").write_text(json.dumps({"events": []}))
-    summary = await render_session("all_recap", sessions_dir=tmp_path)
+    summary = await render_session("all_recap", sessions_dir=tmp_path, _probe=False)
     assert summary.succeeded == 0
     assert summary.failed == 0
     assert summary.skipped == 1
@@ -281,7 +287,7 @@ async def test_render_session_purges_stale_clips(tmp_path: Path):
     stale_json = clips / "b_gone.json"
     stale_webm.write_bytes(b"")
     stale_json.write_text("{}")
-    await render_session("purge_test", sessions_dir=tmp_path)
+    await render_session("purge_test", sessions_dir=tmp_path, _probe=False)
     assert not stale_webm.exists()
     assert not stale_json.exists()
 
@@ -299,7 +305,7 @@ async def test_render_session_keep_stale_keeps_files(tmp_path: Path):
     clips.mkdir()
     stale = clips / "b_gone.webm"
     stale.write_bytes(b"x")
-    await render_session("keep_test", sessions_dir=tmp_path, purge_stale=False)
+    await render_session("keep_test", sessions_dir=tmp_path, purge_stale=False, _probe=False)
     assert stale.exists()
 
 

@@ -31,7 +31,7 @@ import {
   Separator as ResizableSeparator,
   useDefaultLayout,
 } from "react-resizable-panels";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const REFRESH_MS = 5_000;
 
@@ -63,6 +63,47 @@ export default function App() {
     id: "dashboard-live-split-v1",
     storage: typeof window !== "undefined" ? window.localStorage : undefined,
   });
+
+  // 0.14.0 — Global app shortcuts beyond the cmd-K + ?-map pair.
+  // - T: manual tick (mirrors the "Tick now" sticky-header button)
+  // - A: open the Admin modal
+  // Both skip when focus is in an editable element (the keyboard
+  // map's ? key handler already does the same guard; we mirror it
+  // here so a single keypress doesn't fire while the operator is
+  // typing in the Admin form).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target;
+      if (t instanceof HTMLElement) {
+        if (t.isContentEditable) return;
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      }
+      // Lowercase letter check — Shift+T must NOT trigger a tick.
+      if (e.key === "t" || e.key === "T") {
+        if (e.shiftKey) return;
+        e.preventDefault();
+        void handleTick();
+        return;
+      }
+      if (e.key === "a" || e.key === "A") {
+        if (e.shiftKey) return;
+        e.preventDefault();
+        setAdminOpen(true);
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // handleTick and setAdminOpen are stable references (setState
+    // is referentially stable; handleTick is recreated only when
+    // the wrapping component re-renders, which is exactly when
+    // we want to re-bind). Lint disabled to avoid the
+    // exhaustive-deps warning on setTicking / setLastTick
+    // captures.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleTick = async () => {
     setTicking(true);

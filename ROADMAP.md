@@ -6,20 +6,18 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.13.0 shipped 2026-08-05.** A "frontend audit followup"
-release. Closes the last of the post-0.10.0 frontend
-audit-followup items: the heavy mock-data fixtures in
-`web/src/vod/data.ts` and `web/src/dash/data.ts` are now
-gated behind `import.meta.env.DEV` so they don't ship in
-the production bundle, and the BroadcastPanel's audio
-+ cadence controls stay clickable when the stream
-heartbeat goes stale (the OfflineWarning banner is
-enough — the disable was a double-fault). Most of the
-"frontend audit" items in the ROADMAP were already
-shipped across rounds 7-11; 0.13.0 closes the two
-remaining real gaps. 861 tests pass (no new test files
-this release; the changes are TS-checked +
-production-build-verified). See
+**0.14.0 shipped 2026-08-05.** A "dashboard UX quick
+wins" release. The active queue from
+`dev/feature-backlog.md` (tick countdown ring, equity
+sparkline, open-positions sparkline strip, API spend
+widget, keyboard map) was already shipped in earlier
+rounds — 0.14.0 closes the two remaining real gaps: an
+operator-controllable daily LLM spend cap dial in the
+admin form, and `T` (manual tick) + `A` (open admin)
+global shortcuts documented in the keyboard map. Plus
+a 5-test carryover fix for pre-existing `render_session`
+unit tests that needed `_probe=False` to bypass the
+round-9 liveness probe. 861 tests pass. See
 [CHANGELOG.md](./CHANGELOG.md) for the full release
 notes.
 
@@ -34,16 +32,15 @@ Status legend:
 
 ## Now — current focus
 
-The 0.13.0 release (2026-08-05) closed the last of the
-frontend audit-followup items from the post-0.10.0
-review. **The audit-followup quick-wins list is now
-exhausted on both the backend and frontend sides.**
-The remaining operator work is the 0.13.0 → next
-batch shift: visual QA on the Broadcast panel changes
-(no more disabled-when-offline), TTS provider switching
-+ the podcast episode format from the research doc, and
-the carryover to 0.14+ (shorts visual verification,
-intraday data path, OBS WebSocket integration, etc.).
+The 0.14.0 release (2026-08-05) closed the active
+queue from `dev/feature-backlog.md` (item 1, 5, 6, 7
+all shipped, in 0.14.0 or earlier rounds). The
+**next leverage piece is the Broadcast OS scheduler
+v1** — consume `broadcast_moment`, apply
+priority/TTL/cooldowns, surface one active slot per
+output type. The research doc's recap-scene-at-4pm and
+the podcast episode format both depend on it landing
+first. That's the 0.15.0 scope.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 

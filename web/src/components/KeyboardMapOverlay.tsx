@@ -14,6 +14,8 @@ const SHORTCUTS: Group[] = [
     items: [
       { keys: ["Ctrl", "K"], description: "Open command palette" },
       { keys: ["?"], description: "Show this keyboard map" },
+      { keys: ["T"], description: "Manual tick (same as the sticky-header button)" },
+      { keys: ["A"], description: "Open the Admin modal" },
       { keys: ["Esc"], description: "Close modal or overlay" },
     ],
   },
@@ -23,6 +25,13 @@ const SHORTCUTS: Group[] = [
       { keys: ["↑", "↓"], description: "Move selection" },
       { keys: ["Enter"], description: "Run highlighted command" },
       { keys: ["Esc"], description: "Dismiss palette" },
+    ],
+  },
+  {
+    label: "Admin modal (when open)",
+    items: [
+      { keys: ["Esc"], description: "Close without saving" },
+      { keys: ["Save"], description: "Bottom-right button (no shortcut; debounced)" },
     ],
   },
 ];

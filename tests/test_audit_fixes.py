@@ -128,8 +128,11 @@ async def test_render_session_rejects_traversal_session_id(tmp_path):
     of whether the call came from the REST/WS path or the CLI."""
     from tradefarm.render.headless import render_session
 
+    # 0.14.0 — the stream liveness probe (added in round 9) runs
+    # BEFORE the path-traversal guard. These post-probe unit
+    # tests use `_probe=False` to bypass the live dependency.
     with pytest.raises(ValueError, match="invalid session_id"):
-        await render_session("../escape", sessions_dir=tmp_path)
+        await render_session("../escape", sessions_dir=tmp_path, _probe=False)
 
 
 # ----- config default --------------------------------------------------
