@@ -997,6 +997,27 @@ class Orchestrator:
                     },
                 )
                 _fire_webhook(run)
+                # 0.10.0 — best-effort asset archival on terminal done
+                # (same pattern as the HTTP wrapper's _run_pipeline_task).
+                # The archive function is no-op when ``vod_archive_path``
+                # is unset, so the default config never pays the cost.
+                from tradefarm.render import archive as _archive_mod
+                from pathlib import Path as _ArchivePath
+                _archive_root = settings.vod_archive_path or None
+                if _archive_root:
+                    try:
+                        await _archive_mod.archive_session(
+                            run.session_id,
+                            archive_root=_ArchivePath(_archive_root),
+                            run_status=run.status,
+                            also_on_failure=settings.vod_archive_on_failure,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "vod_scheduler_archive_failed",
+                            run_id=run.run_id,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
             except SystemExit as exc:
                 run.status = "failed"
                 run.error = str(exc)

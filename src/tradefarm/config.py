@@ -175,6 +175,17 @@ class Settings(BaseSettings):
     vod_publish_at_et: str = "16:30"
     vod_notify_webhook: str = ""
 
+    # 0.10.0 — asset archival on terminal state. Empty / unset means
+    # the backup step is a no-op (the default — operators opt in).
+    # Set to a directory path (e.g. "/var/backups/tradefarm") to
+    # enable; the archive function tar-balls
+    # ``<root>/<YYYY-MM-DD>/<sid>.tar.gz`` minus ``clips/`` and
+    # ``intermediates/``. Best-effort — a backup miss is logged +
+    # swallowed so a successful run never fails because the disk
+    # was full.
+    vod_archive_path: str = ""
+    vod_archive_on_failure: bool = False
+
     # -------------------------------------------------------------------------
     # YouTube Live Chat — poll the active broadcast's live chat via the
     # YouTube Data API v3 and republish new messages on the WS as

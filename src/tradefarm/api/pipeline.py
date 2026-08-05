@@ -458,6 +458,27 @@ async def _run_pipeline_task(run: PipelineRun, opts: pipeline_mod.PipelineOpts) 
             },
         )
         _fire_webhook(run)
+        # 0.10.0 — best-effort asset archival on terminal done. The
+        # webhook above already mirrors the fire-and-forget pattern;
+        # the archive is the same shape. The archive function
+        # returns None on no-op or failure — we never raise here.
+        from tradefarm.render import archive as archive_mod
+        from pathlib import Path as _P
+        archive_root = settings.vod_archive_path or None
+        if archive_root:
+            try:
+                await archive_mod.archive_session(
+                    run.session_id,
+                    archive_root=_P(archive_root),
+                    run_status=run.status,
+                    also_on_failure=settings.vod_archive_on_failure,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "pipeline_archive_invoke_failed",
+                    run_id=run.run_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
     except SystemExit as exc:
         run.status = "failed"
         run.error = str(exc)
