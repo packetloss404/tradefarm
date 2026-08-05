@@ -12,15 +12,23 @@ CLI:
 Output:
     out/sessions/<session_id>/manifest.json
     DB rows in trades/pnl_snapshots/agent_notes tagged with the session_id
+
+Manifest extras (v1 — written after the standard `SessionManifest`):
+    rivalries           - top 2 same-symbol opposite-side agent pairs
+    interns_under_watch - 5 lowest-ranked intern agent ids at session start
+    strategy_rollup     - per-strategy aggregate (agents, equity, pnl, pnlPct, fills)
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import uuid
-from datetime import date, datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 
@@ -28,9 +36,40 @@ from tradefarm.market.hours import NYSE
 from tradefarm.orchestrator.scheduler import Orchestrator
 from tradefarm.runtime.session_context import reset_session_id, set_session_id
 from tradefarm.session import closing_snapshot, replay
+from tradefarm.session.beats import _agent_pnl_from_fills, _fills
 from tradefarm.session.manifest import SessionEvent, SessionManifest, write_manifest
 from tradefarm.storage.db import SessionLocal, init_db
 from tradefarm.storage.models import Agent, AgentNote, Trade
+
+
+# Number of "interns under watch" for the Friday Intern Watch episode.
+# Five keeps the cast list short enough to read on a phone and matches
+# what the channel art can fit in a 5-row card.
+_INTERN_WATCH_COUNT = 5
+# Rivals surfaced into the manifest. Top 2 = enough for a single 60s
+# short and a chapter in the weekly reel without crowding the
+# divergence slot.
+_RIVALRY_TOP_N = 2
+# Rolling window for the rivalry detector (minutes). Matches the beat
+# detector's default so the two views agree on which overlaps "count".
+_RIVALRY_WINDOW_MIN = 90.0
+# Minimum overlap count for a rivalry to surface.
+_RIVALRY_MIN_OCCURRENCES = 3
+
+
+@dataclass(frozen=True)
+class StrategyRollup:
+    """One bucket's aggregate for the manifest's `strategy_rollup` field.
+    Mirrors `web/src/vod/types.ts:StrategyRollup` so the studio can
+    consume the field without a shape translation. Money in dollars,
+    fills in count of Trade rows.
+    """
+
+    agents: int
+    equity: float
+    pnl: float
+    pnlPct: float
+    fills: int
 
 
 async def run_session(
@@ -99,6 +138,12 @@ async def run_session(
                 "no NYSE trading days in that range (weekend/holiday)"
             )
 
+        # Snapshot the intern cast BEFORE the replay runs. The Friday
+        # "Intern Watch" episode opens with the cohort at session start;
+        # the curriculum can promote them mid-session but the cast card
+        # shouldn't change retroactively.
+        interns_under_watch = await _snapshot_intern_cast(limit=_INTERN_WATCH_COUNT)
+
         fill_count = 0
         for day in trading_days:
             result = await replay.run_day(orch, day)
@@ -127,6 +172,21 @@ async def run_session(
 
     manifest_path = out_dir / session_id / "manifest.json"
     write_manifest(manifest, manifest_path)
+
+    # The three new fields (rivalries, interns_under_watch,
+    # strategy_rollup) live alongside the SessionManifest dataclass but
+    # aren't part of its schema — `manifest.py` is owned by the platform
+    # team. We post-process the JSON file in-place so the round-trip
+    # contract for `manifest.json` stays the canonical source of truth.
+    rivalries = _compute_rivalries(events, top_n=_RIVALRY_TOP_N)
+    strategy_rollup = _compute_strategy_rollup(orch, marks)
+    _merge_manifest_extras(
+        manifest_path,
+        rivalries=rivalries,
+        interns_under_watch=interns_under_watch,
+        strategy_rollup=strategy_rollup,
+    )
+
     return manifest_path
 
 
@@ -212,6 +272,200 @@ async def _build_events_from_db(session_id: str) -> tuple[list[SessionEvent], in
 
     events.sort(key=lambda e: e.t)
     return events, len(active_agent_ids)
+
+
+async def _snapshot_intern_cast(*, limit: int) -> list[int]:
+    """Return up to `limit` agent ids with the lowest current cash
+    among the rank='intern' cohort. Used to seed the "Intern Watch"
+    episode's cast list at session start.
+
+    Tiebreakers: when two interns are at the same cash, fall back to
+    agent_id ascending so the output is deterministic across runs.
+    Returns an empty list if the DB is unreachable (e.g. a fresh
+    fixture) — the manifest still round-trips, the field is just empty.
+    """
+    try:
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(Agent.id, Agent.cash)
+                    .where(Agent.rank == "intern")
+                    .order_by(Agent.cash.asc(), Agent.id.asc())
+                    .limit(max(0, limit))
+                )
+            ).all()
+    except Exception:
+        return []
+    return [int(agent_id) for agent_id, _ in rows]
+
+
+def _compute_rivalries(
+    events: list[SessionEvent],
+    *,
+    top_n: int = _RIVALRY_TOP_N,
+    min_occurrences: int = _RIVALRY_MIN_OCCURRENCES,
+    window_min: float = _RIVALRY_WINDOW_MIN,
+) -> list[dict[str, Any]]:
+    """Top-N rivalry triples for the manifest. Mirrors the beat
+    detector's logic but emits plain dicts (no Beat wrapper) so the
+    manifest schema stays simple.
+
+    Each entry: {a, b, symbol, count, a_pnl, b_pnl}. PnL is the
+    average-cost realised PnL per agent on the day's fills.
+
+    The "count" field is the number of distinct (buy, sell) crossings
+    — min(buys_by_a, sells_by_b, ...) — the same definition the beat
+    detector uses. With 4 buys by alice and 4 sells by bob on the
+    same symbol, count=4 (not 16). The studio headline reads
+    "X and Y, fourth time today" which the audience reads as
+    "4 distinct moments".
+    """
+    # Reuse the beat detector's internal _Fill projection by wrapping
+    # events in the same shape. The detector does the same walk.
+    manifest_for_scoring: dict[str, Any] = {"events": [e.__dict__ for e in events]}
+    fills = _fills(manifest_for_scoring)
+    pnls = _agent_pnl_from_fills(fills) if fills else {}
+
+    by_symbol: dict[str, list[Any]] = {}
+    for f in fills:
+        if not f.symbol or f.side not in ("buy", "sell"):
+            continue
+        by_symbol.setdefault(f.symbol, []).append(f)
+
+    window = timedelta(minutes=window_min)
+    # Per (lo_agent, hi_agent, symbol) bucket: per-agent timestamp list.
+    buckets: dict[tuple[int, int, str], dict[int, list[Any]]] = {}
+
+    for sym, group in by_symbol.items():
+        group_sorted = sorted(group, key=lambda f: f.t)
+        for f in group_sorted:
+            for g in group_sorted:
+                if f.idx == g.idx:
+                    continue
+                if f.agent_id == g.agent_id:
+                    continue
+                if f.side == g.side:
+                    continue
+                if abs((f.t - g.t).total_seconds()) > window.total_seconds():
+                    continue
+                lo, hi = sorted((f.agent_id, g.agent_id))
+                key = (lo, hi, sym)
+                side_bucket = buckets.setdefault(key, {lo: [], hi: []})
+                side_bucket[f.agent_id].append(f.t)
+
+    # count = min(lo_count, hi_count) for each bucket. Sort desc by
+    # count, ties broken by latest activity so the freshest rivalry
+    # wins.
+    EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    ranked: list[tuple[tuple[int, int, str], int, Any]] = []
+    for key, per_agent in buckets.items():
+        per_agent_dedup = {a: sorted(set(ts)) for a, ts in per_agent.items()}
+        lo, hi, _ = key
+        lo_n = len(per_agent_dedup.get(lo, []))
+        hi_n = len(per_agent_dedup.get(hi, []))
+        count = min(lo_n, hi_n)
+        all_ts = per_agent_dedup.get(lo, []) + per_agent_dedup.get(hi, [])
+        latest = max(all_ts) if all_ts else EPOCH
+        ranked.append((key, count, latest))
+    ranked.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
+    out: list[dict[str, Any]] = []
+    for (lo, hi, sym), count, _ in ranked:
+        if count < min_occurrences:
+            continue
+        a_pnl = float(pnls[lo].realized) if lo in pnls else 0.0
+        b_pnl = float(pnls[hi].realized) if hi in pnls else 0.0
+        out.append(
+            {
+                "a": int(lo),
+                "b": int(hi),
+                "symbol": sym,
+                "count": int(count),
+                "a_pnl": round(a_pnl, 4),
+                "b_pnl": round(b_pnl, 4),
+            }
+        )
+        if len(out) >= top_n:
+            break
+    return out
+
+
+def _compute_strategy_rollup(
+    orch: Orchestrator,
+    marks: dict[str, float],
+) -> dict[str, StrategyRollup]:
+    """Per-strategy aggregate at session end. Mirrors
+    `web/src/vod/types.ts:StrategyRollup`. Equity is `cash + Σqty*mark`
+    for each position; PnL is the realised-only delta (so the field
+    matches the headless renderer's "P&L at end" card). Fills is the
+    count of open positions per strategy at end-of-session; the
+    per-strategy fill count would require a DB hit which we skip to
+    keep the manifest write offline (the field stays useful as a
+    "how many positions did the strategy leave open" signal).
+
+    Empty cohort (no agents, or orchestrator was built with zero
+    rows) returns an empty dict.
+    """
+    out: dict[str, StrategyRollup] = {}
+    by_strat: dict[str, list[Any]] = {}
+    for agent in orch.agents:
+        strat = getattr(agent.state, "strategy", "unknown") or "unknown"
+        by_strat.setdefault(strat, []).append(agent)
+
+    for strat, group in by_strat.items():
+        agents_count = len(group)
+        equity_total = 0.0
+        realised_total = 0.0
+        positions_count = 0
+        for agent in group:
+            book = agent.state.book
+            cash = float(book.cash)
+            realised = float(book.realized_pnl)
+            unrealized = 0.0
+            for sym, pos in book.positions.items():
+                qty = float(pos.qty)
+                mark = marks.get(sym, float(pos.avg_price))
+                unrealized += qty * mark
+                positions_count += 1
+            equity_total += cash + unrealized
+            realised_total += realised
+        allocated = agents_count * 1000.0
+        pnl_pct = (realised_total / allocated * 100.0) if allocated > 0 else 0.0
+        out[strat] = StrategyRollup(
+            agents=agents_count,
+            equity=round(equity_total, 4),
+            pnl=round(realised_total, 4),
+            pnlPct=round(pnl_pct, 4),
+            fills=positions_count,
+        )
+    return out
+
+
+def _merge_manifest_extras(
+    manifest_path: Path,
+    *,
+    rivalries: list[dict[str, Any]],
+    interns_under_watch: list[int],
+    strategy_rollup: dict[str, StrategyRollup],
+) -> None:
+    """Add the three new top-level fields to a manifest.json file
+    in-place. The function reads, mutates, writes — single-writer
+    guarantees hold because the runner is a single async process.
+    """
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["rivalries"] = rivalries
+    data["interns_under_watch"] = interns_under_watch
+    data["strategy_rollup"] = {
+        k: {
+            "agents": v.agents,
+            "equity": v.equity,
+            "pnl": v.pnl,
+            "pnlPct": v.pnlPct,
+            "fills": v.fills,
+        }
+        for k, v in strategy_rollup.items()
+    }
+    manifest_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
 
 
 def _parse_date_arg(s: str) -> date:

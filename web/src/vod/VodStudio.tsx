@@ -7,15 +7,19 @@
 import { useEffect, useState } from "react";
 import { T } from "./tokens";
 import { useVodMock } from "./useVodMock";
-import { useVodSessionLive } from "./useVodSessionLive";
+import { useVodLiveData } from "./data.live";
 import { BeatPicker } from "./BeatPicker";
 import { PipelineBoard } from "./PipelineBoard";
 import { SessionControl } from "./SessionControl";
 import { EpisodePage } from "./EpisodePage";
 
-// Only Session Control can read live data today — the other three
-// surfaces depend on beats / pipeline that don't exist on the backend
-// yet. Persist the toggle so the operator's preference survives reload.
+// Data-source toggle: applies to ALL surfaces (BeatPicker, Pipeline,
+// Session, Episode) when set to "live". The previous behaviour
+// limited the toggle to Session Control only; the new useVodLiveData
+// hook serves every surface.
+//
+// Falls back to the prototype mock on any backend error so a flapping
+// API never blocks the operator from the studio.
 const LIVE_PREF_KEY = "vod-studio.session-live";
 
 function loadLivePref(): boolean {
@@ -102,9 +106,13 @@ export default function VodStudio() {
   const vod = useVodMock();
   // Always subscribe so the toggle doesn't race a cold cache and the
   // SWR/WS state stays warm. Cheap when no consumer is mounted.
-  const liveSession = useVodSessionLive();
+  // `useVodLiveData` is the new all-surfaces live source. We pass no
+  // sessionId so it uses today's synthetic live session id; the
+  // EpisodePage will deep-link the operator to a real session once
+  // /sessions/current is wired.
+  const live = useVodLiveData();
   const [active, setActive] = useState<SurfaceId>(() => tabFromHash());
-  const [sessionLive, setSessionLive] = useState<boolean>(() => loadLivePref());
+  const [useLive, setUseLive] = useState<boolean>(() => loadLivePref());
 
   useEffect(() => {
     const onHash = () => setActive(tabFromHash());
@@ -118,13 +126,18 @@ export default function VodStudio() {
     window.history.replaceState(null, "", `#vod-studio/${id}`);
   };
 
-  const toggleSessionLive = () => {
-    setSessionLive((v) => {
+  const toggleLive = () => {
+    setUseLive((v) => {
       const next = !v;
       saveLivePref(next);
       return next;
     });
   };
+
+  // Pick the right data source per surface. The `live` hook falls back
+  // to the mock on backend errors, so even when the pill says "live"
+  // a flapping API still shows a coherent studio.
+  const data = useLive ? live : vod;
 
   return (
     <div
@@ -169,41 +182,39 @@ export default function VodStudio() {
             />
           ))}
         </div>
-        {active === "session" && (
-          <button
-            onClick={toggleSessionLive}
-            title={
-              sessionLive
-                ? "Reading from /api/account, /api/agents, /api/llm/stats and the /ws fill stream"
-                : "Using the prototype's mock day. Flip to live to read from the backend."
-            }
+        <button
+          onClick={toggleLive}
+          title={
+            useLive
+              ? "Live: reading from /api/agents, /api/account, /api/pnl/daily and the session's manifest + beats."
+              : "Mock: using the prototype's 3-strategy / 1-day fixture. Flip to live to read from the backend."
+          }
+          style={{
+            fontFamily: T.mono,
+            fontSize: 11,
+            color: useLive ? T.ok : T.text2,
+            background: useLive ? `${T.ok}18` : "transparent",
+            border: `1px solid ${useLive ? T.ok : T.border}`,
+            padding: "6px 10px",
+            borderRadius: 4,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span
+            className={useLive ? "vod-pulse-dot" : undefined}
             style={{
-              fontFamily: T.mono,
-              fontSize: 11,
-              color: sessionLive ? T.ok : T.text2,
-              background: sessionLive ? `${T.ok}18` : "transparent",
-              border: `1px solid ${sessionLive ? T.ok : T.border}`,
-              padding: "6px 10px",
-              borderRadius: 4,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
+              display: "inline-block",
+              width: 6,
+              height: 6,
+              borderRadius: 999,
+              background: useLive ? T.ok : T.text3,
             }}
-          >
-            <span
-              className={sessionLive ? "vod-pulse-dot" : undefined}
-              style={{
-                display: "inline-block",
-                width: 6,
-                height: 6,
-                borderRadius: 999,
-                background: sessionLive ? T.ok : T.text3,
-              }}
-            />
-            {sessionLive ? "live" : "mock"}
-          </button>
-        )}
+          />
+          {useLive ? "live" : "mock"}
+        </button>
         <a
           href="#"
           onClick={(e) => {
@@ -226,10 +237,10 @@ export default function VodStudio() {
         </a>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        {active === "beats" && <BeatPicker vod={vod} />}
-        {active === "pipeline" && <PipelineBoard vod={vod} />}
-        {active === "session" && <SessionControl vod={sessionLive ? liveSession : vod} />}
-        {active === "episode" && <EpisodePage vod={vod} />}
+        {active === "beats" && <BeatPicker vod={data} />}
+        {active === "pipeline" && <PipelineBoard vod={data} />}
+        {active === "session" && <SessionControl vod={data} />}
+        {active === "episode" && <EpisodePage vod={data} />}
       </div>
     </div>
   );

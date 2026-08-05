@@ -15,7 +15,7 @@ import type {
   DaySummary,
   PipelineNode,
   Rank,
-  Strategy,
+  StrategyBucket,
   StrategyRollup,
 } from "./types";
 
@@ -65,20 +65,50 @@ export function officeInitials(id: number): string {
   return `${a[0] ?? ""}${b[0] ?? ""}`.toUpperCase();
 }
 
-export const VOD_STRATEGIES = ["momentum", "lstm", "llm"] as const;
+// 8-bucket strategy view: 7 live (momentum_12_1, mean_reversion_bb,
+// rsi2, donchian_breakout, pairs_zscore, lstm, llm) + the legacy
+// "momentum" alias for the pre-0.7 `momentum_sma20` mock. Listed in
+// the order the studio surfaces them in the strategy panel — the
+// momentum family first, then the mean-reversion / breakout rule
+// strategies, then the LSTM family.
+export const VOD_STRATEGIES = [
+  "momentum",
+  "momentum_12_1",
+  "mean_reversion_bb",
+  "rsi2",
+  "donchian_breakout",
+  "pairs_zscore",
+  "lstm",
+  "llm",
+] as const satisfies readonly StrategyBucket[];
 
-export const VOD_STRATEGY_LABEL: Record<Strategy, string> = {
+export const VOD_STRATEGY_LABEL: Record<StrategyBucket, string> = {
   momentum: "momentum_sma20",
+  momentum_12_1: "momentum_12_1",
+  mean_reversion_bb: "mean_reversion_bb",
+  rsi2: "rsi2",
+  donchian_breakout: "donchian_breakout",
+  pairs_zscore: "pairs_zscore",
   lstm: "lstm_v1",
   llm: "lstm_llm_v1",
 };
-export const VOD_STRATEGY_SHORT: Record<Strategy, string> = {
+export const VOD_STRATEGY_SHORT: Record<StrategyBucket, string> = {
   momentum: "MOM",
+  momentum_12_1: "MOM12",
+  mean_reversion_bb: "BB",
+  rsi2: "RSI2",
+  donchian_breakout: "DON",
+  pairs_zscore: "PAIR",
   lstm: "LSTM",
   llm: "LSTM+LLM",
 };
-export const VOD_STRATEGY_HUE: Record<Strategy, number> = {
+export const VOD_STRATEGY_HUE: Record<StrategyBucket, number> = {
   momentum: 32,
+  momentum_12_1: 24,
+  mean_reversion_bb: 180,
+  rsi2: 100,
+  donchian_breakout: 12,
+  pairs_zscore: 320,
   lstm: 200,
   llm: 280,
 };
@@ -116,9 +146,12 @@ export const SYMBOLS = [
 
 function makeVodAgents(): Agent[] {
   const agents: Agent[] = [];
+  // Stable count of buckets so a recompile doesn't reshuffle the seeded
+  // assignment between the 8 strategy slots.
+  const stratCount = VOD_STRATEGIES.length;
   for (let i = 0; i < 100; i++) {
     const r = seededRng(i + 47);
-    const stratIdx = i % 3;
+    const stratIdx = i % stratCount;
     const strat = VOD_STRATEGIES[stratIdx] ?? "momentum";
     const baseEquity = 1000;
     const u = r();
@@ -363,7 +396,7 @@ function makeDaySummary(agents: Agent[]): DaySummary {
   const totalEquity = agents.reduce((s, a) => s + a.equity, 0);
   const allocated = 100 * 1000;
   const totalPnl = totalEquity - allocated;
-  const byStrategy = {} as Record<Strategy, StrategyRollup>;
+  const byStrategy = {} as Record<StrategyBucket, StrategyRollup>;
   for (const s of VOD_STRATEGIES) {
     const list = agents.filter((a) => a.strategy === s);
     const e = list.reduce((x, a) => x + a.equity, 0);

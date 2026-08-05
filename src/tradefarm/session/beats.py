@@ -94,6 +94,8 @@ class Beat:
 
 # Default scene per kind. Match the studio's BEAT_KIND_META so the
 # Beat Picker preview pane picks the right vignette.
+# `agent_rivalry` reuses the showdown scene; `promotion` reuses leaderboard.
+# No new scenes ship in v1.
 SCENE_FOR_KIND: dict[str, str] = {
     "open": "hero",
     "big_fill": "hero",
@@ -103,10 +105,14 @@ SCENE_FOR_KIND: dict[str, str] = {
     "top_loser": "hero",
     "closing_burst": "hero",
     "recap": "recap",
+    "agent_rivalry": "showdown",
+    "promotion": "leaderboard",
 }
 
 # Default duration per kind (seconds). Tuned to keep total reel around
-# 8-12 minutes when ~10 beats fire.
+# 8-12 minutes when ~10 beats fire. Rivalry gets a longer slot so the
+# showdown scene can frame both agents' sides; promotion stays short —
+# it's a "by the way" beat, not a chapter.
 DURATION_FOR_KIND: dict[str, int] = {
     "open": 12,
     "big_fill": 30,
@@ -116,17 +122,23 @@ DURATION_FOR_KIND: dict[str, int] = {
     "top_loser": 26,
     "closing_burst": 22,
     "recap": 36,
+    "agent_rivalry": 34,
+    "promotion": 16,
 }
 
 # Tiebreaker when scores are equal: higher = preferred. Mirrors the
 # operator's mental priority — disagreement is more interesting than a
 # single big number, single-agent stories beat aggregate ones.
+# Rivalry sits at the top of the body tier; promotion below streak so
+# the headline moments still surface first.
 KIND_PRIORITY: dict[str, int] = {
+    "agent_rivalry": 7,
     "divergence": 6,
     "top_winner": 5,
     "top_loser": 4,
     "streak": 3,
     "big_fill": 2,
+    "promotion": 2,
     "closing_burst": 1,
     "open": 99,  # always pinned first
     "recap": 99,  # always pinned last
@@ -406,6 +418,245 @@ def _score_divergence(fills: list[_Fill], th: DetectorThresholds) -> list[Beat]:
     return out
 
 
+def _score_rivalries(
+    fills: list[_Fill],
+    pnls: dict[int, _AgentPnl],
+    *,
+    min_occurrences: int = 3,
+    window_min: float = 90.0,
+    top_n: int = 2,
+) -> list[Beat]:
+    """Two agents taking opposite sides of the same symbol repeatedly
+    inside a rolling window. The detector mirrors the channel's "Rivalry
+    Week" framing — count >= `min_occurrences` (default 3) inside
+    `window_min` minutes; emit the top `top_n` by count.
+
+    "Count" is the number of distinct (buy, sell) crossings where each
+    fill is on the opposite side from a fill by the rival within the
+    window. With 3 buys by alice and 3 sells by bob in 30 min, the
+    rivalry fires with count=3 — one "moment" per side's fill, not 9
+    unique (alice-fill, bob-fill) pairs. The studio headline reads
+    "X and Y, fourth time today" which the audience reads as "4
+    distinct moments", not "4 individual (fill, fill) tuples".
+
+    Scoring: base 0.55 + 0.1 per occurrence above the minimum, capped at
+    1.0. The rivalry with the most overlap wins when counts tie.
+
+    Metadata written: agent_a, agent_b, symbol, count, a_pnl, b_pnl.
+    PnL is pulled from `pnls` (the average-cost realised PnL built by
+    `_agent_pnl_from_fills`); if either agent didn't close a position
+    the corresponding PnL defaults to 0.0.
+    """
+
+    out: list[Beat] = []
+    if not fills:
+        return out
+
+    by_symbol: dict[str, list[_Fill]] = {}
+    for f in fills:
+        if not f.symbol or f.side not in ("buy", "sell"):
+            continue
+        by_symbol.setdefault(f.symbol, []).append(f)
+
+    # Per (lo_agent, hi_agent, symbol) bucket: track the time-ordered
+    # list of opposing-side fills from each agent. The "count" for the
+    # rivalry is the minimum of the two sides' in-window fill counts
+    # (each agent contributes one entry per distinct moment they took
+    # a side).
+    type _SideFills = dict[int, list[datetime]]
+    buckets: dict[tuple[int, int, str], _SideFills] = {}
+
+    window = timedelta(minutes=window_min)
+    for sym, group in by_symbol.items():
+        group_sorted = sorted(group, key=lambda f: f.t)
+        # Build a per-(lo, hi) per-agent list of in-window opposing fills.
+        for f in group_sorted:
+            for g in group_sorted:
+                if f.idx == g.idx:
+                    continue
+                if f.agent_id == g.agent_id:
+                    continue
+                if f.side == g.side:
+                    continue
+                if abs((f.t - g.t).total_seconds()) > window.total_seconds():
+                    continue
+                lo, hi = sorted((f.agent_id, g.agent_id))
+                key = (lo, hi, sym)
+                side_bucket = buckets.setdefault(
+                    key, {lo: [], hi: []}
+                )
+                side_bucket[f.agent_id].append(f.t)
+
+    # Dedupe per-agent timestamps (a fill shouldn't be counted twice
+    # against the same rival; walk filters on opposing-side, so this
+    # only fires if two agents traded the same fill which can't happen).
+    ranked: list[tuple[tuple[int, int, str], int, datetime]] = []
+    EPOCH = datetime(1970, 1, 1)
+    for key, per_agent in buckets.items():
+        per_agent_dedup = {a: sorted(set(ts)) for a, ts in per_agent.items()}
+        lo, hi, sym = key
+        lo_n = len(per_agent_dedup.get(lo, []))
+        hi_n = len(per_agent_dedup.get(hi, []))
+        count = min(lo_n, hi_n)
+        # Anchor on the latest fill of either side. `max` of two lists
+        # is lex-compare, so we flatten and take the max element.
+        all_ts = per_agent_dedup.get(lo, []) + per_agent_dedup.get(hi, [])
+        latest = max(all_ts) if all_ts else EPOCH
+        ranked.append((key, count, latest))
+    # Sort by count desc, then by latest activity desc so the freshest
+    # rivalry wins ties.
+    ranked.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
+    for (lo, hi, sym), count, anchor_t in ranked:
+        if count < min_occurrences:
+            continue
+        # Display names: pull the most recent fill from each side.
+        per_agent = buckets[(lo, hi, sym)]
+        # Names from the most recent fill on each side (scan the source
+        # fills one more time — this is the cost of keeping the scorer
+        # pure).
+        def _name(agent_id: int) -> str:
+            ts = per_agent.get(agent_id, [])
+            if not ts:
+                return f"agent_{agent_id}"
+            # ts is unsorted (we only de-duped, didn't sort). Sort a
+            # copy to get the latest.
+            latest = max(ts)
+            for f in fills:
+                if f.agent_id == agent_id and f.t == latest:
+                    return f.agent_name
+            return f"agent_{agent_id}"
+
+        a_name = _name(lo)
+        b_name = _name(hi)
+        a_pnl = float(pnls.get(lo, _AgentPnl()).realized)
+        b_pnl = float(pnls.get(hi, _AgentPnl()).realized)
+        score = _clamp(0.55 + (count - min_occurrences) * 0.1)
+        out.append(
+            Beat(
+                id=f"b_rivalry_{lo}_{hi}_{sym}".replace(" ", "_"),
+                t=anchor_t.isoformat(),
+                kind="agent_rivalry",
+                score=score,
+                scene_hint=SCENE_FOR_KIND["agent_rivalry"],
+                headline=f"{a_name} vs {b_name}: opposite sides on {sym} {count} times",
+                sub=(
+                    f"{a_name} {_format_money(a_pnl, signed=True)} · "
+                    f"{b_name} {_format_money(b_pnl, signed=True)}"
+                ),
+                duration_sec=DURATION_FOR_KIND["agent_rivalry"],
+                # event_refs omitted here: the bucket doesn't track them
+                # and the studio can pull them from the manifest by
+                # symbol + agent pair if it needs to.
+                event_refs=[],
+                agent_ids=[lo, hi],
+                symbol=sym,
+                metadata={
+                    "agent_a": lo,
+                    "agent_b": hi,
+                    "symbol": sym,
+                    "count": count,
+                    "a_pnl": a_pnl,
+                    "b_pnl": b_pnl,
+                },
+            )
+        )
+        if len(out) >= top_n:
+            break
+    return out
+
+
+def _score_promotions(
+    promotion_events: Iterable[Any],
+    *,
+    top_n: int = 3,
+) -> list[Beat]:
+    """One beat per Academy promotion/demotion row emitted during the
+    session. The session runner is expected to pass a list of records
+    shaped like ``(at, agent_id, agent_name, from_rank, to_rank)`` —
+    usually a slice of ``AcademyPromotion`` joined with ``Agent``.
+
+    Promotions emit ``kind="promotion"`` (scene=leaderboard).
+    Demotions emit ``kind="top_loser"`` (the existing drawdown lane —
+    the operator already thinks of "the loser of the day" + "the
+    agent who got fired" as the same beat).
+
+    `top_n` caps how many beat records we emit (oldest first by
+    timestamp); the detector trusts the caller to pre-filter to the
+    session's window.
+    """
+
+    out: list[Beat] = []
+    rows = sorted(list(promotion_events), key=lambda r: getattr(r, "at", None) or 0)
+    for row in rows[: max(0, top_n)]:
+        at = getattr(row, "at", None)
+        agent_id = getattr(row, "agent_id", None)
+        agent_name = getattr(row, "agent_name", None) or (
+            f"agent_{agent_id}" if agent_id is not None else "agent_?"
+        )
+        from_rank = getattr(row, "from_rank", None) or "?"
+        to_rank = getattr(row, "to_rank", None) or "?"
+        if at is None:
+            continue
+        # Demotion = lower index in the rank ladder than the previous
+        # rank. Use the same ordering the academy ranks module uses.
+        is_promotion = _rank_index(to_rank) > _rank_index(from_rank)
+        if is_promotion:
+            kind = "promotion"
+            headline = f"Promotion: {agent_name} · {from_rank} to {to_rank}"
+        else:
+            kind = "top_loser"
+            headline = f"Demotion: {agent_name} · {from_rank} to {to_rank}"
+        # We don't know realised PnL for the agent at the moment of the
+        # promotion; the studio can pull it from the latest PnlSnapshot
+        # if it cares. Score is fixed at the per-kind default; rivalry
+        # / divergence / big_fill will still out-rank promotion on
+        # equal scores via KIND_PRIORITY.
+        score = 0.6
+        out.append(
+            Beat(
+                id=(
+                    f"b_{'promo' if is_promotion else 'demo'}_"
+                    f"{agent_id}_{int(at.timestamp() if hasattr(at, 'timestamp') else 0)}"
+                ),
+                t=at.isoformat() if hasattr(at, "isoformat") else str(at),
+                kind=kind,
+                score=score,
+                scene_hint=SCENE_FOR_KIND.get(kind, "leaderboard"),
+                headline=headline,
+                sub="rank change during the session",
+                duration_sec=DURATION_FOR_KIND.get(
+                    kind, DURATION_FOR_KIND["promotion"]
+                ),
+                event_refs=[],
+                agent_ids=[agent_id] if agent_id is not None else [],
+                symbol=None,
+                metadata={
+                    "from_rank": from_rank,
+                    "to_rank": to_rank,
+                    "agent_id": agent_id,
+                },
+            )
+        )
+    return out
+
+
+_RANK_LADDER = ("intern", "junior", "senior", "principal")
+
+
+def _rank_index(rank: str | None) -> int:
+    """Lower = lower in the ladder. Used to disambiguate promotion vs
+    demotion. Unknown values fall between junior and senior so a
+    malformed record doesn't get misclassified as a demotion.
+    """
+    if not rank:
+        return 1
+    try:
+        return _RANK_LADDER.index(rank)
+    except ValueError:
+        return 1
+
+
 def _score_streaks(
     fills: list[_Fill],
     pnls: dict[int, _AgentPnl],
@@ -673,8 +924,17 @@ def detect_beats(
     manifest: dict[str, Any],
     *,
     thresholds: DetectorThresholds | None = None,
+    promotion_events: Iterable[Any] | None = None,
 ) -> list[Beat]:
-    """Run every scorer over the manifest, dedup, select, return."""
+    """Run every scorer over the manifest, dedup, select, return.
+
+    `promotion_events` is an optional list of AcademyPromotion-like
+    rows; the session runner passes the rows tagged with the
+    session_id, the unit tests pass a synthetic list. When omitted
+    the promotion scorer is skipped (it can't read the DB by itself —
+    that would couple the detector to SQLAlchemy and break the
+    "pure function of the manifest" property).
+    """
 
     th = thresholds or DetectorThresholds()
     fills = _fills(manifest)
@@ -686,11 +946,14 @@ def detect_beats(
         candidates.append(open_beat)
     candidates.extend(_score_big_fills(fills, th))
     candidates.extend(_score_divergence(fills, th))
+    candidates.extend(_score_rivalries(fills, pnls))
     candidates.extend(_score_streaks(fills, pnls, th))
     candidates.extend(_score_top_movers(fills, pnls, th))
     burst = _score_closing_burst(fills, th)
     if burst is not None:
         candidates.append(burst)
+    if promotion_events is not None:
+        candidates.extend(_score_promotions(promotion_events))
     recap = _score_recap(manifest, pnls, fills)
     if recap is not None:
         candidates.append(recap)
