@@ -66,7 +66,12 @@ def test_merge_manifest_extras_writes_three_top_level_keys(tmp_path: Path):
     _merge_manifest_extras(
         manifest_path,
         rivalries=[{"a": 1, "b": 2, "symbol": "NVDA", "count": 3, "a_pnl": 12.0, "b_pnl": -5.0}],
-        interns_under_watch=[3, 7, 9, 12, 18],
+        lowest_ranks=[
+            {"agent_id": 3, "name": "marcus_smith", "rank": "intern", "rank_index": 0,
+             "strategy": "momentum_12_1", "starting_capital": 1000.0},
+            {"agent_id": 7, "name": "lisa_garcia", "rank": "intern", "rank_index": 0,
+             "strategy": "rsi2", "starting_capital": 1000.0},
+        ],
         strategy_rollup={
             "momentum": StrategyRollup(agents=44, equity=44_000.0, pnl=120.0, pnlPct=0.27, fills=2),
             "lstm": StrategyRollup(agents=14, equity=14_000.0, pnl=-30.0, pnlPct=-0.21, fills=1),
@@ -80,7 +85,13 @@ def test_merge_manifest_extras_writes_three_top_level_keys(tmp_path: Path):
     assert data["rivalries"] == [
         {"a": 1, "b": 2, "symbol": "NVDA", "count": 3, "a_pnl": 12.0, "b_pnl": -5.0}
     ]
-    assert data["interns_under_watch"] == [3, 7, 9, 12, 18]
+    assert data["interns_under_watch"] == [3, 7]
+    assert data["lowest_ranks"] == [
+        {"agent_id": 3, "name": "marcus_smith", "rank": "intern", "rank_index": 0,
+         "strategy": "momentum_12_1", "starting_capital": 1000.0},
+        {"agent_id": 7, "name": "lisa_garcia", "rank": "intern", "rank_index": 0,
+         "strategy": "rsi2", "starting_capital": 1000.0},
+    ]
     assert data["strategy_rollup"] == {
         "momentum": {
             "agents": 44,
@@ -111,7 +122,14 @@ def test_merge_manifest_extras_round_trips_through_json(tmp_path: Path):
     _merge_manifest_extras(
         manifest_path,
         rivalries=rivalries,
-        interns_under_watch=[1, 2, 3],
+        lowest_ranks=[
+            {"agent_id": 1, "name": "a_b", "rank": "intern", "rank_index": 0,
+             "strategy": "momentum", "starting_capital": 1000.0},
+            {"agent_id": 2, "name": "c_d", "rank": "intern", "rank_index": 0,
+             "strategy": "momentum", "starting_capital": 1000.0},
+            {"agent_id": 3, "name": "e_f", "rank": "intern", "rank_index": 0,
+             "strategy": "momentum", "starting_capital": 1000.0},
+        ],
         strategy_rollup={
             "momentum": StrategyRollup(agents=1, equity=1000.0, pnl=0.0, pnlPct=0.0, fills=0),
         },
@@ -121,6 +139,9 @@ def test_merge_manifest_extras_round_trips_through_json(tmp_path: Path):
     # round-trip preserves ints (intern ids), floats (pnl), and the
     # string 'AAPL' in the symbol field.
     assert data["rivalries"][0]["symbol"] == "AAPL"
+    assert data["lowest_ranks"][0]["agent_id"] == 1
+    # back-compat: the round-8 `interns_under_watch` field stays as
+    # the derived list of agent_ids from `lowest_ranks`.
     assert data["interns_under_watch"] == [1, 2, 3]
 
 
@@ -133,11 +154,13 @@ def test_merge_manifest_extras_handles_empty_inputs(tmp_path: Path):
     _merge_manifest_extras(
         manifest_path,
         rivalries=[],
-        interns_under_watch=[],
+        lowest_ranks=[],
         strategy_rollup={},
     )
     data = json.loads(manifest_path.read_text())
     assert data["rivalries"] == []
+    assert data["lowest_ranks"] == []
+    # back-compat field also empty.
     assert data["interns_under_watch"] == []
     assert data["strategy_rollup"] == {}
 
@@ -313,12 +336,45 @@ async def test_snapshot_intern_cast_returns_five_lowest_equity_interns(session_s
 
     cast = await _snapshot_intern_cast(limit=5)
     # 4 interns + 1 tiebreaker (4 < 5, so all 4 interns + nothing else)
-    assert cast == [3, 2, 1, 4]  # sorted by cash asc, then id asc
+    # Sorted by cash asc, then id asc. New shape: list of dicts.
     assert len(cast) == 4
+    assert [r["agent_id"] for r in cast] == [3, 2, 1, 4]
+    # Every row carries the full cast card shape.
+    for row in cast:
+        assert set(row.keys()) == {
+            "agent_id",
+            "name",
+            "rank",
+            "rank_index",
+            "strategy",
+            "starting_capital",
+        }
+        assert row["rank"] == "intern"
+        assert row["rank_index"] == 0  # RANK_ORDER index for "intern"
+
+
+async def test_snapshot_intern_cast_includes_name_and_strategy(session_smoke):
+    """The cast card is what the studio + recap endpoint surface; the
+    name + strategy fields must come back populated (not just ids)."""
+    from tradefarm.session.run import _snapshot_intern_cast
+
+    cast = await _snapshot_intern_cast(limit=5)
+    assert all(r["name"] for r in cast), "name must be populated"
+    assert all(r["strategy"] for r in cast), "strategy must be populated"
 
 
 async def test_snapshot_intern_cast_limit_respected(session_smoke):
     from tradefarm.session.run import _snapshot_intern_cast
 
     cast = await _snapshot_intern_cast(limit=2)
-    assert cast == [3, 2]
+    assert [r["agent_id"] for r in cast] == [3, 2]
+
+
+async def test_snapshot_intern_cast_excludes_non_intern_ranks(session_smoke):
+    """Only `rank == intern` agents are returned; seniors are filtered
+    out even when they're the lowest-cash in the agent table."""
+    from tradefarm.session.run import _snapshot_intern_cast
+
+    cast = await _snapshot_intern_cast(limit=10)
+    for row in cast:
+        assert row["rank"] == "intern"

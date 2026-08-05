@@ -15,7 +15,9 @@ Output:
 
 Manifest extras (v1 — written after the standard `SessionManifest`):
     rivalries           - top 2 same-symbol opposite-side agent pairs
-    interns_under_watch - 5 lowest-ranked intern agent ids at session start
+    lowest_ranks        - 5 lowest-cash intern cast rows at session start
+                          (id, name, rank, rank_index, strategy, starting_capital)
+    interns_under_watch - back-compat: derived list of agent_ids from lowest_ranks
     strategy_rollup     - per-strategy aggregate (agents, equity, pnl, pnlPct, fills)
 """
 
@@ -32,6 +34,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from tradefarm.academy import RANK_ORDER
 from tradefarm.market.hours import NYSE
 from tradefarm.orchestrator.scheduler import Orchestrator
 from tradefarm.runtime.session_context import reset_session_id, set_session_id
@@ -141,8 +144,10 @@ async def run_session(
         # Snapshot the intern cast BEFORE the replay runs. The Friday
         # "Intern Watch" episode opens with the cohort at session start;
         # the curriculum can promote them mid-session but the cast card
-        # shouldn't change retroactively.
-        interns_under_watch = await _snapshot_intern_cast(limit=_INTERN_WATCH_COUNT)
+        # shouldn't change retroactively. Returns the full cast list
+        # (id, name, rank, rank_index, strategy, starting_capital) so
+        # the VOD studio + recap endpoint don't have to re-query.
+        lowest_ranks = await _snapshot_intern_cast(limit=_INTERN_WATCH_COUNT)
 
         fill_count = 0
         for day in trading_days:
@@ -173,17 +178,17 @@ async def run_session(
     manifest_path = out_dir / session_id / "manifest.json"
     write_manifest(manifest, manifest_path)
 
-    # The three new fields (rivalries, interns_under_watch,
-    # strategy_rollup) live alongside the SessionManifest dataclass but
-    # aren't part of its schema — `manifest.py` is owned by the platform
-    # team. We post-process the JSON file in-place so the round-trip
-    # contract for `manifest.json` stays the canonical source of truth.
+    # The three new fields (rivalries, lowest_ranks, strategy_rollup)
+    # live alongside the SessionManifest dataclass but aren't part of
+    # its schema — `manifest.py` is owned by the platform team. We
+    # post-process the JSON file in-place so the round-trip contract for
+    # `manifest.json` stays the canonical source of truth.
     rivalries = _compute_rivalries(events, top_n=_RIVALRY_TOP_N)
     strategy_rollup = _compute_strategy_rollup(orch, marks)
     _merge_manifest_extras(
         manifest_path,
         rivalries=rivalries,
-        interns_under_watch=interns_under_watch,
+        lowest_ranks=lowest_ranks,
         strategy_rollup=strategy_rollup,
     )
 
@@ -274,21 +279,33 @@ async def _build_events_from_db(session_id: str) -> tuple[list[SessionEvent], in
     return events, len(active_agent_ids)
 
 
-async def _snapshot_intern_cast(*, limit: int) -> list[int]:
-    """Return up to `limit` agent ids with the lowest current cash
-    among the rank='intern' cohort. Used to seed the "Intern Watch"
-    episode's cast list at session start.
+async def _snapshot_intern_cast(*, limit: int) -> list[dict[str, Any]]:
+    """Return up to `limit` intern cast rows for the "Intern Watch"
+    episode, sorted by current cash ascending (lowest first) and
+    agent_id as tiebreaker for deterministic output.
 
-    Tiebreakers: when two interns are at the same cash, fall back to
-    agent_id ascending so the output is deterministic across runs.
+    Each row: {agent_id, name, rank, rank_index, strategy,
+    starting_capital}. The `rank_index` is the position in
+    `academy.RANK_ORDER` (0=intern, 1=junior, 2=senior, 3=principal)
+    so downstream consumers can group/sort by rank without re-parsing
+    the string.
+
     Returns an empty list if the DB is unreachable (e.g. a fresh
     fixture) — the manifest still round-trips, the field is just empty.
     """
+    rank_idx: dict[str, int] = {r: i for i, r in enumerate(RANK_ORDER)}
     try:
         async with SessionLocal() as session:
             rows = (
                 await session.execute(
-                    select(Agent.id, Agent.cash)
+                    select(
+                        Agent.id,
+                        Agent.name,
+                        Agent.rank,
+                        Agent.strategy,
+                        Agent.starting_capital,
+                        Agent.cash,
+                    )
                     .where(Agent.rank == "intern")
                     .order_by(Agent.cash.asc(), Agent.id.asc())
                     .limit(max(0, limit))
@@ -296,7 +313,19 @@ async def _snapshot_intern_cast(*, limit: int) -> list[int]:
             ).all()
     except Exception:
         return []
-    return [int(agent_id) for agent_id, _ in rows]
+    out: list[dict[str, Any]] = []
+    for agent_id, name, rank, strategy, starting_capital, _cash in rows:
+        out.append(
+            {
+                "agent_id": int(agent_id),
+                "name": str(name),
+                "rank": str(rank),
+                "rank_index": rank_idx.get(str(rank), 0),
+                "strategy": str(strategy),
+                "starting_capital": float(starting_capital or 0.0),
+            }
+        )
+    return out
 
 
 def _compute_rivalries(
@@ -445,16 +474,23 @@ def _merge_manifest_extras(
     manifest_path: Path,
     *,
     rivalries: list[dict[str, Any]],
-    interns_under_watch: list[int],
+    lowest_ranks: list[dict[str, Any]],
     strategy_rollup: dict[str, StrategyRollup],
 ) -> None:
     """Add the three new top-level fields to a manifest.json file
     in-place. The function reads, mutates, writes — single-writer
     guarantees hold because the runner is a single async process.
+
+    `lowest_ranks` is the full Intern Watch cast list
+    ({agent_id, name, rank, rank_index, strategy, starting_capital});
+    the legacy `interns_under_watch: list[int]` field is kept as a
+    derived list of agent_ids for back-compat with the round-8 studio
+    surface and any other consumer that read the older field name.
     """
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     data["rivalries"] = rivalries
-    data["interns_under_watch"] = interns_under_watch
+    data["lowest_ranks"] = lowest_ranks
+    data["interns_under_watch"] = [r["agent_id"] for r in lowest_ranks]
     data["strategy_rollup"] = {
         k: {
             "agents": v.agents,
