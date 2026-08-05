@@ -6,19 +6,17 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.11.0 shipped 2026-08-05.** A "TTS env wiring + Intern
-Watch / Rivalry Week live-mode" release. The TTS step is now
-auto-included when the operator has provider creds in the env
-(no more forgetting `--include-tts`), the Intern Watch and
-Rivalry Week studio surfaces read from real session data via
-`/vod/{id}/extras` instead of the synthetic fallback, and
-Session Control's live strategy breakdown finally shows the
-full 8 buckets instead of the 3-bucket legacy view. 853 tests
-passing (up from 833). See [CHANGELOG.md](./CHANGELOG.md) for
-the full release notes. The current focus is the carryover
-from the post-0.10.0 audit — shorts visual verification, TTS
-provider switching, the podcast episode format — not new
-features.
+**0.12.0 shipped 2026-08-05.** A "backend audit followup"
+release. Closes the remaining post-0.10.0 backend items from
+the 16-item "audit-followup quick wins" list: the shared
+httpx-client migration followup (commentary loop + tts
+elevenlabs + yt upload 4 callsites) and the
+audience-coordinator race + deque O(N) rebuild. 861 tests
+passing (up from 848). See [CHANGELOG.md](./CHANGELOG.md) for
+the full release notes. The current focus is the **frontend
+audit followup** (a11y, mock-data gating, single-WS-per-tab,
+the RecentFillsRail age label bug) — the backend audit list
+is now closed.
 
 Status legend:
 
@@ -31,15 +29,16 @@ Status legend:
 
 ## Now — current focus
 
-The 0.11.0 release (2026-08-05) closed the TTS env wiring +
-Intern Watch / Rivalry Week live-mode + `StrategyLegacy`
-3-bucket carryover audit findings from 0.10.0. The remaining
-**post-0.10.0 audit carryover** is the shorts visual QA +
-TTS provider switching + podcast episode format. None of
-these are blocking; the operator is happy with the 0.11.0
-shape and is using it for the daily-render flow. The research
-docs at `docs/research/` are the source of truth for what's
-left.
+The 0.12.0 release (2026-08-05) closed the last of the
+backend audit-followup items from the post-0.10.0 review
+(shared-httpx-client migration followup + audience race +
+deque O(N) rebuild). The remaining audit-followup items are
+all **frontend**: the `RecentFillsRail` age-label bug, the
+single-WS-per-tab refactor, mock-data gating behind
+`import.meta.env.DEV`, the a11y pass on the legacy modals,
+and the `disabled={!isOnline}` → warning-banner refactor.
+The current focus is shipping 0.13.0 with the frontend
+half of the audit followup.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
@@ -47,37 +46,18 @@ These are the **new** findings from the post-0.6.0 audit (see
 `REPO_REVIEW.md` + `BACKLOG.md` for the full list). They're grouped
 by impact — pick any one when the operator wants a small, contained PR.
 
-- **Backend — `pnl_daily` denominator hardcoded to 1000.0.**
-  `api/main.py:675` ignores `agent_starting_capital`. The `/account`
-  endpoint already does it right; this one is a one-line fix + a test.
-  *~15 min.*
-- **Backend — finish the shared-httpx-client migration.** Two LLM
-  hot paths (`llm_providers.py:119` for MiniMax,
-  `commentary_loop.py:430` for commentary) still spin a fresh
-  `httpx.AsyncClient` per call. Mirror the `eodhd.py:72-74` pattern.
-  *~30 min.*
-- **Backend — env-var shadowing warning at boot.** `Settings()` loads
-  from shell env + `.env`; the admin-panel `.env` write is invisible
-  if the shell env wins. Log a `env_shadow` warning on first load.
-  *~1 hour.*
-- **Backend — replace `_recent_fills_from_orch`'s open-positions
-  stand-in** with a real fill ring buffer (last 50 fills). The cost
-  gate currently misfires on a flat market with positions still open
-  from earlier fills. *~2 hours.*
-- **Backend — MiniMax provider retries + base-URL allowlist.** No
-  retry on transient 5xx/429; `minimax_base_url` accepts any URL.
-  Mirror `eodhd.py:77-89` retry pattern + a `urlparse(scheme=https)`
-  guard. *~1 hour.*
-- **Backend — add a real `/api/fills/count?since=…` endpoint.** The
-  VOD "fills today" stat currently reads the WS buffer cap (20), not
-  the real count. *~1 hour.*
-- **Backend — fix 4 stale "skeleton" docstrings** in
-  `session/{run,manifest,replay,closing_snapshot}.py`. *~10 min.*
-- **Backend — audience lock** (still OPEN from round 1). One
-  `asyncio.Lock` around approve/reject + replace the deque rebuild
-  with an `OrderedDict`. *~30 min.*
-- **Backend — pin `pandas<3` and rebuild the venv.** Currently
-  running untested pandas 3.0.2. *~30 min + lockfile regen.*
+- ✅ **Backend — `pnl_daily` denominator hardcoded to 1000.0** — shipped in round 6 B1.
+- ✅ **Backend — `llm_providers.py` shared-httpx-client migration** — shipped in round 5 AA.
+- ✅ **Backend — `commentary_loop.py:430` shared-httpx-client migration** — shipped in 0.12.0.
+- ✅ **Backend — `tts/run.py:119` (elevenlabs) shared-httpx-client migration** — shipped in 0.12.0.
+- ✅ **Backend — `yt/upload.py` 4 callsites shared-httpx-client migration** — shipped in 0.12.0.
+- ✅ **Backend — env-var shadowing warning at boot** — `config.py:_check_env_shadows` fires on every boot when shell env disagrees with `.env`.
+- ✅ **Backend — replace `_recent_fills_from_orch`'s open-positions stand-in** — shipped in round 6 (orchestrator's bounded ring buffer).
+- ✅ **Backend — MiniMax provider retries + base-URL allowlist** — shipped in round 6 MED-minimax.
+- ✅ **Backend — add a real `/api/fills/count?since=…` endpoint** — shipped in an earlier round (`api/main.py:812`).
+- ✅ **Backend — fix 4 stale "skeleton" docstrings** — none found; the modules are fully documented.
+- ✅ **Backend — audience lock** — shipped in 0.12.0 (asyncio.Lock + dict refactor; closes the double-publish race).
+- ✅ **Backend — pin `pandas<3` and rebuild the venv** — shipped in round 6.
 - **Frontend — `RecentFillsRail` age label bug.** `Date.now()` only
   re-evaluates on a new fill, so a 5-minute-old fill reads "0s".
   Add a 1s re-render or own the tick in a child. *~30 min.*
@@ -87,9 +67,10 @@ by impact — pick any one when the operator wants a small, contained PR.
 - **Frontend — gate mock data behind `import.meta.env.DEV`.** Both
   `dash/mockData.ts` and `vod/mockData.ts` ship in the prod bundle.
   *~1 hour.*
-- **Frontend — kill the 800ms `useVodSessionLive` heartbeat.** Re-renders
-  the whole dashboard tree 1.25×/sec to power a cursor-blink. Move
-  the cursor-blink to a leaf component. *~30 min.*
+- ✅ ~~**Frontend — kill the 800ms `useVodSessionLive` heartbeat.**~~
+  Already shipped in 0.10.0/0.11.0 — the cursor-blink moved to the
+  `ETClock` leaf and the global 1.25Hz re-render is gone (see
+  `useVodSessionLive.ts:206-211`).
 - **Frontend — a11y pass on the legacy modals.** `AdminModal.tsx` and
   `BacktestModal.tsx` need `role="dialog"`, `aria-modal`, focus trap,
   return-focus on close. *~1 hour.*

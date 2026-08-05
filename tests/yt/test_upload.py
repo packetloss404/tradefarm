@@ -245,6 +245,150 @@ async def test_upload_episode_failure_path_returns_error(
     assert "invalid_grant" in (result.error or "")
 
 
+# ----- 0.12.0 — shared httpx client for the 4 upload callsites -------------
+#
+# The OAuth refresh, init-resumable POST, chunked PUT, and thumbnail
+# POST all used to instantiate ``httpx.AsyncClient`` per call. They
+# now all reuse ``tradefarm.runtime.http.get_shared_client()`` so the
+# keepalive survives the whole 4-call sequence (a real win on the
+# chunked PUT — 100s of 8 MiB chunks ride the same TCP/TLS session).
+
+
+class _SharedClientStub:
+    """Records every post + put + replays scripted responses."""
+
+    def __init__(self) -> None:
+        self.posts: list[dict] = []
+        self.puts: list[dict] = []
+        self._post_responses: list[tuple[int, dict, dict]] = []
+        self._put_responses: list[tuple[int, dict, dict]] = []
+
+    def queue_post(self, status: int, body: dict = None, headers: dict = None) -> None:
+        self._post_responses.append((status, body or {}, headers or {}))
+
+    def queue_put(self, status: int, body: dict = None, headers: dict = None) -> None:
+        self._put_responses.append((status, body or {}, headers or {}))
+
+    async def post(self, url, *, json=None, headers=None, content=None, timeout=None, **_):
+        from types import SimpleNamespace
+
+        self.posts.append(
+            {"url": url, "json": json, "headers": headers, "content": content, "timeout": timeout}
+        )
+        if not self._post_responses:
+            raise RuntimeError("no scripted post response")
+        status, body, resp_headers = self._post_responses.pop(0)
+        return SimpleNamespace(
+            status_code=status,
+            json=lambda: body,
+            content=b"" if not body else str(body).encode("utf-8"),
+            headers=resp_headers,
+            text=str(body),
+            raise_for_status=lambda: _maybe_raise(status, url),
+        )
+
+    async def put(self, url, *, headers=None, content=None, timeout=None, **_):
+        from types import SimpleNamespace
+
+        self.puts.append(
+            {"url": url, "headers": headers, "content": content, "timeout": timeout}
+        )
+        if not self._put_responses:
+            raise RuntimeError("no scripted put response")
+        status, body, resp_headers = self._put_responses.pop(0)
+        return SimpleNamespace(
+            status_code=status,
+            json=lambda: body,
+            content=b"" if not body else str(body).encode("utf-8"),
+            headers=resp_headers,
+            text=str(body),
+            raise_for_status=lambda: _maybe_raise(status, url),
+        )
+
+
+def _maybe_raise(status: int, url: str) -> None:
+    if status < 400:
+        return
+    import httpx
+
+    request = httpx.Request("POST", url)
+    response = httpx.Response(status, request=request)
+    raise httpx.HTTPStatusError(
+        f"HTTP {status}", request=request, response=response
+    )
+
+
+async def test_refresh_access_token_uses_shared_client(monkeypatch):
+    """0.12.0: the OAuth refresh POST goes through the shared
+    client (not a fresh ``httpx.AsyncClient``)."""
+    from tradefarm.yt import upload as up
+
+    fake = _SharedClientStub()
+    fake.queue_post(200, body={"access_token": "ya29.fake"})
+
+    async def _get():
+        return fake
+
+    monkeypatch.setattr(up, "get_shared_client", _get)
+
+    creds = YtCredentials(client_id="cid", client_secret="sec", refresh_token="ref")
+    token = await up.refresh_access_token(creds)
+    assert token == "ya29.fake"
+    assert len(fake.posts) == 1
+    # The shared client is the only thing that should have fired.
+    assert "oauth2.googleapis.com" in fake.posts[0]["url"]
+    # 10s timeout is the per-request override (the shared client's
+    # default is 30s; the refresh dance doesn't need more).
+    assert fake.posts[0]["timeout"] == 10.0
+
+
+async def test_initiate_resumable_upload_uses_shared_client(monkeypatch):
+    """0.12.0: the resumable init POST goes through the shared
+    client so the keepalive carries into the chunked PUT."""
+    from tradefarm.yt import upload as up
+
+    fake = _SharedClientStub()
+    fake.queue_post(200, headers={"Location": "https://upload.googleapis.com/resumable/xyz"})
+
+    async def _get():
+        return fake
+
+    monkeypatch.setattr(up, "get_shared_client", _get)
+
+    loc = await up._initiate_resumable_upload(
+        access_token="tok", body={"snippet": {"title": "T"}}, video_bytes=42
+    )
+    assert loc == "https://upload.googleapis.com/resumable/xyz"
+    assert len(fake.posts) == 1
+    assert "youtube/v3/videos" in fake.posts[0]["url"]
+    assert fake.posts[0]["headers"]["Authorization"] == "Bearer tok"
+    assert fake.posts[0]["timeout"] == 30.0
+
+
+async def test_set_thumbnail_uses_shared_client(tmp_path, monkeypatch):
+    """0.12.0: the thumbnail POST goes through the shared client."""
+    from tradefarm.yt import upload as up
+
+    fake = _SharedClientStub()
+    fake.queue_post(200)
+
+    async def _get():
+        return fake
+
+    monkeypatch.setattr(up, "get_shared_client", _get)
+
+    thumb = tmp_path / "thumb.jpg"
+    thumb.write_bytes(b"thumbbytes")
+    await up._set_thumbnail(access_token="tok", video_id="vid", thumb_path=thumb)
+    assert len(fake.posts) == 1
+    assert "thumbnails/set" in fake.posts[0]["url"]
+    assert "videoId=vid" in fake.posts[0]["url"]
+    # 60s timeout is the per-request override.
+    assert fake.posts[0]["timeout"] == 60.0
+    # Raw bytes in content (multipart uses `files=`, this uses `content=`).
+    assert fake.posts[0]["content"] == b"thumbbytes"
+
+
 # ----- env-gated real-API smoke test (does NOT actually upload) ----------
 
 

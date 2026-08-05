@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from tradefarm.runtime.http import get_shared_client, with_retries  # noqa: F401  (re-exported for tests)
+
 
 DEFAULT_PROVIDER = "auto"  # "auto" → first available based on env keys
 DEFAULT_VOICE = "Daniel"
@@ -111,12 +113,18 @@ class ElevenLabsTtsProvider:
         self.model_id = model_id or self.DEFAULT_MODEL_ID
 
     async def synthesize(self, text: str, *, voice: str, out_path: Path) -> float:
-        import httpx
         import subprocess
 
         voice_id = self.VOICE_IDS.get(voice, voice)
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # 0.12.0 — Round-5 AA follow-up. Reuse the shared httpx client +
+        # retry helper so the elevenlabs POST benefits from keepalive +
+        # transient-error retries the same way ``MinimaxProvider.decide``
+        # + ``commentary_loop._commentary_completion`` already do. Without
+        # this, every line of every episode paid a fresh TLS handshake.
+        client = await get_shared_client()
+
+        async def _post_once() -> bytes:
             r = await client.post(
                 url,
                 headers={
@@ -129,12 +137,25 @@ class ElevenLabsTtsProvider:
                     "model_id": self.model_id,
                     "voice_settings": {"stability": 0.55, "similarity_boost": 0.75},
                 },
+                timeout=30.0,
             )
-        if r.status_code != 200:
-            raise RuntimeError(f"elevenlabs returned {r.status_code}: {r.text[:200]}")
+            if r.status_code != 200:
+                # Raise a non-retryable error on 4xx (other than 429 which
+                # the retry helper handles); the helper re-raises 5xx.
+                # Anything that ultimately bubbles to the caller means the
+                # synthesis for this line is dead — we record the failure
+                # in the result and move on.
+                if r.status_code < 500 and r.status_code != 429:
+                    raise RuntimeError(
+                        f"elevenlabs returned {r.status_code}: {r.text[:200]}"
+                    )
+                r.raise_for_status()
+            return r.content
+
+        content = await with_retries(_post_once, label="elevenlabs")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         mp3_path = out_path.with_suffix(".mp3")
-        mp3_path.write_bytes(r.content)
+        mp3_path.write_bytes(content)
         # Transcode to mono 22050 Hz wav via ffmpeg. The mixer downstream
         # is happier with a uniform sample-rate input.
         result = subprocess.run(

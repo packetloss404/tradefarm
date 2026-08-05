@@ -16,6 +16,12 @@ and asserts:
      308 responses;
   2. the same chunk bytes were re-PUT both times;
   3. the function returned the 200 response payload.
+
+0.12.0: ``_put_video_bytes`` now reuses the shared httpx client
+(``tradefarm.runtime.http.get_shared_client``) instead of constructing
+its own ``httpx.AsyncClient`` inside the function body. The test
+patches ``up.get_shared_client`` (not ``httpx.AsyncClient``) to return
+the fake client directly.
 """
 
 from __future__ import annotations
@@ -24,7 +30,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
 from tradefarm.yt import upload as up
@@ -50,17 +55,17 @@ class _PutCall:
 
 
 class _FakeClient:
-    """Records every PUT and returns scripted responses in order."""
+    """Records every PUT and returns scripted responses in order.
+
+    No ``__aenter__``/``__aexit__`` — the shared-client migration
+    (0.12.0) dropped the ``async with httpx.AsyncClient(...) as
+    client`` wrapper around the upload body. The client is now
+    returned directly from ``get_shared_client()``.
+    """
 
     def __init__(self, responses: list[_FakeResponse]) -> None:
         self._responses = responses
         self.put_calls: list[_PutCall] = []
-
-    async def __aenter__(self) -> "_FakeClient":
-        return self
-
-    async def __aexit__(self, *exc) -> None:  # noqa: ANN001
-        return None
 
     async def put(
         self,
@@ -114,14 +119,13 @@ async def test_put_video_bytes_does_not_advance_on_308_without_range(
     ]
     fake = _FakeClient(responses)
 
-    def _factory(*_a, **_kw):
+    # 0.12.0 — patch the shared-client factory so the chunked PUT
+    # body uses the fake. The real ``httpx.AsyncClient`` constructor
+    # is no longer called inside ``_put_video_bytes``.
+    async def _get_fake() -> _FakeClient:
         return fake
 
-    # ``upload._put_video_bytes`` does ``import httpx`` inside the
-    # function body, so we patch the *real* httpx.AsyncClient. The fresh
-    # ``import httpx`` inside the function picks up the same module
-    # object we just monkey-patched.
-    monkeypatch.setattr(httpx, "AsyncClient", _factory)
+    monkeypatch.setattr(up, "get_shared_client", _get_fake)
 
     # Avoid the 1s backoff between 308-no-Range retries.
     async def _no_sleep(_s):
@@ -168,10 +172,12 @@ async def test_put_video_bytes_bails_after_six_consecutive_same_offset_308s(
     responses = [_FakeResponse(status_code=308, headers={}) for _ in range(10)]
     fake = _FakeClient(responses)
 
-    def _factory(*_a, **_kw):
+    # 0.12.0 — patch the shared-client factory (see comment in the
+    # 200-OK test above).
+    async def _get_fake() -> _FakeClient:
         return fake
 
-    monkeypatch.setattr(httpx, "AsyncClient", _factory)
+    monkeypatch.setattr(up, "get_shared_client", _get_fake)
 
     async def _no_sleep(_s):
         return None

@@ -281,6 +281,117 @@ async def test_reject_unknown_id_returns_false():
 
 
 # ---------------------------------------------------------------------------
+# 0.12.0 — pin-queue dict refactor + approve/reject lock.
+# ---------------------------------------------------------------------------
+
+
+async def test_pending_requests_returns_newest_first_after_dict_refactor():
+    """0.12.0: pin queue is a single insertion-ordered dict now.
+    pending_requests() must still return entries newest-first (last
+    appended = newest = index 0 in the response)."""
+    orch = _make_orch()
+    coord = AudienceCoordinator(orch=orch)  # type: ignore[arg-type]
+    fake = AsyncMock()
+    with patch("tradefarm.orchestrator.audience.publish_event", fake):
+        # Three pin requests, in order. The agent_name_query is the
+        # only field that varies per request, so we can identify them
+        # in the response payload.
+        for q in ("alpha", "bravo", "charlie"):
+            await coord._handle_pin(
+                audience_mod.PinCommand(agent_query=q), requester="viewer"
+            )
+
+    pending = coord.pending_requests()
+    # Newest first = "charlie" was the last _handle_pin, so it leads.
+    assert [r["agent_name_query"] for r in pending] == ["charlie", "bravo", "alpha"]
+
+
+async def test_concurrent_approve_reject_same_id_only_publishes_once():
+    """0.12.0: the pin lock closes a double-publish race. An
+    approve + reject for the same id fire concurrently; only one
+    can pop the request, the other must see ``None`` and return
+    False without publishing. Without the lock, both would pass
+    the None-check on a stale view of the dict and both would
+    publish ``audience_pin_resolved``."""
+    import asyncio
+
+    orch = _make_orch()
+    coord = AudienceCoordinator(orch=orch)  # type: ignore[arg-type]
+    fake = AsyncMock()
+    with patch("tradefarm.orchestrator.audience.publish_event", fake):
+        await coord._handle_pin(
+            audience_mod.PinCommand(agent_query="alpha"), requester="viewer"
+        )
+        # Capture the request id from the WS publish.
+        req_id = _payloads(fake, "audience_pin_request")[0]["id"]
+        fake.reset_mock()
+
+        # Fire approve + reject concurrently for the same id. With the
+        # lock, exactly one wins; the other sees None and returns
+        # False without publishing.
+        approve_task = asyncio.create_task(coord.approve_pin_request(req_id))
+        reject_task = asyncio.create_task(coord.reject_pin_request(req_id))
+        approve_ok, reject_ok = await asyncio.gather(approve_task, reject_task)
+
+    # Exactly one path succeeded.
+    assert [approve_ok, reject_ok].count(True) == 1
+    # The queue is empty (the winning path popped; the losing path
+    # saw None and returned False).
+    assert coord.pending_requests() == []
+    # Exactly one ``audience_pin_resolved`` publish fired.
+    resolved = _payloads(fake, "audience_pin_resolved")
+    assert len(resolved) == 1
+    assert resolved[0]["id"] == req_id
+    assert resolved[0]["status"] in ("approved", "rejected")
+
+
+async def test_concurrent_approve_same_id_only_publishes_once():
+    """0.12.0: the lock closes a different double-publish race — two
+    concurrent approvals of the same id (e.g. a flaky UI clicking
+    twice). Only one path should pop the request and publish."""
+    import asyncio
+
+    orch = _make_orch()
+    coord = AudienceCoordinator(orch=orch)  # type: ignore[arg-type]
+    fake = AsyncMock()
+    with patch("tradefarm.orchestrator.audience.publish_event", fake):
+        await coord._handle_pin(
+            audience_mod.PinCommand(agent_query="alpha"), requester="viewer"
+        )
+        req_id = _payloads(fake, "audience_pin_request")[0]["id"]
+        fake.reset_mock()
+
+        # Two concurrent approvals of the same id.
+        a = asyncio.create_task(coord.approve_pin_request(req_id))
+        b = asyncio.create_task(coord.approve_pin_request(req_id))
+        a_ok, b_ok = await asyncio.gather(a, b)
+
+    # Exactly one approval won.
+    assert [a_ok, b_ok].count(True) == 1
+    assert coord.pending_requests() == []
+    resolved = _payloads(fake, "audience_pin_resolved")
+    assert len(resolved) == 1
+    assert resolved[0]["status"] == "approved"
+
+
+async def test_pin_queue_cap_evicts_oldest_via_dict_first_key():
+    """0.12.0: cap eviction now pops ``next(iter(self._pin_by_id))``
+    (the first-inserted key) instead of the deque popleft. Verify
+    the oldest request is the one evicted."""
+    orch = _make_orch()
+    coord = AudienceCoordinator(orch=orch, queue_cap=3)  # type: ignore[arg-type]
+    fake = AsyncMock()
+    with patch("tradefarm.orchestrator.audience.publish_event", fake):
+        for q in ("alpha", "bravo", "charlie", "delta"):
+            await coord._handle_pin(
+                audience_mod.PinCommand(agent_query=q), requester="viewer"
+            )
+    # alpha is the oldest → evicted when delta was inserted.
+    remaining = {r["agent_name_query"] for r in coord.pending_requests()}
+    assert remaining == {"bravo", "charlie", "delta"}
+
+
+# ---------------------------------------------------------------------------
 # Non-command messages are inert.
 # ---------------------------------------------------------------------------
 

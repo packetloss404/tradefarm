@@ -27,7 +27,6 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
-import httpx
 import structlog
 
 from tradefarm.agents.llm_overlay import LlmOverlay
@@ -38,6 +37,7 @@ from tradefarm.agents.llm_providers import (
 )
 from tradefarm.api.events import publish_event
 from tradefarm.config import settings
+from tradefarm.runtime.http import get_shared_client, with_retries
 
 if TYPE_CHECKING:
     from tradefarm.orchestrator.scheduler import Orchestrator
@@ -433,10 +433,20 @@ async def _commentary_completion(provider: LlmProvider, user_message: str) -> st
                 {"role": "user", "content": user_message},
             ],
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json=body, headers=headers)
+        # Round-5 AA follow-up: reuse the shared client + retry helper so
+        # the commentary loop benefits from keepalive + transient-error
+        # retries the same way ``llm_providers.MinimaxProvider.decide``
+        # already does. Each commentary tick would otherwise pay TLS +
+        # connection-pool init; on a 45s cadence that's hundreds of
+        # avoidable handshakes per hour.
+        client = await get_shared_client()
+
+        async def _post_once() -> dict:
+            r = await client.post(url, json=body, headers=headers, timeout=30.0)
             r.raise_for_status()
-            data = r.json()
+            return r.json()
+
+        data = await with_retries(_post_once, label="minimax_commentary")
         return data["choices"][0]["message"]["content"]
     raise RuntimeError(f"unsupported llm provider for commentary: {type(provider).__name__}")
 

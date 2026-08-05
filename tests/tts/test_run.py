@@ -347,3 +347,163 @@ def test_should_auto_include_tts_false_when_no_creds_and_flag_off(monkeypatch):
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert should_auto_include_tts(vod_tts_auto_include=False) is False
+
+
+# ----- 0.12.0 — shared httpx client for the elevenlabs provider --------
+#
+# The elevenlabs path used to instantiate its own ``httpx.AsyncClient``
+# per call (TLS handshake + connection-pool init per line). 0.12.0
+# migrates it to ``tradefarm.runtime.http.get_shared_client`` +
+# ``with_retries`` so the keepalive + retry behaviour matches the
+# LLM hot path.
+
+
+class _FakeResp:
+    def __init__(self, status_code: int, content: bytes = b"") -> None:
+        self.status_code = status_code
+        self.content = content
+        self.text = ""
+
+    def raise_for_status(self) -> None:
+        # Mirror httpx.Response: 4xx/5xx raise so the retry helper
+        # can re-invoke; 2xx/3xx are silent. The retry helper only
+        # catches ``httpx.HTTPStatusError`` + ``httpx.RequestError``,
+        # so we instantiate the real exception class.
+        if self.status_code >= 400:
+            import httpx
+
+            request = httpx.Request("POST", "https://api.elevenlabs.io")
+            response = httpx.Response(self.status_code, request=request)
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}", request=request, response=response
+            )
+
+
+class _RecordingClient:
+    """Fake shared httpx client. Records POSTs + replays scripted
+    ``(status, body)`` responses in order. Non-2xx raises so the
+    retry helper re-runs the call."""
+
+    def __init__(self, responses: list[_FakeResp]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    async def post(self, url: str, *, json=None, headers=None, timeout=None, **_) -> _FakeResp:  # noqa: ANN001
+        self.calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        if not self._responses:
+            raise RuntimeError("no scripted response")
+        return self._responses.pop(0)
+
+
+def _patch_shared_client(monkeypatch, fake: _RecordingClient) -> None:
+    async def _get() -> _RecordingClient:
+        return fake
+
+    from tradefarm.tts import run as tts_run
+
+    monkeypatch.setattr(tts_run, "get_shared_client", _get)
+
+
+async def test_elevenlabs_uses_shared_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from tradefarm.tts.run import ElevenLabsTtsProvider
+
+    # 200 OK returns mp3 bytes the downstream ffmpeg transcode
+    # would consume. The test doesn't actually need the wav to
+    # be valid; ffmpeg will fail and we don't care — we just
+    # assert the provider's HTTP shape and the shared-client use.
+    fake = _RecordingClient(
+        [_FakeResp(200, content=b"\xff\xfb\x90\x00" + b"\x00" * 100)]
+    )
+    _patch_shared_client(monkeypatch, fake)
+
+    # Replace ffmpeg so the test doesn't shell out.
+    def _no_ffmpeg(*args, **kwargs):
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("subprocess.run", _no_ffmpeg)
+
+    p = ElevenLabsTtsProvider(api_key="fake")
+    # Intercept the ffmpeg call by monkey-patching subprocess at the
+    # call-site module (the elevenlabs provider does `import subprocess`
+    # at the top, so we patch the module that the import resolves to).
+    import sys
+
+    sys.modules["subprocess"].run = _no_ffmpeg  # type: ignore[attr-defined]
+
+    out = tmp_path / "line.wav"
+    # We expect this to succeed even though the mp3 is bogus,
+    # because the elevenlabs provider just writes the bytes to
+    # ``.mp3`` and shells out to ffmpeg (which we no-op'd).
+    await p.synthesize("hello world", voice="ignored", out_path=out)
+
+    assert len(fake.calls) == 1
+    assert "api.elevenlabs.io" in fake.calls[0]["url"]
+    assert fake.calls[0]["headers"]["xi-api-key"] == "fake"
+    # The shared client is passed `timeout=30.0` per request; the
+    # provider's old `async with httpx.AsyncClient(timeout=30.0)`
+    # is gone.
+    assert fake.calls[0]["timeout"] == 30.0
+
+
+async def test_elevenlabs_retries_on_5xx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Transient 5xx should be retried by the shared retry helper
+    (max 3 attempts). The provider records a single successful
+    line on the third try."""
+    from tradefarm.tts.run import ElevenLabsTtsProvider
+
+    # 503, 503, 200 → retry helper retries 2x, third succeeds.
+    fake = _RecordingClient(
+        [
+            _FakeResp(503, content=b"server error"),
+            _FakeResp(503, content=b"server error"),
+            _FakeResp(200, content=b"\xff\xfb\x90\x00" + b"\x00" * 100),
+        ]
+    )
+    _patch_shared_client(monkeypatch, fake)
+
+    import sys
+    from subprocess import CompletedProcess
+
+    sys.modules["subprocess"].run = lambda *a, **kw: CompletedProcess(  # type: ignore[attr-defined]
+        args=a, returncode=0, stdout=b"", stderr=b""
+    )
+
+    p = ElevenLabsTtsProvider(api_key="fake")
+    out = tmp_path / "line.wav"
+    await p.synthesize("hi", voice="ignored", out_path=out)
+    # 3 POSTs total = 2 retries + 1 success.
+    assert len(fake.calls) == 3
+
+
+async def test_elevenlabs_4xx_does_not_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A 4xx (other than 429) is a real failure, not a transient
+    blip. The provider records the failed line in ``result.failed``
+    and the orchestrator moves on to the next line — the retry
+    helper MUST NOT re-raise and force the chain into a retry loop."""
+    from tradefarm.tts.run import run_tts
+
+    fake = _RecordingClient([_FakeResp(400, content=b"bad voice id")])
+    _patch_shared_client(monkeypatch, fake)
+
+    import sys
+    from subprocess import CompletedProcess
+
+    sys.modules["subprocess"].run = lambda *a, **kw: CompletedProcess(  # type: ignore[attr-defined]
+        args=a, returncode=0, stdout=b"", stderr=b""
+    )
+
+    _write_script(
+        tmp_path,
+        "s_bad",
+        beats=[
+            {"beat_id": "b1", "lines": [{"text": "hi"}]},
+        ],
+    )
+    # We expect a single POST (no retry on 400) and the line to
+    # land in ``result.failed`` (not crash the whole run).
+    result = await run_tts("s_bad", sessions_dir=tmp_path, provider_name="elevenlabs", api_key="fake")
+    assert len(fake.calls) == 1
+    assert len(result.lines) == 0
+    assert len(result.failed) == 1

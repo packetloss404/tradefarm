@@ -13,6 +13,84 @@ commit on GitHub.
 
 ---
 
+## [0.12.0] — 2026-08-05
+
+A "backend audit followup" release. Closes the remaining
+post-0.10.0 backend audit-followup items that survived
+rounds 6-8. The two highest-value changes are the shared
+httpx-client migration to the four LLM/YT hot paths (one
+TCP/TLS session now spans the entire 4-call YT upload
+sequence, including the 100+ chunk PUT) and the
+audience-coordinator pin-queue refactor that closes a
+double-publish race when an operator hits approve + reject
+on the same request id concurrently. 861 tests pass (up
+from 848).
+
+### Changed — shared httpx client (round-5 AA followup)
+
+- **`commentary_loop.py:436` MiniMax path now uses the shared
+  client + retry helper**. The 45s Bloomberg-style commentary
+  tick used to spin a fresh `httpx.AsyncClient` per call (TLS
+  handshake + connection-pool init every 45s). Now it shares
+  the same keepalive + 5xx/429 retry behaviour as
+  `llm_providers.MinimaxProvider.decide` (round 5 AA). Three
+  new tests in `test_commentary_loop.py` drive the
+  `_commentary_completion` MiniMax path through a recording
+  stub of the shared client.
+- **`tts/run.py:119` ElevenLabs path migrated**. The provider
+  used to instantiate its own client per line — every line of
+  every episode paid a fresh handshake. Now it shares the
+  same keepalive + retry behaviour. The 4xx path stays
+  non-retryable: a 400 from ElevenLabs (bad voice id) records
+  the line in `result.failed` and the chain moves on, never
+  blocking the run on a permanent error. Three new tests in
+  `test_run.py` cover the happy path, 5xx-retry, and 4xx-no-
+  retry.
+- **`yt/upload.py` 4 callsites migrated**: `refresh_access_token`,
+  `_initiate_resumable_upload`, `_put_video_bytes`,
+  `_set_thumbnail`. The highest-value target is the chunked
+  PUT (300s per-chunk timeout, 100+ chunks per upload) — the
+  keepalive now spans the whole chunked PUT instead of being
+  re-established every 8 MiB. Three new tests in
+  `test_upload.py` cover each callsite's shared-client use.
+- **Migration note**: `tests/yt/test_put_video_bytes.py` was
+  updated to patch `up.get_shared_client` instead of
+  `httpx.AsyncClient` (the real `httpx.AsyncClient` is no
+  longer called inside the chunked PUT body).
+
+### Fixed — audience race + deque O(N) rebuild
+
+- **`orchestrator/audience.py:347` — pin-queue dict refactor +
+  asyncio lock**. The previous code held a `deque` for
+  FIFO ordering + a `dict` for O(1) id-lookup, then rebuilt
+  the deque O(N) on every approve/reject. The new code uses
+  a single insertion-ordered `dict` (Python 3.7+ guarantees
+  order) and pops by id in O(1). The approve + reject methods
+  are now guarded by a lazy-initialised `asyncio.Lock` that
+  closes a double-publish race: two concurrent operator
+  approvals of the same id (or approve+reject of the same id
+  from a misbehaving UI) used to both pass the `None`-check
+  on a stale view of the dict, double-publishing
+  `audience_pin_resolved`. The lock serialises the pop so
+  exactly one path wins. Three new tests in `test_audience.py`
+  cover the dict order, the approve+reject race, and the
+  cap-eviction path.
+
+### Carryover
+
+- **848 → 861 tests pass.** 13 new tests, no removals.
+- **No DB schema changes.** `SCHEMA_VERSION` still at 4.
+- **No new env vars.**
+- **ROADMAP cleanup**: the 16 "audit-followup quick wins" in
+  the ROADMAP "Now" section are mostly already shipped
+  across rounds 5-8. 0.12.0 closes the two remaining
+  backend items (the shared-httpx migration followup + the
+  audience race). The remaining unfixed items in the list
+  (a11y pass, single-WS-per-tab, etc.) are frontend — see
+  0.13.0.
+
+---
+
 ## [0.11.0] — 2026-08-05
 
 A "TTS env wiring + Intern Watch / Rivalry Week live-mode" release.

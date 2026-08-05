@@ -34,6 +34,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+from tradefarm.runtime.http import get_shared_client
+
 
 OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 VIDEOS_INSERT_URL = (
@@ -79,18 +83,21 @@ class YtCredentials:
 async def refresh_access_token(creds: YtCredentials) -> str:
     """Trade a refresh_token for a fresh access_token. Same shape as
     src/tradefarm/orchestrator/youtube_chat.py's refresh dance."""
-    import httpx
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.post(
-            OAUTH_TOKEN_URL,
-            data={
-                "client_id": creds.client_id,
-                "client_secret": creds.client_secret,
-                "refresh_token": creds.refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
+    # 0.12.0 — Round-5 AA follow-up. Reuse the shared client. The
+    # refresh can fire on every chunk-upload 401 (resumable PUT
+    # mid-stream), so paying a fresh TLS handshake per refresh
+    # would multiply the cost.
+    client = await get_shared_client()
+    r = await client.post(
+        OAUTH_TOKEN_URL,
+        data={
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "refresh_token": creds.refresh_token,
+            "grant_type": "refresh_token",
+        },
+        timeout=10.0,
+    )
     if r.status_code != 200:
         raise RuntimeError(f"token refresh failed {r.status_code}: {r.text[:200]}")
     data = r.json()
@@ -137,20 +144,23 @@ async def _initiate_resumable_upload(
     video_bytes: int,
 ) -> str:
     """Step 1 — POST snippet/status, get a resumable upload Location."""
-    import httpx
-
+    # 0.12.0 — Round-5 AA follow-up. Reuse the shared client so the
+    # init POST + the upcoming chunked PUTs all ride the same keepalive
+    # connection pool (the chunk PUT reuses the TLS session that the
+    # init POST warmed up).
+    client = await get_shared_client()
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8",
         "X-Upload-Content-Length": str(video_bytes),
         "X-Upload-Content-Type": "video/mp4",
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.post(
-            VIDEOS_INSERT_URL,
-            headers=headers,
-            content=json.dumps(body).encode("utf-8"),
-        )
+    r = await client.post(
+        VIDEOS_INSERT_URL,
+        headers=headers,
+        content=json.dumps(body).encode("utf-8"),
+        timeout=30.0,
+    )
     if r.status_code not in (200, 201):
         raise RuntimeError(f"init upload failed {r.status_code}: {r.text[:300]}")
     loc = r.headers.get("Location")
@@ -181,77 +191,83 @@ async def _put_video_bytes(
     to what the server has; on 401 (token expired) calls
     refresh_creds to get a fresh access token and retries the chunk.
     """
-    import httpx
-
+    # 0.12.0 — Round-5 AA follow-up. Reuse the shared client (300s
+    # per-chunk timeout via the request kwarg, not the client's
+    # default 30s). The chunked PUT is the highest-value migration
+    # target in this module — keepalive across hundreds of chunks
+    # is a real network+latency win for a 15-min reel.
+    client = await get_shared_client()
+    chunk_timeout = httpx.Timeout(300.0, connect=10.0)
     size = video_path.stat().st_size
     headers_base: dict[str, str] = {
         "Content-Type": "video/mp4",
     }
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        with video_path.open("rb") as fh:
-            offset = 0
-            # Audit fix (round-3 V): explicit counter, reset whenever
-            # the offset actually advances. The previous `locals().get(
-            # "_same_offset_retries", 0) + 1` measured *lifetime* no-
-            # Range 308s across the whole upload, not consecutive at
-            # the same offset — false-positive on a long upload with
-            # interleaved successes.
-            same_offset_retries = 0
-            last_offset = -1
-            while offset < size:
-                if offset != last_offset:
-                    same_offset_retries = 0
-                    last_offset = offset
-                chunk = fh.read(RESUMABLE_CHUNK_BYTES)
-                end = offset + len(chunk) - 1
-                headers = {
-                    **headers_base,
-                    "Content-Length": str(len(chunk)),
-                    "Content-Range": f"bytes {offset}-{end}/{size}",
-                }
-                r = await client.put(location_url, headers=headers, content=chunk)
-                if r.status_code in (200, 201):
-                    # Final chunk accepted.
-                    return r.json()
-                if r.status_code == 308:
-                    # Incomplete — server reports how far it has via Range.
-                    range_hdr = r.headers.get("Range", "")
-                    if range_hdr.startswith("bytes="):
-                        try:
-                            server_end = int(range_hdr.split("-", 1)[1])
-                            offset = server_end + 1
-                            # Re-seek to where the server actually is.
-                            fh.seek(offset)
-                            continue
-                        except (ValueError, IndexError):
-                            pass
-                    # Audit fix (P): 308 with no/unparseable Range means
-                    # the server has UNKNOWN bytes — DO NOT optimistically
-                    # advance the cursor; that would skip unwritten bytes
-                    # silently and produce a corrupted upload. Re-PUT the
-                    # same chunk after a brief backoff. If this loops more
-                    # than a few times, bail with a clear error so the
-                    # operator can investigate (the resumable session is
-                    # still valid for 24h).
-                    await asyncio.sleep(1.0)
-                    fh.seek(offset)
-                    same_offset_retries += 1
-                    if same_offset_retries > 5:
-                        raise RuntimeError(
-                            "PUT video stalled at offset "
-                            f"{offset} — server returned 308 without Range "
-                            "for 5 consecutive retries"
-                        )
-                    continue
-                if r.status_code == 401 and refresh_creds is not None:
-                    # Token expired mid-upload. The location URL itself
-                    # holds the resumable session, so refresh and retry
-                    # the same chunk (re-seek to offset).
-                    await refresh_access_token(refresh_creds)
-                    fh.seek(offset)
-                    continue
-                raise RuntimeError(f"PUT video failed {r.status_code}: {r.text[:300]}")
+    with video_path.open("rb") as fh:
+        offset = 0
+        # Audit fix (round-3 V): explicit counter, reset whenever
+        # the offset actually advances. The previous `locals().get(
+        # "_same_offset_retries", 0) + 1` measured *lifetime* no-
+        # Range 308s across the whole upload, not consecutive at
+        # the same offset — false-positive on a long upload with
+        # interleaved successes.
+        same_offset_retries = 0
+        last_offset = -1
+        while offset < size:
+            if offset != last_offset:
+                same_offset_retries = 0
+                last_offset = offset
+            chunk = fh.read(RESUMABLE_CHUNK_BYTES)
+            end = offset + len(chunk) - 1
+            headers = {
+                **headers_base,
+                "Content-Length": str(len(chunk)),
+                "Content-Range": f"bytes {offset}-{end}/{size}",
+            }
+            r = await client.put(
+                location_url, headers=headers, content=chunk, timeout=chunk_timeout
+            )
+            if r.status_code in (200, 201):
+                # Final chunk accepted.
+                return r.json()
+            if r.status_code == 308:
+                # Incomplete — server reports how far it has via Range.
+                range_hdr = r.headers.get("Range", "")
+                if range_hdr.startswith("bytes="):
+                    try:
+                        server_end = int(range_hdr.split("-", 1)[1])
+                        offset = server_end + 1
+                        # Re-seek to where the server actually is.
+                        fh.seek(offset)
+                        continue
+                    except (ValueError, IndexError):
+                        pass
+                # Audit fix (P): 308 with no/unparseable Range means
+                # the server has UNKNOWN bytes — DO NOT optimistically
+                # advance the cursor; that would skip unwritten bytes
+                # silently and produce a corrupted upload. Re-PUT the
+                # same chunk after a brief backoff. If this loops more
+                # than a few times, bail with a clear error so the
+                # operator can investigate (the resumable session is
+                # still valid for 24h).
+                await asyncio.sleep(1.0)
+                fh.seek(offset)
+                same_offset_retries += 1
+                if same_offset_retries > 5:
+                    raise RuntimeError(
+                        "PUT video stalled at offset "
+                        f"{offset} — server returned 308 without Range "
+                        "for 5 consecutive retries"
+                    )
+                continue
+            if r.status_code == 401 and refresh_creds is not None:
+                # Token expired mid-upload. The location URL itself
+                # holds the resumable session, so refresh and retry
+                # the same chunk (re-seek to offset).
+                await refresh_access_token(refresh_creds)
+                fh.seek(offset)
+                continue
+            raise RuntimeError(f"PUT video failed {r.status_code}: {r.text[:300]}")
     raise RuntimeError("resumable upload ended without final response")
 
 
@@ -262,8 +278,11 @@ async def _set_thumbnail(*, access_token: str, video_id: str, thumb_path: Path) 
     Audit fix (H30): the URL needs `uploadType=media` for the simple-
     upload protocol (raw image body, not multipart). Without it,
     YouTube returns 400."""
-    import httpx
-
+    # 0.12.0 — Round-5 AA follow-up. Reuse the shared client so the
+    # thumbnail POST rides the keepalive connection that the resumable
+    # PUT just warmed up (the four upload calls fire in series in
+    # upload_episode, so the keepalive is hot).
+    client = await get_shared_client()
     url = f"{THUMBNAILS_SET_URL}?uploadType=media&videoId={video_id}"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -271,8 +290,7 @@ async def _set_thumbnail(*, access_token: str, video_id: str, thumb_path: Path) 
     }
     with thumb_path.open("rb") as fh:
         data = fh.read()
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        r = await client.post(url, headers=headers, content=data)
+    r = await client.post(url, headers=headers, content=data, timeout=60.0)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"thumbnail upload failed {r.status_code}: {r.text[:300]}")
 

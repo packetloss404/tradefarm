@@ -657,3 +657,117 @@ async def test_hallucinated_llm_response_falls_back():
     # And the fabricated "$200K" claim must not have made it through.
     assert "$200K" not in result["text"]
     assert "200K" not in result["text"]
+
+
+# ---------------------------------------------------------------------------
+# 0.12.0 — MiniMax commentary path uses the shared httpx client + retry
+# helper, matching the LLM decision path. The Anthropic path stays
+# untouched (it goes through the SDK, not raw httpx).
+# ---------------------------------------------------------------------------
+
+
+class _SharedClientStub:
+    """Records POSTs and replays scripted ``(status, body)`` pairs."""
+
+    def __init__(self, responses: list[tuple[int, dict]]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    async def post(self, url, *, json=None, headers=None, timeout=None, **_):
+        self.calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        if not self._responses:
+            raise RuntimeError("no scripted response")
+        status, body = self._responses.pop(0)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            status_code=status,
+            json=lambda: body,
+            raise_for_status=lambda: (
+                _raise_http_error(status, url) if status >= 400 else None
+            ),
+        )
+
+
+def _raise_http_error(status: int, url: str) -> None:
+    import httpx
+
+    request = httpx.Request("POST", url)
+    response = httpx.Response(status, request=request)
+    raise httpx.HTTPStatusError(
+        f"HTTP {status}", request=request, response=response
+    )
+
+
+async def test_minimax_commentary_uses_shared_client(monkeypatch):
+    """0.12.0: MiniMaxProvider commentary path goes through
+    ``get_shared_client()`` + ``with_retries`` so the keepalive +
+    retry semantics match the trade-decision path."""
+    from tradefarm.agents.llm_providers import MinimaxProvider
+
+    client = _SharedClientStub(
+        [(200, {"choices": [{"message": {"content": "ok"}}]})]
+    )
+
+    async def _get():
+        return client
+
+    monkeypatch.setattr(cl, "get_shared_client", _get)
+
+    provider = MinimaxProvider(api_key="k", base_url="https://api.minimax.io/v1")
+    out = await cl._commentary_completion(provider, "user message")
+    assert out == "ok"
+    assert len(client.calls) == 1
+    assert client.calls[0]["url"].endswith("/chat/completions")
+    assert client.calls[0]["headers"]["Authorization"] == "Bearer k"
+    assert client.calls[0]["timeout"] == 30.0
+
+
+async def test_minimax_commentary_retries_on_5xx(monkeypatch):
+    """Transient 5xx retries via the shared helper — no need for
+    the commentary loop to know about retry policy."""
+    from tradefarm.agents.llm_providers import MinimaxProvider
+
+    client = _SharedClientStub(
+        [
+            (503, {}),
+            (503, {}),
+            (200, {"choices": [{"message": {"content": "ok"}}]}),
+        ]
+    )
+
+    async def _get():
+        return client
+
+    monkeypatch.setattr(cl, "get_shared_client", _get)
+
+    provider = MinimaxProvider(api_key="k", base_url="https://api.minimax.io/v1")
+    out = await cl._commentary_completion(provider, "user message")
+    assert out == "ok"
+    # 3 POSTs: 2 retries + 1 success.
+    assert len(client.calls) == 3
+
+
+async def test_minimax_commentary_4xx_does_not_retry(monkeypatch):
+    """A 4xx is a real failure, not transient. The shared helper
+    must NOT re-raise and force the commentary loop into a
+    pointless retry loop — the loop's ``try / except`` around
+    ``_commentary_completion`` is the right layer to handle this."""
+    import httpx
+    from tradefarm.agents.llm_providers import MinimaxProvider
+
+    client = _SharedClientStub([(400, {"error": "bad model"})])
+
+    async def _get():
+        return client
+
+    monkeypatch.setattr(cl, "get_shared_client", _get)
+
+    provider = MinimaxProvider(api_key="k", base_url="https://api.minimax.io/v1")
+    # The retry helper raises ``httpx.HTTPStatusError`` for non-2xx
+    # because that's the contract. The commentary loop's outer
+    # ``try / except`` turns this into a fallback caption.
+    with pytest.raises(httpx.HTTPStatusError):
+        await cl._commentary_completion(provider, "user message")
+    # Exactly one POST — no retry on 4xx.
+    assert len(client.calls) == 1

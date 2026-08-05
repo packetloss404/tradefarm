@@ -113,11 +113,30 @@ class AudienceCoordinator:
     queue_cap: int = PIN_QUEUE_CAP
 
     _votes: Deque[_Vote] = field(default_factory=deque, init=False, repr=False)
-    _pin_requests: Deque[_PinRequest] = field(default_factory=deque, init=False, repr=False)
+    # 0.12.0 — pin requests live in a single insertion-ordered dict
+    # (Python 3.7+ guarantees order). The previous deque+dict pair
+    # forced an O(N) rebuild of the deque on every approve/reject.
+    # Iterating ``reversed(_pin_by_id.values())`` gives newest-first
+    # for the pending-requests payload; ``_pin_by_id.pop(id, None)``
+    # is the O(1) approve/reject pop.
     _pin_by_id: dict[str, _PinRequest] = field(default_factory=dict, init=False, repr=False)
+    # 0.12.0 — approve/reject race guard. Without the lock, two
+    # concurrent operator approvals (or an approve+reject of the same
+    # id from a misbehaving UI) could both pass the ``_pop_request``
+    # None-check before either did the dict pop, leading to a
+    # double-publish of ``audience_pin_resolved``. Lazy-initialised
+    # because ``asyncio.Lock()`` requires a running event loop, and
+    # tests construct ``AudienceCoordinator`` outside one.
+    _pin_lock: asyncio.Lock | None = field(default=None, init=False, repr=False)
     _last_sentiment_publish: datetime | None = field(default=None, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _stopped: bool = field(default=False, init=False, repr=False)
+
+    def _get_pin_lock(self) -> asyncio.Lock:
+        """Lazy-init the lock (must happen inside a running event loop)."""
+        if self._pin_lock is None:
+            self._pin_lock = asyncio.Lock()
+        return self._pin_lock
 
     # ------------------------------------------------------------------
     # Lifecycle.
@@ -245,12 +264,15 @@ class AudienceCoordinator:
             agent_name_query=cmd.agent_query,
             requested_at=_utcnow(),
         )
-        # Evict the oldest if we're at cap.
-        while len(self._pin_requests) >= self.queue_cap:
-            dropped = self._pin_requests.popleft()
-            self._pin_by_id.pop(dropped.id, None)
-        self._pin_requests.append(req)
-        self._pin_by_id[req.id] = req
+        # 0.12.0 — single insertion-ordered dict (was deque + dict).
+        # Evict oldest by popping the first key of the dict (insertion
+        # order is FIFO). The approve/reject lock guards the concurrent
+        # case where a UI approval races the queue-cap eviction.
+        async with self._get_pin_lock():
+            while len(self._pin_by_id) >= self.queue_cap:
+                oldest_id = next(iter(self._pin_by_id))
+                self._pin_by_id.pop(oldest_id, None)
+            self._pin_by_id[req.id] = req
         await publish_event("audience_pin_request", req.to_payload())
         log.info(
             "audience_pin_request",
@@ -291,7 +313,7 @@ class AudienceCoordinator:
 
     def pending_requests(self) -> list[dict[str, Any]]:
         """Return all pending pin requests, newest first."""
-        return [r.to_payload() for r in reversed(self._pin_requests)]
+        return [r.to_payload() for r in reversed(self._pin_by_id.values())]
 
     async def approve_pin_request(
         self,
@@ -311,9 +333,13 @@ class AudienceCoordinator:
           app spotlights the chosen agent (skipped when neither the request
           nor the override resolves to an agent).
         """
-        req = self._pop_request(request_id)
-        if req is None:
-            return False
+        # 0.12.0 — guard the pop + publish under the pin lock so two
+        # concurrent approvals of the same id can't both pass the
+        # ``None`` check and double-publish ``audience_pin_resolved``.
+        async with self._get_pin_lock():
+            req = self._pop_request(request_id)
+            if req is None:
+                return False
         resolved = agent_id_override if agent_id_override is not None else req.agent_id
         await publish_event(
             "audience_pin_resolved",
@@ -337,9 +363,14 @@ class AudienceCoordinator:
 
         Returns ``True`` on success, ``False`` for unknown ids.
         """
-        req = self._pop_request(request_id)
-        if req is None:
-            return False
+        # 0.12.0 — same lock pattern as approve. The caller is expected
+        # to hold the lock if it has already acquired it; otherwise the
+        # lock is acquired here. See approve_pin_request for the
+        # double-publish race the lock closes.
+        async with self._get_pin_lock():
+            req = self._pop_request(request_id)
+            if req is None:
+                return False
         await publish_event(
             "audience_pin_resolved",
             {"id": req.id, "status": "rejected", "agent_id": req.agent_id},
@@ -348,13 +379,11 @@ class AudienceCoordinator:
         return True
 
     def _pop_request(self, request_id: str) -> _PinRequest | None:
-        req = self._pin_by_id.pop(request_id, None)
-        if req is None:
-            return None
-        # Rebuild the deque without the popped element (O(N) on a 20-cap
-        # deque — fine).
-        self._pin_requests = deque(r for r in self._pin_requests if r.id != request_id)
-        return req
+        # 0.12.0 — single dict (was deque + dict). O(1) pop, no
+        # rebuild. The caller is responsible for holding ``_pin_lock``
+        # around the pop so a concurrent approve/reject of the same id
+        # is serialised.
+        return self._pin_by_id.pop(request_id, None)
 
     # ------------------------------------------------------------------
     # Prediction routing — delegated to PredictionsBoard.
