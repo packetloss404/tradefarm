@@ -29,11 +29,12 @@ A sidecar JSON next to each clip carries the timing the stitcher
       "captured_at": "2026-05-21T04:55:12+00:00"
     }
 
-For v0 we skip the `recap` scene — its `/api/recap/today` endpoint
-isn't replay-aware yet (it talks to the live orchestrator), so its
-clip would render a mix of historical equity + live promotions /
-predictions. Recap support lands in a follow-up alongside the recap
-endpoint's `?session_id=&at=` params.
+For 0.8.x the `recap` scene is included in the default render plan —
+`/api/recap/today` accepts `?session_id=&at=` and folds the manifest
+for the requested window, so the captured clip is the replayed recap
+(not a mix of historical equity + live promotions). The legacy
+`--include-recap` flag is still accepted for back-compat but is a
+no-op.
 
 Stream server must be reachable at `--stream-base` (default
 http://localhost:5180/) — start it with `cd stream && npm run dev`.
@@ -70,7 +71,7 @@ TAIL_BUFFER_SEC = 2.0
 # giving up on a beat. Generous; most beats are ready in <3s.
 DEFAULT_GOTO_TIMEOUT_MS = 30_000
 SCENES_WITH_REPLAY_SUPPORT = frozenset(
-    {"hero", "leaderboard", "brain", "showdown", "strategy", "decision-lab"}
+    {"hero", "leaderboard", "brain", "showdown", "strategy", "decision-lab", "recap"}
 )
 
 # Per-kind defaults for the render. Mirror beats.py's DURATION_FOR_KIND
@@ -169,14 +170,14 @@ def plan_jobs(
     """Translate a beats.json list into RenderJob records. Returns
     (jobs_to_render, skipped_beat_ids).
 
-    A beat is skipped if its kind is in `skip_kinds` (default: just
-    "recap" — its scene depends on /api/recap/today which isn't
-    replay-aware yet) OR its scene isn't in `allow_scenes` (default:
-    every scene we know has a replay-driven render path).
+    A beat is skipped if its kind is in `skip_kinds` (default: empty —
+    the recap scene is now replay-aware via /api/recap/today's
+    `?session_id=&at=` params) OR its scene isn't in `allow_scenes`
+    (default: every scene we know has a replay-driven render path).
     """
 
     overrides = scene_overrides or {}
-    skips = skip_kinds if skip_kinds is not None else frozenset({"recap"})
+    skips = skip_kinds if skip_kinds is not None else frozenset()
     allowed = allow_scenes if allow_scenes is not None else SCENES_WITH_REPLAY_SUPPORT
 
     jobs: list[RenderJob] = []
@@ -593,8 +594,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--include-recap",
         action="store_true",
-        help="Render recap beats too. Off by default — /api/recap/today "
-        "isn't replay-aware yet so the clip will mix live data.",
+        help="Back-compat no-op. Recap beats are included in the default "
+        "plan now that /api/recap/today is replay-aware.",
     )
     parser.add_argument(
         "--viewport",
@@ -632,10 +633,13 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"bad --viewport {args.viewport!r} (want WIDTHxHEIGHT)") from exc
 
     if args.include_recap:
+        # Back-compat: the flag used to widen the allow-list. The
+        # default now already includes "recap", so this branch is a
+        # no-op — kept so old CLI invocations don't break.
         skip: frozenset[str] = frozenset()
-        allow: frozenset[str] | None = SCENES_WITH_REPLAY_SUPPORT | {"recap"}
+        allow: frozenset[str] | None = SCENES_WITH_REPLAY_SUPPORT
     else:
-        skip = frozenset({"recap"})
+        skip = frozenset()
         allow = None
 
     if args.dry_run:

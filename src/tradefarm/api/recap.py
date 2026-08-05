@@ -4,6 +4,15 @@ Single REST endpoint that assembles the day's highlights into one structured
 JSON response. The stream's ``RecapScene`` renders a 30-second card sequence
 from this payload; the dashboard's "Closing Recap" macro also pokes it.
 
+Two paths:
+
+1. **Live** (no query params) — uses the live orchestrator's agents, marks,
+   and the DB's Trade / AgentNote rows for today's ET window.
+2. **Replay** (`?session_id=&at=`) — loads the named session's manifest,
+   folds it to the requested timestamp, and shapes the response from the
+   folded state. Used by the headless renderer when capturing a recap
+   clip for a historical day.
+
 Shape contract (see Recap v2 ticket / frontend agent):
 
     {
@@ -19,8 +28,9 @@ Shape contract (see Recap v2 ticket / frontend agent):
     }
 
 The aggregator is split into one helper per section so unit tests can hit
-each without spinning up the full app. ``build_recap`` is the assembler;
-``GET /recap/today`` just wires the live orchestrator + DB session in.
+each without spinning up the full app. ``build_recap`` is the live-path
+assembler; ``build_recap_from_manifest`` is the replay-path assembler;
+``GET /recap/today`` routes between them based on the query params.
 """
 
 from __future__ import annotations
@@ -29,7 +39,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -38,6 +48,7 @@ from tradefarm.academy import promotions_repo
 from tradefarm.config import settings
 from tradefarm.market.hours import ET
 from tradefarm.runtime.clock import now_utc
+from tradefarm.session import replay_query
 from tradefarm.storage.db import SessionLocal
 from tradefarm.storage.models import AgentNote, Trade
 
@@ -401,12 +412,208 @@ async def build_recap(
 
 
 # ---------------------------------------------------------------------------
+# Replay path.
+# ---------------------------------------------------------------------------
+
+
+def build_recap_from_manifest(
+    manifest: dict[str, Any],
+    at: datetime,
+) -> dict[str, Any]:
+    """Replay-mode assembler. Folds the manifest's events up to ``at``
+    and shapes the same response contract as ``build_recap`` from the
+    folded agent state.
+
+    Inputs are pure (the manifest dict + a target timestamp); no DB
+    reads, no orchestrator coupling — the same call works on the
+    headless renderer's Playwright capture loop or a debug session
+    on a developer's box.
+
+    The biggest_fill + top_winners/losses are derived from the folded
+    AgentSnapshots' average-cost PnL math (the same accounting
+    `session/beats.py:_apply_fill` uses) so a 2024 session replays
+    with the same numbers a live tick would have produced.
+    """
+    snaps, marks = replay_query.fold_to(manifest, at)
+    events = manifest.get("events") or []
+    start_at = manifest.get("started_at")
+
+    # Total fills: count `fill` events up to `at`.
+    total_fills = 0
+    for ev in events:
+        if ev.get("kind") != "fill":
+            continue
+        try:
+            t = replay_query.parse_iso(ev["t"])
+        except (KeyError, ValueError):
+            continue
+        if t > at:
+            break
+        total_fills += 1
+
+    # Biggest fill: largest |qty * price| up to `at`.
+    biggest_fill: dict[str, Any] | None = None
+    biggest_notional = 0.0
+    for ev in events:
+        if ev.get("kind") != "fill":
+            continue
+        try:
+            t = replay_query.parse_iso(ev["t"])
+        except (KeyError, ValueError):
+            continue
+        if t > at:
+            break
+        payload = ev.get("payload") or {}
+        try:
+            qty = float(payload.get("qty") or 0.0)
+            price = float(payload.get("price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        notional = abs(qty * price)
+        if notional > biggest_notional:
+            biggest_notional = notional
+            biggest_fill = {
+                "agent_id": ev.get("agent_id"),
+                "agent_name": ev.get("agent_name"),
+                "symbol": payload.get("symbol"),
+                "side": payload.get("side"),
+                "qty": qty,
+                "price": price,
+                "notional": notional,
+                "at": ev.get("t"),
+            }
+
+    # Top winners / biggest loss from folded agent snapshots.
+    # `equity_for()` already applies marks; we use `realized_pnl` (closed
+    # trades only) for the podium so an open mega-winner doesn't always
+    # top the chart.
+    sorted_by_pnl = sorted(
+        snaps.values(),
+        key=lambda s: s.realized_pnl,
+        reverse=True,
+    )
+    winners: list[dict[str, Any]] = []
+    for snap in sorted_by_pnl:
+        if snap.realized_pnl <= 0:
+            break
+        # The folded snapshot doesn't keep the symbol the gain came
+        # from; surface the agent + the realized number. The studio
+        # already shows agent cards so symbol lookup is a UI concern.
+        winners.append(
+            {
+                "agent_id": snap.agent_id,
+                "agent_name": snap.name,
+                "realized_pnl": float(snap.realized_pnl),
+                "symbol": None,
+            }
+        )
+        if len(winners) >= 3:
+            break
+
+    biggest_loss: dict[str, Any] | None = None
+    for snap in sorted_by_pnl:
+        if snap.realized_pnl < 0:
+            biggest_loss = {
+                "agent_id": snap.agent_id,
+                "agent_name": snap.name,
+                "realized_pnl": float(snap.realized_pnl),
+                "symbol": None,
+            }
+            break
+
+    # Session totals.
+    total_equity = 0.0
+    starting_total = 0.0
+    for snap in snaps.values():
+        equity = replay_query.equity_for(snap, marks)
+        total_equity += equity
+        starting_total += 1000.0  # default starting_capital; fold_to default
+    pnl_pct = (
+        ((total_equity - starting_total) / starting_total * 100.0)
+        if starting_total > 0
+        else 0.0
+    )
+
+    # Date in ET calendar terms (the manifest's started_at, converted).
+    date_et = ""
+    if start_at:
+        try:
+            date_et = replay_query.parse_iso(start_at).astimezone(ET).date().isoformat()
+        except ValueError:
+            date_et = start_at[:10] if isinstance(start_at, str) else ""
+
+    return {
+        "date": date_et,
+        "session_pnl_pct": float(pnl_pct),
+        "session_total_equity": float(total_equity),
+        "total_fills": int(total_fills),
+        "biggest_fill": biggest_fill,
+        "top_winners": winners,
+        "biggest_loss": biggest_loss,
+        # The live path also surfaces `promotions` (from the
+        # promotions_repo, which is DB-backed) and `predictions` (from
+        # the orchestrator's board, in-memory). Neither is in the
+        # manifest today, so the replay path returns empty lists —
+        # the surface is honest rather than fabricated.
+        "promotions": [],
+        "predictions": [],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Route.
 # ---------------------------------------------------------------------------
 
 
 @router.get("/today")
-async def recap_today(request: Request) -> dict[str, Any]:
-    """Aggregated highlight reel for the current ET trading day."""
-    orch = getattr(request.app.state, "orchestrator", None)
-    return await build_recap(orch)
+async def recap_today(
+    request: Request,
+    session_id: str | None = Query(
+        None,
+        description="Replay mode: name the session manifest to fold. "
+        "If present, the response is built from the manifest instead of "
+        "the live orchestrator + DB.",
+    ),
+    at: str | None = Query(
+        None,
+        description="Replay mode: ISO-8601 timestamp to fold the manifest up to. "
+        "Defaults to manifest.ended_at when omitted.",
+    ),
+) -> dict[str, Any]:
+    """Aggregated highlight reel for the current ET trading day, or for
+    a replayed historical day when ``?session_id=`` is provided.
+
+    The headless renderer's recap-scene capture uses the replay form:
+    the URL ``/recap/today?session_id=<sid>&at=<iso>`` makes the
+    scene a snapshot of the folded manifest state at ``at`` (not a
+    live-today card)."""
+    if session_id is None:
+        # Live path: unchanged.
+        orch = getattr(request.app.state, "orchestrator", None)
+        return await build_recap(orch)
+
+    # Replay path. Validate session_id before any disk touch.
+    try:
+        replay_query._require_safe_session_id(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        manifest = replay_query.load_manifest(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"no manifest for session {session_id!r}"
+        ) from exc
+
+    # Parse the at timestamp. Fall back to manifest.ended_at.
+    at_str = at or manifest.get("ended_at") or manifest.get("started_at")
+    if not at_str or not isinstance(at_str, str):
+        raise HTTPException(
+            status_code=400, detail="missing or invalid `at` timestamp"
+        )
+    try:
+        at_dt = replay_query.parse_iso(at_str)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid `at`: {exc}") from exc
+
+    return build_recap_from_manifest(manifest, at_dt)

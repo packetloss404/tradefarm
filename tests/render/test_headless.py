@@ -101,16 +101,36 @@ def test_plan_jobs_emits_one_job_per_beat_and_computes_until(tmp_path: Path):
     assert jobs[0].sidecar_path.name == "b1.json"
 
 
-def test_plan_jobs_skips_recap_by_default(tmp_path: Path):
-    """RecapScene depends on /api/recap/today which isn't replay-aware
-    yet — render it and the clip mixes live data. Skip until fixed."""
+def test_plan_jobs_includes_recap_by_default(tmp_path: Path):
+    """0.8.x: /api/recap/today is replay-aware (accepts ?session_id=&at=),
+    so the recap scene is in the default render plan. Last beat of
+    every VOD is the recap again (not `closing_burst` followed by an
+    orphan recap)."""
     beats = [
         _beat(id="b_open", kind="open", scene="hero"),
         _beat(id="b_recap", kind="recap", scene="recap"),
         _beat(id="b_div", kind="divergence", scene="brain"),
     ]
     jobs, skipped = plan_jobs(session_id="s_x", beats=beats, clips_dir=tmp_path / "clips")
-    assert [j.beat_id for j in jobs] == ["b_open", "b_div"]
+    assert [j.beat_id for j in jobs] == ["b_open", "b_recap", "b_div"]
+    assert skipped == []
+
+
+def test_plan_jobs_explicit_skip_recap_still_skips(tmp_path: Path):
+    """Back-compat: an operator that explicitly passes
+    `skip_kinds={"recap"}` still gets the recap skipped. The default
+    change is non-breaking."""
+    beats = [
+        _beat(id="b_open", kind="open", scene="hero"),
+        _beat(id="b_recap", kind="recap", scene="recap"),
+    ]
+    jobs, skipped = plan_jobs(
+        session_id="s_x",
+        beats=beats,
+        clips_dir=tmp_path / "clips",
+        skip_kinds=frozenset({"recap"}),
+    )
+    assert [j.beat_id for j in jobs] == ["b_open"]
     assert skipped == ["b_recap"]
 
 
@@ -226,12 +246,15 @@ async def test_render_session_missing_beats_raises(tmp_path: Path):
 
 async def test_render_session_only_recap_short_circuits(tmp_path: Path):
     """No browser launch when every beat is skipped — exit 0 with
-    no failures + a non-zero skipped count."""
+    no failures + a non-zero skipped count. Uses a `chapter_change`
+    kind (unsupported scene) since 0.8.0 made `recap` replay-aware."""
     from tradefarm.render.headless import render_session
 
     sdir = tmp_path / "all_recap"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([_beat(id="b_r", kind="recap", scene="recap")]))
+    (sdir / "beats.json").write_text(
+        json.dumps([_beat(id="b_chap", kind="chapter_change", scene="chapter")])
+    )
     (sdir / "manifest.json").write_text(json.dumps({"events": []}))
     summary = await render_session("all_recap", sessions_dir=tmp_path)
     assert summary.succeeded == 0
@@ -242,12 +265,15 @@ async def test_render_session_only_recap_short_circuits(tmp_path: Path):
 
 async def test_render_session_purges_stale_clips(tmp_path: Path):
     """Files from a prior run whose beat ids aren't in the current
-    plan must be removed, so the stitcher doesn't pick them up."""
+    plan must be removed, so the stitcher doesn't pick them up.
+    Uses a `chapter_change` beat so render_session short-circuits."""
     from tradefarm.render.headless import render_session
 
     sdir = tmp_path / "purge_test"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([_beat(id="b_recap", kind="recap")]))
+    (sdir / "beats.json").write_text(
+        json.dumps([_beat(id="b_chap", kind="chapter_change", scene="chapter")])
+    )
     (sdir / "manifest.json").write_text(json.dumps({"events": []}))
     clips = sdir / "clips"
     clips.mkdir()
@@ -255,8 +281,6 @@ async def test_render_session_purges_stale_clips(tmp_path: Path):
     stale_json = clips / "b_gone.json"
     stale_webm.write_bytes(b"")
     stale_json.write_text("{}")
-    # render_session short-circuits (only recap, skipped) but should
-    # still run the purge step.
     await render_session("purge_test", sessions_dir=tmp_path)
     assert not stale_webm.exists()
     assert not stale_json.exists()
@@ -267,7 +291,9 @@ async def test_render_session_keep_stale_keeps_files(tmp_path: Path):
 
     sdir = tmp_path / "keep_test"
     sdir.mkdir()
-    (sdir / "beats.json").write_text(json.dumps([_beat(id="b_recap", kind="recap")]))
+    (sdir / "beats.json").write_text(
+        json.dumps([_beat(id="b_chap", kind="chapter_change", scene="chapter")])
+    )
     (sdir / "manifest.json").write_text(json.dumps({"events": []}))
     clips = sdir / "clips"
     clips.mkdir()
