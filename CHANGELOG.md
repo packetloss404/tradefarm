@@ -13,6 +13,139 @@ commit on GitHub.
 
 ---
 
+## [0.9.0] — 2026-08-04
+
+A "tighten the autonomy loop" release. The 0.8.0 known gaps are
+addressed one-by-one: the scheduler's power-loss race is closed
+(`live_today` flag), the headless renderer captures a 9:16 short
+or a recap clip on the same loop, the recap endpoint is
+replay-aware, every published video gets a real thumbnail, the
+VOD studio's `interns_under_watch` data is now a full cast
+list, the pipeline persists per-step timings, and the
+weekly Strategy Wars beat + rollup infra ship. 823 tests pass
+(up from 690 at 0.8.0). No breaking schema changes.
+
+### Fixed — Carryovers from 0.8.0
+
+- **Scheduler power-loss race** (`live_today` column,
+  `commit 98bb18f`). The 0.8.0 scheduler's per-day idempotency
+  check could be fooled by a previous process that died mid-run:
+  a `status='running'` row from the dead process looked identical
+  to a fresh run. The 0.9.0 fix adds a `live_today` boolean column
+  on `pipeline_runs` (default `True`); the orchestrator's
+  `start_background()` now flips every `live_today=True` row
+  whose `date` is not today to `False` BEFORE the scheduler
+  loop starts, so a fresh process can only see its own
+  in-flight runs.
+- **Recap scene replay** (`commit 412186e`). The 0.8.0
+  headless renderer skipped the recap scene because
+  `/api/recap/today` didn't accept `?session_id=&at=`. The 0.9.0
+  endpoint accepts the same query params the other replay
+  endpoints accept; the `build_recap_from_manifest` helper
+  folds the named manifest's events up to `at` and shapes
+  the recap payload from the folded `AgentSnapshot`s. The
+  default `skip_kinds` no longer excludes `recap`, and
+  `SCENES_WITH_REPLAY_SUPPORT` now includes it. Last beat
+  of every VOD is the recap again.
+- **Per-step timing roll-up** (`commit 1edfed5`). The 0.8.0
+  `pipeline_runs` table only tracked run-level `started_at`
+  / `finished_at`. The 0.9.0 `step_timings_json` column stores
+  the per-step `{step, started_at, finished_at,
+  duration_sec, status}` roll-up. The pipeline runner
+  appends incrementally; the HTTP wrapper and the
+  orchestrator's scheduler both persist on terminal state.
+  A mid-run crash leaves partial timings for the
+  post-mortem.
+- **Rivalry beat duration** scales with the 90-min window
+  (`commit 3fdfd7c`). The 0.8.0 rivalry beat had a fixed
+  34-second `duration_sec`, so the headless renderer
+  captured only ~0.6s of real-time content at 60x replay
+  speed — not enough to show the full back-and-forth. The
+  0.9.0 beat's `duration_sec` is `max(34, window_min)` (1s
+  of capture per minute of window), so a 90-min rivalry
+  gets a 90s clip.
+
+### Added — VOD studio
+
+- **9:16 Shorts capture path** (`commit 8e5f74f`,
+  `src/tradefarm/render/shorts.py`). 465 lines, ffmpeg
+  smart-crop from the existing 16:9 headless clips. Composes
+  the top N beats (default 3) into per-beat shorts. CLI:
+  `python -m tradefarm.render.shorts <session_id> --top 3`.
+- **Thumbnail pipeline step** (`commit 8e5f74f`,
+  `src/tradefarm/render/thumb.py`). A new `render.thumb` step
+  between `mix` and `metadata` runs ffmpeg against
+  `silent_reel.mp4` to extract a 1280x720 JPEG at the 1-second
+  mark (16:9 letterbox for vertical pilot footage). Every
+  published video now gets a real thumbnail instead of
+  YouTube's auto-pick.
+- **Weekly rollup infra** (`commit 9cb7d83`,
+  `src/tradefarm/session/weekly_rollup.py`). `compute_weekly_rollup(week_id)` walks
+  every session manifest in the trading week and sums the
+  per-day `strategy_rollup` into a weekly shape (per-strategy
+  pnl + agent count + fill count, deduped rivalries, pool
+  pnl + pnlPct). Persists to
+  `<sessions_dir>/weekly/<week_id>/rollup.json`. The
+  Strategy Wars detector reads the previous week's rollup to
+  emit "vs last week" deltas.
+- **Strategy Wars beat detector** (`commit 9cb7d83`,
+  `session/beats.py:_score_strategy_war`). Reads the
+  manifest's `strategy_rollup` (written by
+  `session/run.py` at session close in 0.8.0) and emits a
+  `kind="strategy_war"` beat at close. When the previous
+  week's rollup is provided, the headline includes the
+  winner's "vs last week" delta. Maps to the `strategy`
+  scene (already in `SCENES_WITH_REPLAY_SUPPORT`). New
+  kinds in `SCENE_FOR_KIND`, `DURATION_FOR_KIND`,
+  `KIND_PRIORITY`.
+- **Intern Watch full cast list** (`commit 07b363c`,
+  `session/run.py:_snapshot_intern_cast`). The 0.8.0
+  `interns_under_watch: list[int]` is upgraded to
+  `lowest_ranks: list[dict]` with `{agent_id, name, rank,
+  rank_index, strategy, starting_capital}` per row. The
+  legacy `interns_under_watch: list[int]` field is kept as
+  a derived list of agent_ids for back-compat.
+
+### Tests + ops
+
+- +133 active tests (690 → 823). 7 new test files:
+  - `tests/api/test_ws_replay.py` (11) — headless URL →
+    stream URLSearchParams → WS replay handshake → manifest
+    envelope chain
+  - `tests/render/test_shorts.py` (15)
+  - `tests/api/test_recap_replay.py` (6)
+  - `tests/orchestrator/test_vod_scheduler.py` (5) +
+    `live_today` follow-ups
+  - `tests/render/test_thumb.py` (9)
+  - `tests/render/test_pipeline_retry.py` (8)
+  - `tests/session/test_weekly_rollup.py` (17)
+- Migration: `SCHEMA_VERSION` bumps 3 → 4 for the new
+  `step_timings_json` column. Idempotent ADD COLUMN
+  guards mean re-running `init_db()` is a no-op.
+- Full gauntlet: 823 passed, 8 skipped. `ruff`,
+  `mypy --strict`, `web tsc --noEmit`, `stream tsc --noEmit`
+  all clean.
+
+### Known carryovers (deferred to 0.10)
+
+- TTS still opt-in via `--include-tts`; needs a real
+  ElevenLabs or OpenAI key for the `auto` default to produce
+  VO.
+- Asset archival on terminal state (tar the session dir
+  minus clips + intermediates, push to a backup path) — not
+  shipped; a destroyed local box still loses the source
+  artifacts of every published reel.
+- Shorts `crop=ih*9/16:ih` smart-crop is unit-tested for
+  the contract but **not visually verified** against a
+  real stream clip with the LLM-reason lower-third.
+- `web/src/vod/useVodSessionLive.ts` still uses the 3-bucket
+  legacy `StrategyLegacy` for the Session Control view
+  (works fine; just not as granular as the 8-bucket live
+  view). Cosmetic carryover; the new `data.live.ts` hook
+  surfaces the wider 8-bucket view.
+
+---
+
 ## [0.8.0] — 2026-08-04
 
 A reach release: the operator's "run a day" command now persists, the

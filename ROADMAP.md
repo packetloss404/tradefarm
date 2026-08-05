@@ -6,23 +6,24 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.8.0 shipped 2026-08-04.** A reach release — the daily VOD pipeline
-now has a real trigger (orchestrator's `run_vod_scheduler`), the
-run state is DB-backed (not in-memory), and the headless renderer
-has a 9:16 capture path for YouTube Shorts. The studio's prototype
-fixture matches the live 7-strategy world (8 buckets incl. legacy
-`momentum` alias), and the new `agent_rivalry` + `promotion` beat
-detectors surface two of the missing kinds the studio already typed.
-773 tests passing (up from 690). Two research docs at
-`docs/research/` capture the design thinking. See
-[CHANGELOG.md](./CHANGELOG.md) for the full release notes. The
-current focus is the post-0.8.0 audit findings (the
-[autonomy doc](./docs/research/autonomy-pipeline.md) catalogues
-the remaining gaps: per-step timing in `PipelineRun`, recap scene
-replay, thumbnail generation, the `live_today` race fix) plus the
-content side's [youtube-interesting doc](./docs/research/youtube-interesting.md)
-recommends the Intern Watch / Strategy Wars / Rivalry Week weekly
-formats as the next three episode shapes.
+**0.9.0 shipped 2026-08-04.** A "tighten the autonomy loop" release —
+the 0.8.0 known gaps are addressed one-by-one. The scheduler's
+power-loss race is closed (`live_today`), the headless renderer
+captures 9:16 shorts + recap clips on the same loop, every
+published video gets a real thumbnail, the recap endpoint is
+replay-aware, the VOD studio's intern cast data is now full
+shape, the pipeline persists per-step timings, and the weekly
+Strategy Wars beat + rollup infra ship. 823 tests passing
+(up from 690). See [CHANGELOG.md](./CHANGELOG.md) for the full
+release notes. The current focus is the post-0.9.0 audit
+findings (the 0.9.0 carryovers — TTS defaults, asset
+archival, shorts visual verification — live in
+[CHANGELOG.md](./CHANGELOG.md#known-carryovers-deferred-to-010))
+plus the content side's [youtube-interesting
+doc](./docs/research/youtube-interesting.md) recommends the
+Intern Watch / Strategy Wars / Rivalry Week weekly formats
+(Strategy Wars shipped; Intern Watch and Rivalry Week surfaces
+still pending).
 
 Status legend:
 
@@ -35,13 +36,18 @@ Status legend:
 
 ## Now — current focus
 
-The 0.8.0 release (2026-08-04) gave the VOD pipeline a real trigger
-(the orchestrator's `run_vod_scheduler`), DB-backed run state, a 9:16
-Shorts capture path, and two new beat detectors (`agent_rivalry`,
-`promotion`). The prototype fixture now matches the live 7-strategy
-world. **The current focus is the carryovers from this round + the
-post-0.8.0 audit findings**, not new features. The research docs at
-`docs/research/` are the source of truth for what's left.
+The 0.9.0 release (2026-08-04) closed every 0.8.0 known gap: the
+scheduler's `live_today` flag, the recap-scene replay path, the
+thumbnail pipeline step, the full intern cast list, the
+per-step timing roll-up, the weekly rollup + Strategy Wars
+detector. The rivalry beat's duration now scales with its
+90-min window so the headless renderer's clip is long
+enough to show the full back-and-forth. **The current focus is
+the post-0.9.0 audit findings + the remaining content
+formats** (Intern Watch and Rivalry Week surfaces still
+pending; the Strategy Wars detector is shipped), not new
+features. The research docs at `docs/research/` are the
+source of truth for what's left.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
