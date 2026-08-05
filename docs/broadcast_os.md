@@ -72,8 +72,14 @@ For now, the stream keeps its existing single-slot macro/banner behavior.
 ## Next Milestones
 
 1. Add scheduler v1: consume `broadcast_moment`, apply priority/TTL/cooldowns,
-   and emit one active slot per output type.
+   and emit one active slot per output type. **Shipped 2026-07 (round 8,
+   `broadcast_scheduler.py` + `broadcast_os.py` arbiter).**
 2. Move the stream UI to the canonical moment contract, keeping legacy macro and
-   banner events as compatibility shims.
+   banner events as compatibility shims. **Shipped 2026-08-05 in 0.15.0** —
+   `useStreamCommands` now reads `broadcast_moment` first and routes
+   `macro_burst` / `lower_third` outputs to the existing macro/banner slots via
+   pure mappers in `broadcastMomentMappers.ts`. The legacy branches stay live as
+   a backstop; a 1.5s id-keyed dedup ring prevents the canonical-then-legacy
+   fan-out from re-firing the same slot.
 3. Add replay fixtures for moment timelines so priorities and collisions can be
    tuned without waiting for live ticks.

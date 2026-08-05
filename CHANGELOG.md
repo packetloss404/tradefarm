@@ -13,6 +13,80 @@ commit on GitHub.
 
 ---
 
+## [0.15.0] — 2026-08-05
+
+A "stream UI migration to canonical `broadcast_moment`"
+release. The backend Broadcast OS scheduler
+(`broadcast_scheduler.py`), arbiter
+(`broadcast_os.py:install_broadcast_arbiter` +
+`publish_broadcast_moment` with `broadcast_slot` fan-out),
+and producers (`auto_director.py`, `streak_watcher`) shipped
+in round 8 — 0.15.0 is the stream-side counterpart: the
+`broadcast_moment` case in `useStreamCommands.ts` now
+routes `macro_burst` / `lower_third` outputs to the
+existing macro/banner slots via pure mappers, with a
+1.5s id-keyed dedup ring so the canonical-then-legacy
+fan-out from `publish_broadcast_moment(emit_legacy=True)`
+doesn't double-fire the same slot. Closes `docs/broadcast_os.md`
+milestone 2.
+
+### Changed — canonical `broadcast_moment` drives stream visuals
+
+- **`stream/src/hooks/broadcastMomentMappers.ts`** (NEW) —
+  pure functions `broadcastMomentToMacroFire(payload, firedAt)`
+  and `broadcastMomentToBanner(payload, shownAt)` that
+  translate a `BroadcastMomentPayload` to `MacroFireState`
+  and `BannerState` respectively. Both return `null` when
+  the payload's `outputs` array doesn't include the
+  matching output name, or when the payload's id/title
+  fails validation. The 8s default TTL on the banner slot
+  matches the legacy fallback.
+- **`stream/src/hooks/useStreamCommands.ts`** — the
+  `broadcast_moment` case in the WS event switch now
+  records the moment id in a `Map<id, timestamp>` dedup
+  ring and routes the macro/banner slots through the
+  new mappers. The legacy `stream_macro_fired` branch
+  consults the same ring and short-circuits if the
+  canonical event fired the same id within 1.5s (the
+  typical gap between the canonical and the
+  `emit_legacy` fan-out in the same WS burst). The
+  legacy `stream_banner` branch is idempotent (no id
+  in payload, but `setBannerSafe` resets the same
+  TTL timer with the same value) so it stays
+  pass-through. Stale map entries are pruned
+  on every record so the ring stays bounded under
+  long sessions.
+- **`docs/broadcast_os.md`** — milestone 2 marked shipped
+  (2026-08-05). Milestone 3 (replay fixtures for moment
+  timelines) is the next research target.
+
+### Carryover from 0.14.0
+
+The active queue from `dev/feature-backlog.md` (items 1, 5, 6, 7)
+was closed by 0.14.0 + earlier rounds. The audit-followup
+quick-wins list (both backend and frontend) is now
+exhausted. 0.15.0 is the first post-audit release.
+
+### Operational notes
+
+- **861 → 861 tests pass.** No new test files this release
+  (the change is React-hooks glue; the existing `tsc --noEmit`
+  gate plus the established `uv run pytest` Python suite
+  cover the move).
+- **No DB schema changes.** `SCHEMA_VERSION` still at 4.
+- **No new env vars.** The new code path is gated on the
+  same `broadcast_moment` event the backend already emits.
+- **Visual QA pause** — please verify the macro burst +
+  lower-third still fire as expected on a live `big_win`
+  moment (e.g. promote an agent to Senior). The dedup ring
+  is keyed on `moment.id` and the window is 1.5s, so a
+  single canonical + legacy pair should yield exactly one
+  `setMacroFireSafe` call; any pre-existing `stream_banner`
+  / `stream_macro_fired`-only backends still work because
+  the legacy branches remain live.
+
+---
+
 ## [0.14.0] — 2026-08-05
 
 A "dashboard UX quick wins" release. The active queue from

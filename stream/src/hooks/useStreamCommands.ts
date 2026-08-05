@@ -7,6 +7,10 @@ import {
 } from "../shared/useLiveEvents";
 import { replayNow } from "../shared/replayMode";
 import { streamAudio } from "../audio/StreamAudio";
+import {
+  broadcastMomentToBanner,
+  broadcastMomentToMacroFire,
+} from "./broadcastMomentMappers";
 
 // Re-export so consumers (DecisionLabScene, SceneRotator) can import the
 // decision payload type alongside the StreamCommandsHandle.
@@ -204,6 +208,16 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   // Dedup ring so a brief WS reconnect (which sometimes replays the last
   // few messages) doesn't double-render the same chat row.
   const seenChatIds = useRef<Set<string>>(new Set());
+  // Dedup ring for broadcast_moment ids. The backend emits the canonical
+  // `broadcast_moment` event followed by the legacy `stream_macro_fired` /
+  // `stream_banner` fan-out (publish_broadcast_moment with emit_legacy=True),
+  // so each moment lands twice on the wire. Track ids seen in the last
+  // BROADCAST_DEDUP_WINDOW_MS and short-circuit the legacy branch when the
+  // canonical event already fired the same slot. Keeping the legacy branches
+  // live as back-compat for old backends (or for emit_legacy=False overrides
+  // we flip on later) means we still need the dedup, not just a switch.
+  const seenBroadcastMomentIds = useRef<Map<string, number>>(new Map());
+  const BROADCAST_DEDUP_WINDOW_MS = 1500;
   const [rotationEnabledOverride, setRotationEnabledOverride] = useState<boolean | null>(null);
   const [crtEnabledOverride, setCrtEnabledOverride] = useState<boolean | null>(null);
   const [rotationSecOverride, setRotationSecOverride] = useState<number | null>(null);
@@ -241,6 +255,31 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
       // Dwell ~2.2s so a glanced label has time to register on stream.
       macroFireTimer.current = setTimeout(() => setMacroFire(null), 2200);
     }
+  }, []);
+
+  // Broadcast-moment dedup. The canonical `broadcast_moment` event lands
+  // milliseconds before the legacy `stream_macro_fired` / `stream_banner`
+  // fan-out that publish_broadcast_moment emits with emit_legacy=True. We
+  // record the canonical id with a small TTL so the legacy branch can
+  // short-circuit when it arrives. We use a Map (not Set) so we can prune
+  // stale entries by wall-clock — a Set would grow forever over a long
+  // session, even though each id is unique.
+  const recordBroadcastMomentId = useCallback((id: string) => {
+    const now = replayNow();
+    const cutoff = now - BROADCAST_DEDUP_WINDOW_MS;
+    const map = seenBroadcastMomentIds.current;
+    for (const [k, ts] of map) {
+      if (ts < cutoff) map.delete(k);
+    }
+    map.set(id, now);
+  }, []);
+  const consumeRecentBroadcastMomentId = useCallback((id: string): boolean => {
+    const now = replayNow();
+    const map = seenBroadcastMomentIds.current;
+    const ts = map.get(id);
+    if (ts === undefined) return false;
+    map.delete(id);
+    return now - ts <= BROADCAST_DEDUP_WINDOW_MS;
   }, []);
 
   // 4s dwell for the "Audience pinned X" banner. The slot auto-clears so
@@ -288,6 +327,10 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
             setBannerSafe(null);
             break;
           }
+          // No id in the legacy payload, so we can't dedup against the
+          // canonical `broadcast_moment` here. setBannerSafe is idempotent
+          // (resets the TTL timer with the same value) so the redundant
+          // call from the legacy fan-out is a no-op visually.
           setBannerSafe({
             title: p.title,
             subtitle: p.subtitle ?? "",
@@ -325,6 +368,9 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
         case "stream_macro_fired": {
           const p = ev.payload;
           if (typeof p.id !== "string" || p.id.length === 0) break;
+          // Skip if the canonical `broadcast_moment` for this id already
+          // fired the macro slot within the dedup window.
+          if (consumeRecentBroadcastMomentId(p.id)) break;
           const color =
             p.color === "profit" || p.color === "loss" || p.color === "neutral"
               ? p.color
@@ -338,11 +384,21 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           });
           break;
         }
-        case "broadcast_moment":
-          // Canonical Broadcast OS event. Current visuals are still driven by
-          // the legacy fan-out events (`stream_macro_fired`, `stream_banner`)
-          // so this branch intentionally observes without rendering.
+        case "broadcast_moment": {
+          const p = ev.payload;
+          if (typeof p.id !== "string" || p.id.length === 0) break;
+          // Record the id before applying so the legacy `stream_macro_fired` /
+          // `stream_banner` fan-out that publish_broadcast_moment emits on the
+          // same wire burst will short-circuit below. If the canonical branch
+          // throws (mapper returns null) the legacy branch is the backstop.
+          recordBroadcastMomentId(p.id);
+          const at = replayNow();
+          const macro = broadcastMomentToMacroFire(p, at);
+          if (macro) setMacroFireSafe(macro);
+          const banner = broadcastMomentToBanner(p, at);
+          if (banner) setBannerSafe(banner);
           break;
+        }
         case "stream_commentary": {
           const p = ev.payload;
           if (typeof p.id !== "string" || p.id.length === 0) break;
@@ -473,7 +529,13 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           break;
       }
     },
-    [setBannerSafe, setMacroFireSafe, setAudiencePinResolvedSafe],
+    [
+      setBannerSafe,
+      setMacroFireSafe,
+      setAudiencePinResolvedSafe,
+      recordBroadcastMomentId,
+      consumeRecentBroadcastMomentId,
+    ],
   );
 
   useLiveEvents(handler, wsUrlOverride);

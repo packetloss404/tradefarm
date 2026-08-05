@@ -6,18 +6,18 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.14.0 shipped 2026-08-05.** A "dashboard UX quick
-wins" release. The active queue from
-`dev/feature-backlog.md` (tick countdown ring, equity
-sparkline, open-positions sparkline strip, API spend
-widget, keyboard map) was already shipped in earlier
-rounds — 0.14.0 closes the two remaining real gaps: an
-operator-controllable daily LLM spend cap dial in the
-admin form, and `T` (manual tick) + `A` (open admin)
-global shortcuts documented in the keyboard map. Plus
-a 5-test carryover fix for pre-existing `render_session`
-unit tests that needed `_probe=False` to bypass the
-round-9 liveness probe. 861 tests pass. See
+**0.15.0 shipped 2026-08-05.** A "stream UI migration to
+canonical `broadcast_moment`" release. The backend
+Broadcast OS scheduler + arbiter shipped in round 8
+(2026-07); 0.15.0 is the stream-side counterpart: the
+`broadcast_moment` case in `useStreamCommands.ts` now
+routes `macro_burst` / `lower_third` outputs to the
+existing macro/banner slots via pure mappers in
+`broadcastMomentMappers.ts`, with a 1.5s id-keyed
+dedup ring so the canonical-then-legacy fan-out from
+`publish_broadcast_moment(emit_legacy=True)` doesn't
+double-fire the same slot. Closes `docs/broadcast_os.md`
+milestone 2. 861 tests pass. See
 [CHANGELOG.md](./CHANGELOG.md) for the full release
 notes.
 
@@ -32,15 +32,18 @@ Status legend:
 
 ## Now — current focus
 
-The 0.14.0 release (2026-08-05) closed the active
-queue from `dev/feature-backlog.md` (item 1, 5, 6, 7
-all shipped, in 0.14.0 or earlier rounds). The
-**next leverage piece is the Broadcast OS scheduler
-v1** — consume `broadcast_moment`, apply
-priority/TTL/cooldowns, surface one active slot per
-output type. The research doc's recap-scene-at-4pm and
-the podcast episode format both depend on it landing
-first. That's the 0.15.0 scope.
+The 0.15.0 release (2026-08-05) closed the Broadcast
+OS scheduler v1 + stream UI migration (milestones 1
++ 2 of `docs/broadcast_os.md`). The **next leverage
+piece is the recap scene at 4pm ET** — a new
+`broadcast_moment` with `outputs: ["recap_log"]` and
+a dedicated recap slot that can render even when the
+macro_burst slot is busy. The podcast episode format
+(Rivalry Week over 5 sessions = 30-min weekly recap)
+sits on the same scheduler and depends on milestone
+3 (replay fixtures for moment timelines) landing
+first so we can tune priorities and collisions
+without waiting for live ticks. 0.16.0 scope.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
