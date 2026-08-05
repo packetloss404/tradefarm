@@ -13,6 +13,131 @@ commit on GitHub.
 
 ---
 
+## [0.8.0] — 2026-08-04
+
+A reach release: the operator's "run a day" command now persists, the
+VOD studio's prototype fixture matches the live 7-strategy world, and
+the headless renderer has a 9:16 capture path for YouTube Shorts. 773
+tests pass (up from 690 at 0.7.0). Two research docs under
+`docs/research/` capture the design thinking.
+
+### Added — Autonomy plumbing (round 8)
+
+- **DB-backed pipeline run state** (`494279b`). The in-memory `_RUNS`
+  deque in `api/pipeline.py` is now a read-through cache over a new
+  `pipeline_runs` SQLAlchemy table (12-char hex id, status, ring-buffer
+  `last_lines_json`, indexed by `session_id` and `date`). Restart-safe;
+  historical run rows survive a process reboot.
+- **Daily VOD scheduler loop** in `orchestrator/scheduler.py:run_vod_scheduler()`
+  (`494279b`). Fires once per NYSE session, gated on
+  `vod_pipeline_enabled=false` (default off), `is_market_closed_for_n_minutes(5)`,
+  and a per-day idempotency check in the new `pipeline_runs` table so a
+  restart on the same day doesn't re-fire. Auto-uploads as **`private`**
+  with `publish_at` = next 16:30 ET; operator clicks "publish" in YouTube
+  Studio. `tradefarm/market_clock.py` is the new helper for
+  `is_market_closed_for_n_minutes(n)` (handles half-days, holidays,
+  weekends via `pandas_market_calendars`).
+- **Per-step retry + backoff** in `render/pipeline.py:_run_step()`
+  (`494279b`). New `max_attempts=2` and `retry_backoff_sec=30` on
+  `PipelineOpts`. Wraps `step.run(argv)` in a retry loop; only retries
+  on transient-looking exceptions (`OSError`, `httpx.HTTPError`,
+  Playwright errors); never retries `SystemExit` (real failure, not
+  transient).
+- **Stream liveness probe** in `render/headless.py:render_session()`
+  (`494279b`). `httpx.get(stream_base, timeout=2.0)` once at the top of
+  the loop; 2xx/3xx = pass, 4xx/5xx/HTTPError = `RuntimeError("stream
+  Vite not reachable at <url>")` with a "start `cd stream && npm run
+  dev`" hint. Kills the 5-min hang when the operator forgot to start
+  the dev server.
+- **Webhook notification on terminal state** in
+  `api/pipeline.py:_fire_webhook()` (`494279b`). New env var
+  `vod_notify_webhook`. Best-effort `httpx.post` on `done` (with
+  `video_url`) or `failed` (with `error`). Discord / Slack incoming
+  webhook / ntfy / custom — anything that accepts a JSON POST. Wired
+  into both the HTTP wrapper and the orchestrator's daily scheduler.
+
+### Added — Content unlock (round 8)
+
+- **YouTube Shorts capture path** (`src/tradefarm/render/shorts.py`,
+  465 lines, `d905723`). Mirrors the headless renderer's per-beat
+  capture loop but emits `1080x1920` vertical clips. Composes the top
+  N beats (default 3) into per-beat shorts via ffmpeg smart-crop from
+  the existing 16:9 headless clips. CLI: `python -m tradefarm.render.shorts
+  <session_id> --top 3`. Skip-recap (same constraint as `headless.py`).
+  ASCII-only banners (Windows cp1252).
+- **`agent_rivalry` beat detector** in `session/beats.py:_score_rivalries()`
+  (`d905723`). Scans fills for `(agent_a, agent_b, symbol)` triples with
+  `a.side != b.side` and `count >= 3` inside a 90-min rolling window;
+  emits top 1-2 by occurrence count. Maps to the existing `showdown`
+  scene (already in `SCENES_WITH_REPLAY_SUPPORT`).
+- **`promotion` beat detector** in `session/beats.py:_score_promotions()`
+  (`d905723`). Reads `AcademyPromotion` rows; one beat per (agent,
+  from_rank -> to_rank). Demotions map to `top_loser` with the same
+  metadata. Maps to `leaderboard`.
+- **Manifest extras** in `session/run.py` (`d905723`). Three new keys
+  on the per-day manifest JSON:
+  - `rivalries: list[{a, b, symbol, count, a_pnl, b_pnl}]` — top 2
+  - `interns_under_watch: list[int]` — 5 lowest-ranked `intern` IDs
+    at session start
+  - `strategy_rollup: dict[str, StrategyRollup]` — per-strategy PnL
+    aggregate at close
+  All are written post-`write_manifest()` (the dataclass itself is
+  unchanged; the JSON file is the source of truth for downstream).
+- **8-bucket strategy refresh** in `web/src/vod/data.ts` (`d905723`).
+  `VOD_STRATEGIES` now lists all 8 strategy slots
+  (`momentum`, `momentum_12_1`, `mean_reversion_bb`, `rsi2`,
+  `donchian_breakout`, `pairs_zscore`, `lstm`, `llm`); the prototype
+  fixture's 100 agents randomly pick from all 8. `StrategyBucket` and
+  `StrategyLegacy` types in `web/src/vod/types.ts` keep the 3-bucket
+  back-compat for the existing Session Control view.
+- **Live data hook** in `web/src/vod/data.live.ts` (`d905723`).
+  `useVodLiveData(sessionId?)` pulls `/api/agents`, `/api/account`,
+  `/api/pnl/daily`, and a real session's manifest. Falls back to mock
+  on any error. The VOD studio header now has a single "mock/live"
+  pill that flips every surface (Beat Picker, Pipeline, Session,
+  Episode Review) — previously only Session had the toggle.
+
+### Research docs (round 8)
+
+- `docs/research/youtube-interesting.md` (1,999 words). The 8 scene
+  palette + 12 beat kinds vs 8 detector-scored kinds; the 5 new
+  strategies as character gold; the sitcom-vs-Bloomberg reframe;
+  Intern Watch / Strategy Wars / Rivalry Week as the top 3 weekly
+  formats; shorts as the only YT acquisition channel that works for
+  new channels.
+- `docs/research/autonomy-pipeline.md` (2,439 words). The full 8-step
+  chain mapped end-to-end; the trigger gap (orchestrator has zero
+  coupling to render/pipeline modules); the dry-run-by-default
+  policy decision; the 6 quick wins unblocking later autonomy work.
+
+### Changed
+
+- `useVodSessionLive.ts` switched to `StrategyLegacy` (3-bucket) for
+  its local rollup shape; pads the 5 missing buckets with zero rollups
+  so the 8-bucket `DaySummary.byStrategy` type stays total. The
+  content team's `data.live.ts` is the canonical 8-bucket view going
+  forward.
+
+### Known gaps (carryover to 0.9)
+
+- Shorts `crop=ih*9/16:ih` smart-crop is unit-tested for the
+  contract but **not visually verified** against a real stream clip
+  with the LLM-reason lower-third. If the LLM text gets clipped,
+  fallback to a fresh Playwright loop at viewport `1080x1920` (Option
+  B in the brief). Needs a 30s manual QA on the next render.
+- Scheduler's per-day idempotency is robust to a clean restart but has
+  a small race on a power-loss mid-run (no `live_today` flag). The
+  v0.8 contract is "operator can manually re-trigger from the
+  dashboard if they see the same day re-fired".
+- TTS provider is still opt-in via `--include-tts`; needs a real
+  ElevenLabs or OpenAI key for the `auto` default to produce VO.
+- Thumbnail generation isn't a pipeline step yet (every published
+  video still gets YouTube's auto-thumbnail).
+- Recap scene is still excluded from replays — the last beat in
+  every VOD is `closing_burst`, not the recap.
+
+---
+
 ## [0.7.0] — 2026-08-04
 
 A breadth release: the strategy roster grows from 3 to 7, the operator

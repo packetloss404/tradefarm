@@ -6,17 +6,23 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.7.0 shipped 2026-08-04.** Breadth release — strategy roster
-grows from 3 to 7 (momentum_12_1, mean_reversion_bb, rsi2,
-donchian_breakout, pairs_zscore + the two LSTM strategies), per-agent
-admin toggles land, the VOD studio gets a live pipeline runner button
-plus an MP4 preview in Episode Review, and the headless replay chain
-is end-to-end tested. 690 tests passing (up from 580). See
+**0.8.0 shipped 2026-08-04.** A reach release — the daily VOD pipeline
+now has a real trigger (orchestrator's `run_vod_scheduler`), the
+run state is DB-backed (not in-memory), and the headless renderer
+has a 9:16 capture path for YouTube Shorts. The studio's prototype
+fixture matches the live 7-strategy world (8 buckets incl. legacy
+`momentum` alias), and the new `agent_rivalry` + `promotion` beat
+detectors surface two of the missing kinds the studio already typed.
+773 tests passing (up from 690). Two research docs at
+`docs/research/` capture the design thinking. See
 [CHANGELOG.md](./CHANGELOG.md) for the full release notes. The
-current focus is the post-0.7.0 audit findings (catalogued in
-`REPO_REVIEW.md` + `BACKLOG.md`) plus the carryover follow-ups from
-this round (per-step timing in `PipelineRun`, recap scene replay,
-real LLM/TTS keys for the optional pipeline steps).
+current focus is the post-0.8.0 audit findings (the
+[autonomy doc](./docs/research/autonomy-pipeline.md) catalogues
+the remaining gaps: per-step timing in `PipelineRun`, recap scene
+replay, thumbnail generation, the `live_today` race fix) plus the
+content side's [youtube-interesting doc](./docs/research/youtube-interesting.md)
+recommends the Intern Watch / Strategy Wars / Rivalry Week weekly
+formats as the next three episode shapes.
 
 Status legend:
 
@@ -29,11 +35,13 @@ Status legend:
 
 ## Now — current focus
 
-The 0.7.0 release (2026-08-04) grew the strategy roster to 7, landed
-per-agent admin toggles, gave the VOD studio a live pipeline runner
-button + MP4 preview, and pinned the headless replay chain with an
-end-to-end test. **The current focus is the post-0.7.0 audit findings
-+ the carryover follow-ups from this round** — not new features.
+The 0.8.0 release (2026-08-04) gave the VOD pipeline a real trigger
+(the orchestrator's `run_vod_scheduler`), DB-backed run state, a 9:16
+Shorts capture path, and two new beat detectors (`agent_rivalry`,
+`promotion`). The prototype fixture now matches the live 7-strategy
+world. **The current focus is the carryovers from this round + the
+post-0.8.0 audit findings**, not new features. The research docs at
+`docs/research/` are the source of truth for what's left.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
