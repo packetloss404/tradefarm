@@ -12,6 +12,8 @@ import { BeatPicker } from "./BeatPicker";
 import { PipelineBoard } from "./PipelineBoard";
 import { SessionControl } from "./SessionControl";
 import { EpisodePage } from "./EpisodePage";
+import { InternWatch } from "./InternWatch";
+import { RivalryWeek } from "./RivalryWeek";
 
 // Data-source toggle: applies to ALL surfaces (BeatPicker, Pipeline,
 // Session, Episode) when set to "live". The previous behaviour
@@ -38,13 +40,21 @@ function saveLivePref(v: boolean) {
   }
 }
 
-type SurfaceId = "beats" | "pipeline" | "session" | "episode";
+type SurfaceId =
+  | "beats"
+  | "pipeline"
+  | "session"
+  | "episode"
+  | "interns"
+  | "rivalries";
 
 const SURFACES: { id: SurfaceId; label: string; sub: string }[] = [
   { id: "beats", label: "Beat picker", sub: "the keystone" },
   { id: "pipeline", label: "Pipeline status", sub: "10 subsystems" },
   { id: "session", label: "Session control", sub: "let it run" },
   { id: "episode", label: "Episode review", sub: "ready to publish" },
+  { id: "interns", label: "Intern Watch", sub: "12-min Friday" },
+  { id: "rivalries", label: "Rivalry Week", sub: "7-min format" },
 ];
 
 // Read the active tab from the URL hash, e.g. #vod-studio/beats. The
@@ -53,7 +63,14 @@ const SURFACES: { id: SurfaceId; label: string; sub: string }[] = [
 function tabFromHash(): SurfaceId {
   const m = window.location.hash.match(/^#vod-studio\/(\w+)/);
   const raw = m?.[1];
-  if (raw === "beats" || raw === "pipeline" || raw === "session" || raw === "episode") {
+  if (
+    raw === "beats" ||
+    raw === "pipeline" ||
+    raw === "session" ||
+    raw === "episode" ||
+    raw === "interns" ||
+    raw === "rivalries"
+  ) {
     return raw;
   }
   return "beats";
@@ -241,6 +258,8 @@ export default function VodStudio() {
         {active === "pipeline" && <PipelineBoard vod={data} />}
         {active === "session" && <SessionControl vod={data} />}
         {active === "episode" && <EpisodePage vod={data} />}
+        {active === "interns" && <InternWatch vod={data} />}
+        {active === "rivalries" && <RivalryWeek vod={data} />}
       </div>
     </div>
   );

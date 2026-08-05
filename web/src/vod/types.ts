@@ -33,6 +33,29 @@ export type Strategy = StrategyBucket;
 
 export type Rank = "intern" | "junior" | "senior" | "principal";
 
+// 0.9.0-era manifest extra: the 5 lowest-cash intern agents at
+// session start, with the static metadata the VOD studio needs to
+// render an Intern Watch card without a re-query.
+export type InternCastRow = {
+  agent_id: number;
+  name: string;
+  rank: string;
+  rank_index: number;
+  strategy: string;
+  starting_capital: number;
+};
+
+// 0.8.0-era manifest extra: top-2 rivalry triples (a, b, symbol,
+// count, a_pnl, b_pnl) for the Rivalry Week surface.
+export type RivalryRow = {
+  a: number;
+  b: number;
+  symbol: string;
+  count: number;
+  a_pnl: number;
+  b_pnl: number;
+};
+
 export type Agent = {
   id: number;
   name: string;
@@ -46,6 +69,12 @@ export type Agent = {
   sparkline: number[];
   trades: number;
   wins: number;
+  // 0.10.0 — optional fields the Intern Watch / Rivalry Week
+  // surfaces use for the mock-fixture fallback. The live path
+  // doesn't need them (the manifest's `lowest_ranks` +
+  // `rivalries` carry the structured data).
+  cash?: number;
+  symbol?: string;
 };
 
 export type BeatKind =

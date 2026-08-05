@@ -356,6 +356,14 @@ export function useVodLiveData(sessionId?: string): VodLiveData {
     renderProgress: 0,
     renderTick,
     summary,
+    // 0.10.0 — Intern Watch + Rivalry Week surfaces. The live
+    // data hook currently returns empty arrays; the future
+    // /vod/{id}/extras fetch (or a direct manifest read) will
+    // populate these. The surfaces fall back to a synthetic
+    // head-to-head when empty so they stay useful in the
+    // meantime.
+    lowest_ranks: [],
+    rivalries: [],
     liveStatus,
     liveError,
     equityCurve,

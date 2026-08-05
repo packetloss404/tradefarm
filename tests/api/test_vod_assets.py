@@ -168,3 +168,73 @@ def test_get_thumb_missing_returns_404(client: TestClient, sessions_root: Path) 
     _make_session(sessions_root, "s_2026-05-19_a", with_reel=True, with_thumb=False)
     r = client.get("/vod/s_2026-05-19_a/thumb.jpg")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /vod/{session_id}/extras (Intern Watch / Rivalry Week surface)
+# ---------------------------------------------------------------------------
+
+
+def test_get_manifest_extras_returns_0_9_0_keys(
+    client: TestClient, sessions_root: Path
+) -> None:
+    """The 0.9.0-era manifest extras surface as one JSON payload so
+    the Intern Watch + Rivalry Week studio tabs can pull all three
+    in a single fetch."""
+    import json
+
+    sdir = sessions_root / "s_2026-05-19_a"
+    sdir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "session_id": "s_2026-05-19_a",
+        "rivalries": [
+            {"a": 5, "b": 12, "symbol": "NVDA", "count": 3,
+             "a_pnl": 80.0, "b_pnl": -60.0},
+        ],
+        "lowest_ranks": [
+            {"agent_id": 3, "name": "marcus_smith", "rank": "intern",
+             "rank_index": 0, "strategy": "momentum_12_1",
+             "starting_capital": 1000.0},
+        ],
+        "strategy_rollup": {
+            "momentum": {"agents": 14, "equity": 14_200, "pnl": 200,
+                         "pnlPct": 1.4, "fills": 12},
+        },
+        "interns_under_watch": [3],
+    }
+    (sdir / "manifest.json").write_text(json.dumps(manifest))
+
+    r = client.get("/vod/s_2026-05-19_a/extras")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["session_id"] == "s_2026-05-19_a"
+    assert data["rivalries"][0]["symbol"] == "NVDA"
+    assert data["lowest_ranks"][0]["name"] == "marcus_smith"
+    assert data["strategy_rollup"]["momentum"]["pnl"] == 200
+    assert data["interns_under_watch"] == [3]
+
+
+def test_get_manifest_extras_missing_manifest_returns_404(
+    client: TestClient, sessions_root: Path
+) -> None:
+    _make_session(sessions_root, "s_no_manifest", with_reel=False, with_thumb=False)
+    r = client.get("/vod/s_no_manifest/extras")
+    assert r.status_code == 404
+
+
+def test_get_manifest_extras_rejects_path_traversal(
+    client: TestClient, sessions_root: Path
+) -> None:
+    """The same regex guard as the other VOD endpoints. 400 on
+    anything that isn't a valid session id (special chars, dots,
+    path-like). We test the validator directly because the httpx
+    TestClient normalises literal ``..`` before sending."""
+    from tradefarm.api.vod import _safe_session_dir
+    from fastapi import HTTPException
+
+    for bad in ("..", "../etc", "foo/bar", "scratch.tmp", "with space", "", "a" * 65):
+        with pytest.raises(HTTPException) as exc_info:
+            _safe_session_dir(bad)
+        assert exc_info.value.status_code == 400, f"expected 400 for {bad!r}"
+    r = client.get("/vod/s_2026-05-19_a/thumb.jpg")
+    assert r.status_code == 404

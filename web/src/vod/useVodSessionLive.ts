@@ -273,6 +273,11 @@ export function useVodSessionLive(): VodSessionLive {
     renderProgress: 0,
     renderTick,
     summary,
+    // 0.10.0 — Intern Watch + Rivalry Week surfaces. Empty
+    // arrays today; the surfaces fall back to a synthetic
+    // head-to-head against the agents list.
+    lowest_ranks: [],
+    rivalries: [],
     // live extras consumed by SessionControl when sourceMode === "live"
     liveStatus,
     liveError,

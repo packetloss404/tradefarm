@@ -9,6 +9,9 @@ behind a tiny, locked-down API:
 - ``GET /vod/sessions``                   — list rendered sessions
 - ``GET /vod/{session_id}/reel.mp4``      — stream the rendered video
 - ``GET /vod/{session_id}/thumb.jpg``     — stream the thumbnail
+- ``GET /vod/{session_id}/extras``        — Intern Watch / Rivalry
+  Week data: lowest_ranks + rivalries + strategy_rollup from the
+  manifest JSON (0.9.0-era manifest extras)
 
 Security posture: matches the rest of the project. Backend binds to
 127.0.0.1, all mutating endpoints are protected by ``API_SHARED_SECRET``.
@@ -19,6 +22,7 @@ no symlink following, no read of files outside the sessions dir.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -115,3 +119,45 @@ async def get_thumb(session_id: str) -> FileResponse:
     if not thumb.is_file():
         raise HTTPException(status_code=404, detail="thumb not rendered")
     return FileResponse(thumb, media_type="image/jpeg")
+
+
+# Intern Watch / Rivalry Week surfaces read three of the four
+# 0.9.0-era manifest extras (`rivalries`, `lowest_ranks`,
+# `strategy_rollup`). We surface them as one endpoint so the
+# studio can pull all three with a single fetch and so the
+# 4th field — `interns_under_watch` (derived list[int] of
+# agent_ids from `lowest_ranks`) — is included for the
+# intern-card "still in the cohort?" check. The endpoint is
+# best-effort: a missing field means the manifest predates
+# 0.9.0 or the runner never wrote that section, and the
+# caller is expected to fall back to the prototype mock.
+_MANIFEST_EXTRA_KEYS = ("rivalries", "lowest_ranks", "strategy_rollup", "interns_under_watch")
+
+
+@router.get("/{session_id}/extras")
+async def get_manifest_extras(session_id: str) -> dict[str, Any]:
+    """Return the 0.9.0-era manifest extras for one session.
+
+    Each extra is returned under its manifest key; a missing key
+    (e.g. a pre-0.9.0 manifest) returns ``[]`` / ``{}`` / ``null`` so
+    the studio's surface code can branch on ``manifest.extras.X``
+    presence without a separate "is this an old session?" check.
+    """
+    sdir = _safe_session_dir(session_id)
+    manifest_path = sdir / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"no manifest for session {session_id!r}"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=500, detail=f"manifest unreadable: {exc}"
+        ) from exc
+
+    extras: dict[str, Any] = {"session_id": session_id}
+    for key in _MANIFEST_EXTRA_KEYS:
+        if key in manifest:
+            extras[key] = manifest[key]
+    return extras
