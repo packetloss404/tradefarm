@@ -542,6 +542,16 @@ def _score_rivalries(
         a_pnl = float(pnls.get(lo, _AgentPnl()).realized)
         b_pnl = float(pnls.get(hi, _AgentPnl()).realized)
         score = _clamp(0.55 + (count - min_occurrences) * 0.1)
+        # The rivalry can span up to ``window_min`` minutes of trading;
+        # the headless renderer captures at 60x speed, so a 90-min
+        # window needs ~90s of capture to cover the full arc. Use the
+        # window size as the beat's duration (clamped to the canonical
+        # DURATION_FOR_KIND floor of 34s) so the rendered clip shows
+        # the whole back-and-forth.
+        rival_duration = max(
+            DURATION_FOR_KIND["agent_rivalry"],
+            int(window_min * 60 / 60),  # 1s of capture per minute of window
+        )
         out.append(
             Beat(
                 id=f"b_rivalry_{lo}_{hi}_{sym}".replace(" ", "_"),
@@ -554,7 +564,7 @@ def _score_rivalries(
                     f"{a_name} {_format_money(a_pnl, signed=True)} · "
                     f"{b_name} {_format_money(b_pnl, signed=True)}"
                 ),
-                duration_sec=DURATION_FOR_KIND["agent_rivalry"],
+                duration_sec=rival_duration,
                 # event_refs omitted here: the bucket doesn't track them
                 # and the studio can pull them from the manifest by
                 # symbol + agent pair if it needs to.
@@ -568,6 +578,11 @@ def _score_rivalries(
                     "count": count,
                     "a_pnl": a_pnl,
                     "b_pnl": b_pnl,
+                    # The window size the rivalry spans, in minutes.
+                    # The headless renderer uses this + the 60x replay
+                    # speed to compute the capture length (the
+                    # ``duration_sec`` field above is the floor).
+                    "window_min": window_min,
                 },
             )
         )
