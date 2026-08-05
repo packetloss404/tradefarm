@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from tradefarm.execution.virtual_book import VirtualBook
@@ -36,6 +37,9 @@ __all__ = [
     "list_pipeline_runs",
     "list_pipeline_runs_for_date",
     "pipeline_run_with_terminal_state_for_date",
+    "live_pipeline_run_for_date",
+    "set_pipeline_run_live_today",
+    "mark_runs_live_today_false_for_past_dates",
     "journal",
 ]
 
@@ -461,7 +465,7 @@ def _encode_lines(lines: list[str]) -> str:
     return json.dumps(list(lines) if lines else [])
 
 
-async def create_pipeline_run(run: PipelineRun) -> None:
+async def create_pipeline_run(run: PipelineRun, *, live_today: bool = True) -> None:
     """Insert a new pipeline run row.
 
     The row's ``id`` is set by the caller (the HTTP wrapper currently
@@ -473,6 +477,14 @@ async def create_pipeline_run(run: PipelineRun) -> None:
     column type. ``last_lines_json`` is taken as-is from the input
     row (the caller — ``api.pipeline.PipelineRun.to_row()`` — fills
     it from its in-memory ring buffer at the call site).
+
+    ``live_today`` defaults to True. Every new run is "live" from
+    its writer's POV; the boot-time sweep in
+    ``orchestrator.scheduler`` flips stale past-date rows to False
+    on a fresh process. Callers that already set the column on the
+    input ``run`` row (e.g. an in-memory dataclass via ``to_row()``)
+    can pass ``live_today=False`` to override the default — the
+    explicit kwarg always wins over the input row's value.
     """
     async with SessionLocal() as session:
         # If the caller passed the in-memory dataclass (it has
@@ -485,6 +497,12 @@ async def create_pipeline_run(run: PipelineRun) -> None:
         # + Python default — preserve whatever the caller set, defaulting
         # to "pending" if empty.
         status = (getattr(run, "status", None) or "pending")
+        # Honour an explicit column on the input row first, then
+        # the kwarg, then True. Most callers (the HTTP wrapper's
+        # ``to_row()`` + the orchestrator's ``_kick_vod_run``) leave
+        # the column unset and rely on the True default.
+        incoming_live = getattr(run, "live_today", None)
+        effective_live = live_today if incoming_live is None else bool(incoming_live)
         row = PipelineRun(
             id=run.id,
             session_id=run.session_id,
@@ -498,6 +516,7 @@ async def create_pipeline_run(run: PipelineRun) -> None:
             finished_at=getattr(run, "finished_at", None),
             error=getattr(run, "error", None),
             last_lines_json=last_lines_json or "[]",
+            live_today=effective_live,
         )
         session.add(row)
         await session.commit()
@@ -621,3 +640,104 @@ async def pipeline_run_with_terminal_state_for_date(date: str) -> PipelineRun | 
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+
+async def live_pipeline_run_for_date(date: str) -> PipelineRun | None:
+    """Return the newest pipeline run for ``date`` whose ``live_today``
+    flag is True — the post-0.9.0 per-day idempotency check the
+    scheduler reads before kicking off a new run.
+
+    After the boot-time sweep in ``orchestrator.scheduler`` runs,
+    every past-date row from a previous process has ``live_today=False``
+    (the previous process's "in flight" state is dead). A row with
+    ``live_today=True`` for today's date therefore MUST be from the
+    current process — the scheduler can skip without separately
+    checking ``status in ('done', 'failed')`` or the
+    ``status='running'`` in-flight path. Cleaner than the prior
+    two-query check; see the 0.9.0 "scheduler power-loss race"
+    entry in CHANGELOG.md for the full motivation.
+
+    Returns None if no live row exists for the date. The newest-first
+    ordering keeps the result stable when multiple rows exist
+    (e.g. an HTTP-wrapper-fired ad-hoc run on the same day).
+    """
+    async with SessionLocal() as session:
+        return (
+            await session.execute(
+                select(PipelineRun)
+                .where(PipelineRun.date == date)
+                .where(PipelineRun.live_today.is_(True))
+                .order_by(PipelineRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+
+async def set_pipeline_run_live_today(run_id: str, value: bool) -> None:
+    """Flip the ``live_today`` flag on a single run row.
+
+    Silent no-op if the run id is unknown (the in-flight row may
+    have been wiped by a manual cleanup, or this might be a
+    stale write from a prior process's tail). The boot-time
+    sweep in ``orchestrator.scheduler`` is the primary writer
+    of False; this helper exists for ad-hoc admin operations
+    (e.g. the operator decides to refire today's run and
+    clears the marker) and for tests.
+
+    Note: this is NOT the path the terminal-state path uses. The
+    scheduler keeps ``live_today=True`` on terminal-state rows
+    and lets the existing ``status`` filter do the
+    "should I refire" work; ``live_today`` is purely the
+    "is this from a still-running process" marker.
+    """
+    async with SessionLocal() as session:
+        existing = (
+            await session.execute(select(PipelineRun).where(PipelineRun.id == run_id))
+        ).scalar_one_or_none()
+        if existing is None:
+            log.info("set_pipeline_run_live_today_not_found", run_id=run_id)
+            return
+        existing.live_today = bool(value)
+        await session.commit()
+
+
+async def mark_runs_live_today_false_for_past_dates(today_iso: str) -> int:
+    """Flip ``live_today`` to False for every past-date run row.
+
+    Called once per process boot from
+    ``orchestrator.scheduler._boot_vod_scheduler`` BEFORE the
+    scheduler task starts. A previous process that died mid-run
+    left a ``live_today=True`` row at ``status='running'`` for
+    some past date; this sweep marks every such row as
+    "inherited from a dead process" so the new process's
+    idempotency check (which filters on ``live_today=True``) can't
+    be fooled by stale state.
+
+    The filter is ``date != today_iso AND live_today = 1`` so
+    today's rows are left untouched — a still-running row from
+    a previous process for *today* is genuinely "in flight" and
+    the new process should defer to it (or, if the new process
+    wants to refire, the operator clears the marker via
+    ``set_pipeline_run_live_today``).
+
+    Returns the row count (mostly for tests / observability; the
+    scheduler logs it on the way out).
+    """
+    async with SessionLocal() as session:
+        # ORM-style `update()` construct + CursorResult cast. SQLAlchemy's
+        # async `Result` stub doesn't expose `rowcount`; the underlying
+        # sync `CursorResult` does. Cast is safe at runtime (the async
+        # wrapper delegates to the sync cursor for row metadata).
+        result = await session.execute(
+            update(PipelineRun)
+            .where(PipelineRun.date != today_iso)
+            .where(PipelineRun.live_today.is_(True))
+            .values(live_today=False)
+        )
+        await session.commit()
+        cursor = cast(CursorResult, result)
+        # CursorResult.rowcount is the row count of the last executed
+        # statement on the connection; for an UPDATE that's the
+        # matched/updated row count. SQLite returns matched rows (the
+        # docs note the same for Postgres).
+        return int(cursor.rowcount or 0)

@@ -30,7 +30,10 @@ SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=
 # defensive against a code path that bypasses create_all (none today, but
 # the helper is cheap and matches the existing pattern of belt-and-braces
 # index/column guards).
-SCHEMA_VERSION = 2
+# v3: pipeline_runs.live_today boolean (autonomy polish). Fixes the
+# power-loss race in the daily VOD scheduler's per-day idempotency
+# check — see PipelineRun docstring in models.py for the full story.
+SCHEMA_VERSION = 3
 
 
 # (table, column, sqlite DDL fragment — just the "type + defaults" part)
@@ -51,6 +54,12 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # this ADD COLUMN handles pre-existing DBs (the constraint is added
     # via a partial unique index since SQLite can't ALTER ADD CONSTRAINT).
     ("trades", "broker_order_id", "VARCHAR(64)"),
+    # 0.9.0 — process-alive marker for the VOD scheduler's
+    # power-loss-safe idempotency check. See PipelineRun docstring
+    # in models.py. Default 1 (=True) so existing rows resolve to
+    # "live" until the new boot sweep in orchestrator.scheduler
+    # flips past-date rows to 0.
+    ("pipeline_runs", "live_today", "BOOLEAN NOT NULL DEFAULT 1"),
 )
 
 # (table, column) — indexes to ensure on existing DBs. create_all builds
@@ -260,10 +269,50 @@ async def _ensure_pipeline_runs(conn) -> None:
         await conn.run_sync(Base.metadata.tables["pipeline_runs"].create)
 
 
+async def _ensure_pipeline_runs_live_today(conn) -> None:
+    """0.9.0 migration: add the ``live_today`` column to ``pipeline_runs``.
+
+    This is a dedicated helper (rather than just a tuple entry) for
+    symmetry with ``_ensure_pipeline_runs`` and so a future "boot
+    backfill" pass (e.g. migrating historical ``status='running'``
+    rows on a deployed DB) can hang off the same call site. The
+    ADD COLUMN itself is idempotent (the tuple's check-then-add
+    in ``_ensure_columns`` short-circuits on a re-run), and the
+    DEFAULT 1 backfills every existing row to "live" — the new
+    boot-time sweep in ``orchestrator.scheduler`` flips past-date
+    rows to 0 immediately after this migration lands.
+
+    Returns nothing; the column being present (or already present)
+    is the contract.
+    """
+    existing = await _table_columns(conn, "pipeline_runs")
+    if not existing:
+        # Table hasn't been created yet (a pre-create_all boot or a
+        # DB that lost the table entirely). ``_ensure_pipeline_runs``
+        # handles that case; nothing for us to do here — when the
+        # table later appears, create_all will include the column
+        # from the model's mapped_column definition.
+        return
+    if "live_today" in existing:
+        return
+    # Mirrors the tuple entry, kept inline so the column shape is
+    # obvious to a future reader. The check-then-add above already
+    # makes this a no-op on re-runs, so a duplicate ADD COLUMN can't
+    # happen even if a developer wires this in twice by mistake.
+    if_not_exists = "IF NOT EXISTS " if _dialect_name(conn) == "postgresql" else ""
+    await conn.execute(
+        text(
+            f"ALTER TABLE pipeline_runs ADD COLUMN {if_not_exists}live_today "
+            "BOOLEAN NOT NULL DEFAULT 1"
+        )
+    )
+
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
         await _ensure_indexes(conn)
         await _ensure_pipeline_runs(conn)
+        await _ensure_pipeline_runs_live_today(conn)
         await _ensure_schema_version(conn)

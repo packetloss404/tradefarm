@@ -81,8 +81,14 @@ def _no_main_loops(monkeypatch):
     yield
 
 
-def _make_run_row(run_id: str, date: str, status: str) -> PipelineRun:
-    """Build a SQLAlchemy row to insert directly via the repo."""
+def _make_run_row(run_id: str, date: str, status: str, *, live_today: bool = True) -> PipelineRun:
+    """Build a SQLAlchemy row to insert directly via the repo.
+
+    ``live_today`` defaults to True to mirror the production default
+    (every new run is "live" from its writer's POV). The 0.9.0
+    live_today-aware tests below pass ``False`` to simulate a
+    row that the boot-time sweep has already marked dead.
+    """
     return PipelineRun(
         id=run_id,
         session_id=f"s_{date}_xyz123",
@@ -93,6 +99,7 @@ def _make_run_row(run_id: str, date: str, status: str) -> PipelineRun:
         status=status,
         created_at=datetime(2026, 8, 4, 16, 30, 0, tzinfo=timezone.utc),
         last_lines_json="[]",
+        live_today=live_today,
     )
 
 
@@ -346,4 +353,188 @@ async def test_scheduler_kick_writes_pipeline_run_row(
         if t is not _asyncio.current_task():
             t.cancel()
     # Let the cancelled tasks finish unwinding.
+    await _asyncio.sleep(0.05)
+
+
+# ---------------------------------------------------------------------------
+# 0.9.0 - live_today boot hygiene + idempotency
+# ---------------------------------------------------------------------------
+
+
+async def test_scheduler_boot_marks_previous_process_live_runs_dead(
+    monkeypatch, scheduler_db
+) -> None:
+    """``_boot_vod_scheduler`` flips past-date ``live_today=True``
+    rows to False so the new process can't inherit another
+    process's "in flight" state.
+
+    Simulates a previous process that kicked off a render for
+    ``2026-08-03`` and died mid-run (power loss, OOM). The row
+    in the DB is still ``status='running'`` and
+    ``live_today=True``. On the new process's boot, the sweep
+    must mark it dead. Without this, the new process's
+    ``live_pipeline_run_for_date`` check would still see the
+    stale row and refuse to fire today's run.
+    """
+    monkeypatch.setattr(settings, "vod_pipeline_enabled", True)
+
+    # A previous-process row from yesterday. Created_at is in
+    # the past; date is yesterday; live_today=True is the
+    # default but explicit here for clarity.
+    await repo_mod.create_pipeline_run(
+        _make_run_row("r_prev_inflight", "2026-08-03", "running", live_today=True)
+    )
+
+    orch = Orchestrator(agents=[])
+    await orch._boot_vod_scheduler()
+
+    # The row is now dead.
+    row = await repo_mod.get_pipeline_run("r_prev_inflight")
+    assert row is not None
+    assert row.live_today is False, (
+        "boot sweep should flip past-date live_today=True rows to False"
+    )
+    # Status is untouched - the sweep only changes the live marker.
+    assert row.status == "running"
+
+
+async def test_scheduler_idempotency_uses_live_today(
+    monkeypatch, scheduler_db
+) -> None:
+    """A ``live_today=True`` row for today (status=any) makes
+    the scheduler skip - the new process's own previously-fired
+    run is the "don't refire" marker.
+
+    This is the post-0.9.0 contract: the idempotency check
+    filters on ``live_today=True`` for the current date, not
+    on status. A live row in any status (pending / running /
+    done / failed) wins. The boot sweep has already cleared
+    any dead-process rows, so seeing one here is unambiguous
+    evidence "this process already fired today".
+    """
+    monkeypatch.setattr(settings, "vod_pipeline_enabled", True)
+
+    from tradefarm.market.hours import ET as _ET
+
+    today = datetime(2026, 8, 4, 17, 0, 0, tzinfo=timezone.utc).astimezone(_ET).date().isoformat()
+    await repo_mod.create_pipeline_run(_make_run_row("r_self_live", today, "running", live_today=True))
+
+    orch = Orchestrator(agents=[])
+    fired = await orch._maybe_fire_vod_run(offset_min=5)
+    assert fired is False
+    # Still only one row for today.
+    rows = await repo_mod.list_pipeline_runs_for_date(today)
+    assert len(rows) == 1
+    assert rows[0].id == "r_self_live"
+
+
+async def test_scheduler_idempotency_allows_refire_if_live_today_false(
+    monkeypatch, scheduler_db
+) -> None:
+    """A ``live_today=False`` row for today does NOT block the
+    scheduler - the operator (or a previous failed run) has
+    marked the row as "safe to refire" and the scheduler
+    fires a fresh run.
+
+    Two paths land here:
+
+    1. A failed run from earlier today; the operator manually
+       flipped ``live_today=False`` via the admin panel so a
+       second attempt is possible.
+    2. A row that the boot sweep flipped to False (a
+       previous-process in-flight row that turns out to be
+       for *today*; the boot only touches past dates so this
+       is unreachable in normal flow, but the manual path
+       still has to work).
+    """
+    monkeypatch.setattr(settings, "vod_pipeline_enabled", True)
+
+    from tradefarm.market.hours import ET as _ET
+
+    today = datetime(2026, 8, 4, 17, 0, 0, tzinfo=timezone.utc).astimezone(_ET).date().isoformat()
+    # A failed run from earlier today with live_today=False
+    # (e.g. the operator cleared it after the failure).
+    await repo_mod.create_pipeline_run(
+        _make_run_row("r_failed_today", today, "failed", live_today=False)
+    )
+
+    # Patch the render pipeline's runner to a no-op so the
+    # inner background task doesn't try to do real work
+    # (mirrors test_scheduler_kick_writes_pipeline_run_row).
+    import tradefarm.render.pipeline as pipeline_mod
+
+    def _noop_run_pipeline(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(pipeline_mod, "run_pipeline", _noop_run_pipeline)
+
+    orch = Orchestrator(agents=[])
+    fired = await orch._maybe_fire_vod_run(offset_min=5)
+    assert fired is True, "live_today=False row should not block the refire"
+
+    # Now there are two rows for today: the old failed one
+    # and the new kick.
+    rows = await repo_mod.list_pipeline_runs_for_date(today)
+    assert len(rows) == 2
+    ids = {r.id for r in rows}
+    assert "r_failed_today" in ids
+    # The new row is live.
+    new_row = next(r for r in rows if r.id != "r_failed_today")
+    assert new_row.live_today is True
+
+    # Drain the background task so the test's loop exits cleanly.
+    import asyncio as _asyncio
+
+    await _asyncio.sleep(0.1)
+    for t in _asyncio.all_tasks():
+        if t is not _asyncio.current_task():
+            t.cancel()
+    await _asyncio.sleep(0.05)
+
+
+async def test_scheduler_live_today_set_on_new_run(
+    monkeypatch, scheduler_db
+) -> None:
+    """``_kick_vod_run`` writes ``live_today=True`` on the new
+    row. The repo + model default both pin this to True, and
+    the scheduler relies on it as the "this run is from the
+    currently-running process" marker.
+
+    Without this assertion a future refactor that lets the
+    column drift (e.g. someone adds ``live_today=False`` to
+    the repo's write path) would silently re-introduce the
+    power-loss race the boot sweep is designed to close.
+    """
+    monkeypatch.setattr(settings, "vod_pipeline_enabled", True)
+
+    import tradefarm.render.pipeline as pipeline_mod
+
+    def _noop_run_pipeline(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(pipeline_mod, "run_pipeline", _noop_run_pipeline)
+
+    orch = Orchestrator(agents=[])
+
+    from tradefarm.market.hours import ET as _ET
+
+    today = datetime(2026, 8, 4, 17, 0, 0, tzinfo=timezone.utc).astimezone(_ET).date().isoformat()
+
+    fired = await orch._kick_vod_run(today)
+    assert fired is True
+
+    rows = await repo_mod.list_pipeline_runs_for_date(today)
+    assert len(rows) == 1
+    assert rows[0].live_today is True, (
+        "newly-kicked run must be live (this is the only signal the "
+        "next-process boot sweep relies on)"
+    )
+
+    # Drain the background task so the test's loop exits cleanly.
+    import asyncio as _asyncio
+
+    await _asyncio.sleep(0.1)
+    for t in _asyncio.all_tasks():
+        if t is not _asyncio.current_task():
+            t.cancel()
     await _asyncio.sleep(0.05)

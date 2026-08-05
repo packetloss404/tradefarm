@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 import tradefarm.api.pipeline as api_pipeline
 import tradefarm.storage.db as db_mod
 import tradefarm.storage.repo as repo_mod
-from tradefarm.storage.models import Base
+from tradefarm.storage.models import Base, PipelineRun
 
 
 # ---------------------------------------------------------------------------
@@ -398,3 +398,171 @@ async def test_run_state_reaches_db_at_terminal(fresh_db, monkeypatch) -> None:
     assert row.status == "done"
     lines = json.loads(row.last_lines_json)
     assert any("DONE" in ln for ln in lines)
+
+
+# ---------------------------------------------------------------------------
+# 0.9.0 - live_today column + boot-sweep helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_row(
+    run_id: str,
+    *,
+    date: str | None = "2026-08-04",
+    status: str = "pending",
+    live_today: bool = True,
+) -> PipelineRun:
+    """Build a SQLAlchemy PipelineRun row directly.
+
+    Bypasses the in-memory dataclass + to_row() so the test can pin
+    the ``live_today`` value precisely (the dataclass layer doesn't
+    expose the column; it's a DB-internal marker).
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    return PipelineRun(
+        id=run_id,
+        session_id=f"s_{date or 'x'}_abcdef",
+        date=date,
+        enabled=["session", "beats"],
+        force=False,
+        dry_run=False,
+        status=status,
+        created_at=_dt(2026, 8, 4, 16, 30, 0, tzinfo=_tz.utc),
+        last_lines_json="[]",
+        live_today=live_today,
+    )
+
+
+async def test_create_pipeline_run_writes_live_today_true_by_default(fresh_db) -> None:
+    """``create_pipeline_run(row)`` writes ``live_today=True`` by default.
+
+    Every new run is "live" from its writer's POV; the boot-time
+    sweep in ``orchestrator.scheduler`` is the only code path that
+    flips it to False. The HTTP wrapper's ``to_row()`` doesn't
+    pass the column, so the default has to land on the wire or
+    the new idempotency check will see every freshly-created run
+    as "dead" and refire on the next process.
+    """
+    row = _make_row("r_default_live", date="2026-08-04", status="pending")
+    await repo_mod.create_pipeline_run(row)
+
+    fetched = await repo_mod.get_pipeline_run("r_default_live")
+    assert fetched is not None
+    assert fetched.live_today is True
+
+
+async def test_set_pipeline_run_live_today_flips_value(fresh_db) -> None:
+    """``set_pipeline_run_live_today(run_id, value)`` updates a single row.
+
+    Verifies both the True->False and False->True transitions
+    and the silent-no-op-on-unknown-id contract.
+    """
+    # True -> False
+    await repo_mod.create_pipeline_run(
+        _make_row("r_flip_1", date="2026-08-04", status="running", live_today=True)
+    )
+    await repo_mod.set_pipeline_run_live_today("r_flip_1", False)
+    fetched = await repo_mod.get_pipeline_run("r_flip_1")
+    assert fetched is not None
+    assert fetched.live_today is False
+
+    # False -> True
+    await repo_mod.set_pipeline_run_live_today("r_flip_1", True)
+    fetched = await repo_mod.get_pipeline_run("r_flip_1")
+    assert fetched is not None
+    assert fetched.live_today is True
+
+    # Unknown id is a silent no-op (logged only).
+    await repo_mod.set_pipeline_run_live_today("doesnotexist", False)
+    # No exception, no row created.
+    assert await repo_mod.get_pipeline_run("doesnotexist") is None
+
+
+async def test_mark_runs_live_today_false_for_past_dates_only(fresh_db) -> None:
+    """``mark_runs_live_today_false_for_past_dates(today)`` flips
+    only past-date ``live_today=True`` rows.
+
+    Today's row stays alive (a still-running render for today
+    is genuinely in flight and the new process should defer to
+    it). Already-False rows are untouched. Rows for other past
+    dates flip. The return value is the row count for
+    observability + tests.
+    """
+    # Past dates, all live. Should be flipped.
+    await repo_mod.create_pipeline_run(
+        _make_row("r_yest", date="2026-08-03", status="running", live_today=True)
+    )
+    await repo_mod.create_pipeline_run(
+        _make_row("r_2d_ago", date="2026-08-02", status="done", live_today=True)
+    )
+    # Past date, already dead. Should be left alone (and not
+    # count toward the row count, since the WHERE filters
+    # on live_today=1).
+    await repo_mod.create_pipeline_run(
+        _make_row("r_dead_past", date="2026-08-01", status="failed", live_today=False)
+    )
+    # Today, live. Should NOT be flipped - the new process
+    # inherits the in-flight state.
+    await repo_mod.create_pipeline_run(
+        _make_row("r_today", date="2026-08-04", status="running", live_today=True)
+    )
+
+    flipped = await repo_mod.mark_runs_live_today_false_for_past_dates("2026-08-04")
+    assert flipped == 2, "expected 2 past-date live rows to be flipped"
+
+    # Past dates are now dead.
+    yest = await repo_mod.get_pipeline_run("r_yest")
+    assert yest is not None and yest.live_today is False
+    two_ago = await repo_mod.get_pipeline_run("r_2d_ago")
+    assert two_ago is not None and two_ago.live_today is False
+    # The already-dead past row is unchanged.
+    dead_past = await repo_mod.get_pipeline_run("r_dead_past")
+    assert dead_past is not None and dead_past.live_today is False
+    # Today's row is untouched.
+    today_row = await repo_mod.get_pipeline_run("r_today")
+    assert today_row is not None and today_row.live_today is True
+
+    # A second call is a no-op (every past-date row is now dead).
+    flipped_again = await repo_mod.mark_runs_live_today_false_for_past_dates("2026-08-04")
+    assert flipped_again == 0
+
+
+async def test_live_pipeline_run_for_date_filters_correctly(fresh_db) -> None:
+    """``live_pipeline_run_for_date(date)`` returns the newest
+    ``live_today=True`` row for that date, ignoring dead rows.
+
+    This is the helper the scheduler's idempotency check uses.
+    The contract is: any live row for the date wins, regardless
+    of status. Dead rows (from a previous process) are ignored.
+    No row for the date -> None.
+    """
+    # Empty: returns None.
+    assert await repo_mod.live_pipeline_run_for_date("2026-08-04") is None
+
+    # A dead row for today: ignored.
+    await repo_mod.create_pipeline_run(
+        _make_row("r_dead_today", date="2026-08-04", status="failed", live_today=False)
+    )
+    assert await repo_mod.live_pipeline_run_for_date("2026-08-04") is None
+
+    # A live row for today: returned (any status wins).
+    await repo_mod.create_pipeline_run(
+        _make_row("r_live_today", date="2026-08-04", status="running", live_today=True)
+    )
+    found = await repo_mod.live_pipeline_run_for_date("2026-08-04")
+    assert found is not None
+    assert found.id == "r_live_today"
+
+    # A live row for a different date is invisible to the
+    # today's-date lookup.
+    await repo_mod.create_pipeline_run(
+        _make_row("r_live_other", date="2026-08-05", status="running", live_today=True)
+    )
+    other = await repo_mod.live_pipeline_run_for_date("2026-08-05")
+    assert other is not None
+    assert other.id == "r_live_other"
+    # Today's lookup is still the original row.
+    found_today = await repo_mod.live_pipeline_run_for_date("2026-08-04")
+    assert found_today is not None
+    assert found_today.id == "r_live_today"

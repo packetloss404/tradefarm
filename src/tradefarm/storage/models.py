@@ -197,6 +197,20 @@ class PipelineRun(Base):
     (capped at 200) mirroring the per-run log tail the HTTP layer
     used to keep in process memory. Storing it here makes a
     backend restart preserve the log for the dashboard.
+
+    `live_today` is the "this run is from the currently-running
+    process" marker added in 0.9.0 to fix a power-loss race in
+    the scheduler's per-day idempotency check: a previous process
+    that died mid-run leaves a ``status='running'`` row that the
+    fresh-process scheduler can no longer tell from its own
+    freshly-kicked run. On boot, the orchestrator flips every
+    ``live_today=True`` row whose ``date`` is not today to
+    ``False`` (the previous process's state is dead); the
+    idempotency check then filters on ``live_today=True`` for
+    today's date and can only see its own runs. The column stays
+    ``True`` at terminal state — terminal status (``done`` /
+    ``failed``) is what gates "should I refire", ``live_today``
+    only gates "is this from a still-running process".
     """
 
     __tablename__ = "pipeline_runs"
@@ -229,6 +243,15 @@ class PipelineRun(Base):
     # portability; the in-memory deque used to be the source of
     # truth for this, but a process restart wiped it.
     last_lines_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    # 0.9.0 — process-alive marker. See class docstring for the
+    # full story. ``server_default="1"`` so rows written by a code
+    # path that bypasses the Python default (raw DDL in a debug
+    # session, an old repo shim) still resolve to "live" without
+    # an explicit write; the new boot-time sweep in
+    # ``orchestrator.scheduler`` flips stale past-date rows to 0.
+    live_today: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
 
     __table_args__ = (
         # Hot path: "all runs for this session" (the live data

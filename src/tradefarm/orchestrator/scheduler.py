@@ -715,6 +715,40 @@ class Orchestrator:
                 log.exception("scheduled_tick_failed", error=str(e))
             await asyncio.sleep(interval)
 
+    async def _boot_vod_scheduler(self) -> None:
+        """0.9.0 boot hygiene: clear ``live_today`` on stale past-date rows.
+
+        Called once from ``start_background`` BEFORE the VOD scheduler
+        task is spawned. A previous process that died mid-run
+        (power loss, OOM kill, ``kill -9``) left a
+        ``status='running'`` row with ``live_today=True`` for some
+        past date; the new process can't inherit another process's
+        "live" state — those rows are dead, and the new process's
+        idempotency check (``live_pipeline_run_for_date``) must
+        see them as not-live so today's run still gets a chance
+        to fire.
+
+        Today's rows are intentionally left untouched: a still-live
+        row for today is genuinely from "this process" (we just
+        flipped all the others to dead) and the scheduler should
+        skip. If the operator wants to refire today's run, they
+        call ``set_pipeline_run_live_today(run_id, False)`` from
+        the admin panel.
+
+        Returns nothing; the row count is logged on the way out
+        for observability. Idempotent — a second call with the
+        same ``today_iso`` is a no-op (every other row is already
+        ``live_today=False``).
+        """
+        from tradefarm.market.hours import ET as _ET
+
+        today = _runtime_clock_now_utc().astimezone(_ET).date().isoformat()
+        flipped = await repo.mark_runs_live_today_false_for_past_dates(today_iso=today)
+        if flipped:
+            log.info("vod_scheduler_boot_marked_stale", flipped=flipped, today=today)
+        else:
+            log.debug("vod_scheduler_boot_no_stale_rows", today=today)
+
     async def run_vod_scheduler(self) -> None:
         """Daily VOD pipeline scheduler. Fires once per NYSE trading day,
         after the post-close cool-off (``settings.vod_market_close_offset_min``,
@@ -730,9 +764,13 @@ class Orchestrator:
            a real trading day, after the close, after the cool-off.
            False on weekends / holidays / pre-open / mid-session.
         3. Idempotency: looks for an existing ``pipeline_runs`` row
-           for today's ISO date with status ``done`` or ``failed``
-           (a ``running`` row also wins, via the in-flight check).
-           If found, skip — a previous process already fired today.
+           for today's ISO date with ``live_today=True`` (the
+           0.9.0 marker set on every new run; the boot sweep in
+           ``_boot_vod_scheduler`` flipped every previous-process
+           row to ``False``). If found, skip — a previous run from
+           this process already covered this date. The ``status``
+           column still records the terminal state, but the
+           ``live_today`` flag is what gates "should I refire".
         4. Generates a fresh ``session_id`` for today's date and
            invokes the render pipeline in-process (no HTTP). The
            pipeline is fire-and-forget from the scheduler's POV —
@@ -799,9 +837,17 @@ class Orchestrator:
 
         today = _runtime_clock_now_utc().astimezone(_ET).date().isoformat()
 
-        # Idempotency: a row with status done/failed for today means
-        # a previous run already covered this date — don't re-fire.
-        existing = await repo.pipeline_run_with_terminal_state_for_date(today)
+        # 0.9.0 idempotency check: filter on ``live_today=True`` for
+        # today's date. The boot-time sweep in ``_boot_vod_scheduler``
+        # has already flipped every past-date row from a previous
+        # process to ``live_today=False`` (a dead process can't
+        # inherit "live" state), so a row with ``live_today=True``
+        # for today MUST be from the current process — no need to
+        # separately check status in ('done','failed') or
+        # status='running' like the v0.8 path did. Cleaner, and
+        # closes the power-loss-mid-run race that v0.8 documented
+        # as a known gap.
+        existing = await repo.live_pipeline_run_for_date(today)
         if existing is not None:
             log.info(
                 "vod_scheduler_skip_already_ran",
@@ -809,25 +855,6 @@ class Orchestrator:
                 run_id=existing.id,
                 status=existing.status,
             )
-            return False
-
-        # Also skip if a run is in-flight today (status=running) —
-        # a restart mid-render shouldn't double-fire.
-        from sqlalchemy import select as _select
-
-        from tradefarm.storage.models import PipelineRun as _PipelineRun
-
-        async with repo.SessionLocal() as session:
-            in_flight = (
-                await session.execute(
-                    _select(_PipelineRun.id)
-                    .where(_PipelineRun.date == today)
-                    .where(_PipelineRun.status == "running")
-                    .limit(1)
-                )
-            ).first()
-        if in_flight is not None:
-            log.info("vod_scheduler_skip_in_flight", date=today, run_id=in_flight[0])
             return False
 
         return await self._kick_vod_run(today)
@@ -1071,6 +1098,17 @@ class Orchestrator:
     async def start_background(self) -> None:
         if settings.auto_tick_interval_sec > 0 and self._task is None:
             self._task = self._spawn_loop(self.run_scheduled(), name="orch_scheduler")
+
+        # 0.9.0 — VOD scheduler boot hygiene. Run BEFORE the
+        # scheduler task is spawned: flip every ``live_today=True``
+        # row whose ``date`` is not today to False so a previous
+        # process that died mid-run can't fool this process's
+        # idempotency check. The check is cheap (a single
+        # ``UPDATE pipeline_runs SET live_today = 0 WHERE date !=
+        # today AND live_today = 1``) and the new boot is
+        # asynchronous with respect to the scheduler task, so a
+        # long boot doesn't block the tick loop.
+        await self._boot_vod_scheduler()
 
         # VOD autonomy: spawn the daily scheduler loop regardless of
         # whether the operator has enabled it — the loop itself
