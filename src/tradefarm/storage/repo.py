@@ -493,6 +493,14 @@ async def create_pipeline_run(run: PipelineRun, *, live_today: bool = True) -> N
         last_lines_json = getattr(run, "last_lines_json", None)
         if last_lines_json is None and hasattr(run, "last_lines"):
             last_lines_json = _encode_lines(run.last_lines or [])
+        # Same translation for the per-step timings roll-up. The
+        # in-memory dataclass carries ``step_timings``; the column
+        # is ``step_timings_json``. The caller is expected to
+        # write the column directly if they're passing a SQLAlchemy
+        # row.
+        step_timings_json = getattr(run, "step_timings_json", None)
+        if step_timings_json is None and hasattr(run, "step_timings"):
+            step_timings_json = _encode_lines(run.step_timings or [])
         # Status defaults to "pending" via the model's server_default
         # + Python default — preserve whatever the caller set, defaulting
         # to "pending" if empty.
@@ -516,6 +524,7 @@ async def create_pipeline_run(run: PipelineRun, *, live_today: bool = True) -> N
             finished_at=getattr(run, "finished_at", None),
             error=getattr(run, "error", None),
             last_lines_json=last_lines_json or "[]",
+            step_timings_json=step_timings_json,
             live_today=effective_live,
         )
         session.add(row)

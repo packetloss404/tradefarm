@@ -366,10 +366,15 @@ async def test_run_state_reaches_db_at_terminal(fresh_db, monkeypatch) -> None:
     """
     import tradefarm.render.pipeline as pipeline_mod
 
-    def stub_run_pipeline(*, session_id, opts, enabled, force, dry_run, sink=None):
+    def stub_run_pipeline(
+        *, session_id, opts, enabled, force, dry_run, sink=None, return_timings=False
+    ):
         if sink:
             sink("session_id=" + session_id)
             sink("DONE")
+        # Return an empty timings list so the HTTP wrapper's post-run
+        # persist step doesn't crash on a None return.
+        return [] if return_timings else None
 
     monkeypatch.setattr(pipeline_mod, "run_pipeline", stub_run_pipeline)
 

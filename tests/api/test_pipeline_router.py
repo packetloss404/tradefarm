@@ -44,13 +44,28 @@ def stub_runner(monkeypatch: pytest.MonkeyPatch):
             force: bool,
             dry_run: bool,
             sink: Callable[[str], None] | None = None,
-        ) -> None:
+            return_timings: bool = False,
+        ) -> Any:
             emit = sink or (lambda m: None)
             emit(f"session_id={session_id}")
             emit(f"enabled={sorted(enabled)}")
             for i, key in enumerate(sorted(enabled), 1):
                 emit(f"step {i}/{len(enabled)}: {key} done")
             emit("DONE")
+            # Return the per-step timings roll-up when asked, so the
+            # HTTP wrapper's post-run persist step has data to write.
+            if return_timings:
+                return [
+                    {
+                        "step": k,
+                        "started_at": "2026-08-04T00:00:00+00:00",
+                        "finished_at": "2026-08-04T00:00:01+00:00",
+                        "duration_sec": 1.0,
+                        "status": "done",
+                    }
+                    for k in sorted(enabled)
+                ]
+            return None
         return stub
 
     monkeypatch.setattr(pipeline_mod, "run_pipeline", make_stub())
@@ -177,6 +192,7 @@ def test_runner_failure_records_error(
         force: bool,
         dry_run: bool,
         sink: Callable[[str], None] | None = None,
+        return_timings: bool = False,
     ) -> None:
         raise SystemExit("step 'beats' failed (exit 1)")
 
@@ -210,6 +226,7 @@ def test_runner_dry_run_marks_done_without_invoking_steps(
         force: bool,
         dry_run: bool,
         sink: Callable[[str], None] | None = None,
+        return_timings: bool = False,
     ) -> None:
         invocations.append(
             {"session_id": session_id, "enabled": set(enabled), "dry_run": dry_run}

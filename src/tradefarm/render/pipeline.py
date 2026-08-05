@@ -55,9 +55,9 @@ import time
 import uuid
 from contextlib import redirect_stdout
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 # Each step module exposes a `main(argv: list[str] | None = None) -> None`
 # that does its CLI work. We call these in-process with constructed argv
@@ -395,6 +395,8 @@ def _run_step(
     session_id: str,
     opts: PipelineOpts,
     sink: Callable[[str], None],
+    *,
+    step_timings: list[dict[str, Any]] | None = None,
 ) -> None:
     """Run one step's inner main() with the resolved argv, capturing
     its stdout so we can prefix every line with the step name.
@@ -403,7 +405,15 @@ def _run_step(
     (``OSError``, ``httpx.HTTPError``, playwright errors). Never
     retries on ``SystemExit`` — that's a deliberate, in-band
     failure signal from the inner CLI, not a transient blip.
+
+    When ``step_timings`` is provided, appends a
+    {step, started_at, finished_at, duration_sec, status} dict on
+    every terminal outcome (success OR SystemExit). The runner passes
+    this list through to ``run_pipeline`` so the HTTP / scheduler
+    callers can persist the full per-step timing roll-up; the CLI
+    caller can pass a list and dump it to stdout on demand.
     """
+    step_started_at = datetime.now(timezone.utc)
     argv = step.build_argv(session_id, opts.sessions_dir, opts)
     sink(f"$ python -m {step.module}  {' '.join(argv)}")
 
@@ -496,6 +506,20 @@ def _run_step(
             sys.stdout.write(f"  | {line}\n")
     sys.stdout.flush()
 
+    if step_timings is not None:
+        step_finished_at = datetime.now(timezone.utc)
+        step_timings.append(
+            {
+                "step": step.key,
+                "started_at": step_started_at.isoformat(),
+                "finished_at": step_finished_at.isoformat(),
+                "duration_sec": round(
+                    (step_finished_at - step_started_at).total_seconds(), 3
+                ),
+                "status": "done",
+            }
+        )
+
 
 def run_pipeline(
     *,
@@ -505,14 +529,22 @@ def run_pipeline(
     force: bool,
     dry_run: bool,
     sink: Callable[[str], None] | None = None,
-) -> None:
+    return_timings: bool = False,
+) -> list[dict[str, Any]] | None:
     """Sequentially execute the enabled steps. The order is fixed by
     :data:`STEPS`; ``enabled`` chooses which links to fire. ``force``
     bypasses the "outputs already exist" check. ``sink`` receives
     each progress line so the HTTP wrapper can fan out to the WS
     event bus; defaults to printing to stdout.
+
+    When ``return_timings`` is True, returns the per-step timing
+    roll-up (a list of {step, started_at, finished_at, duration_sec,
+    status} dicts, one per executed step) so the caller can persist
+    or display. CLI callers that don't need the timings can leave
+    the flag off and ignore the return.
     """
     emit = sink or _default_sink
+    step_timings: list[dict[str, Any]] = []
     emit(f"session_id={session_id}")
     emit(f"sessions_dir={opts.sessions_dir}")
     emit(f"enabled={sorted(enabled)}")
@@ -522,7 +554,7 @@ def run_pipeline(
             if step.key in enabled:
                 argv = step.build_argv(session_id, opts.sessions_dir, opts)
                 emit(f"  step {step.key}: argv={argv!r}")
-        return
+        return step_timings if return_timings else None
 
     for i, step in enumerate(STEPS, 1):
         if step.key not in enabled:
@@ -532,7 +564,7 @@ def run_pipeline(
             emit(f"step {i}/{len(STEPS)}: {step.label}  [skipped — outputs present, --force to re-run]")
             continue
         emit(f"step {i}/{len(STEPS)}: {step.label}")
-        _run_step(step, session_id, opts, emit)
+        _run_step(step, session_id, opts, emit, step_timings=step_timings)
 
     final_reel = _sdir(opts, session_id) / "reel.mp4"
     if final_reel.is_file():
@@ -540,6 +572,8 @@ def run_pipeline(
         emit(f"DONE: {final_reel}  ({size / 1024 / 1024:.1f} MB)")
     else:
         emit("DONE: reel.mp4 not produced — check skipped/failed steps above")
+
+    return step_timings if return_timings else None
 
 
 # ----- CLI ------------------------------------------------------------------

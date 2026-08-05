@@ -970,7 +970,7 @@ class Orchestrator:
                     run.last_lines = run.last_lines[-200:]
 
             try:
-                await asyncio.to_thread(
+                step_timings = await asyncio.to_thread(
                     _pipeline_mod.run_pipeline,
                     session_id=run.session_id,
                     opts=opts,
@@ -978,9 +978,15 @@ class Orchestrator:
                     force=run.force,
                     dry_run=run.dry_run,
                     sink=sink,
+                    return_timings=True,
                 )
                 run.status = "done"
                 run.finished_at = _dt.now(_tz.utc).isoformat()
+                # Stash per-step timings on the dataclass; the model
+                # has a matching ``step_timings_json`` column (added in
+                # 0.9.0) which ``_persist`` serializes on terminal
+                # state.
+                run.step_timings = list(step_timings or [])
                 await _persist(run)
                 await publish_event(
                     "pipeline_progress",

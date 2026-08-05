@@ -200,9 +200,12 @@ def test_webhook_invoked_at_terminal_state(monkeypatch) -> None:
         captured.append({"url": url, "json": json, "timeout": timeout})
         return httpx.Response(200, request=httpx.Request("POST", url))
 
-    def stub_run_pipeline(*, session_id, opts, enabled, force, dry_run, sink=None):
+    def stub_run_pipeline(
+        *, session_id, opts, enabled, force, dry_run, sink=None, return_timings=False
+    ):
         if sink:
             sink("DONE")
+        return [] if return_timings else None
 
     monkeypatch.setattr(pipeline_mod, "run_pipeline", stub_run_pipeline)
     monkeypatch.setattr("tradefarm.api.pipeline.httpx.post", fake_post)

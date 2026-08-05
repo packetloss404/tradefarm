@@ -101,6 +101,10 @@ class PipelineRun:
     finished_at: str | None = None
     error: str | None = None
     last_lines: list[str] = field(default_factory=list)  # ring buffer for the UI
+    # 0.9.0 — per-step duration roll-up. Persisted to the
+    # ``step_timings_json`` column on terminal state. Each entry is
+    # {step, started_at, finished_at, duration_sec, status}.
+    step_timings: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +120,7 @@ class PipelineRun:
             "finished_at": self.finished_at,
             "error": self.error,
             "last_lines": list(self.last_lines),
+            "step_timings": list(self.step_timings),
         }
 
     def to_row(self) -> "repo.PipelineRun":  # type: ignore[name-defined]  # noqa: F821
@@ -147,6 +152,7 @@ class PipelineRun:
             ),
             error=self.error,
             last_lines_json=__import__("json").dumps(self.last_lines or []),
+            step_timings_json=__import__("json").dumps(self.step_timings or []),
         )
 
 
@@ -423,8 +429,10 @@ async def _run_pipeline_task(run: PipelineRun, opts: pipeline_mod.PipelineOpts) 
     try:
         # pipeline.run_pipeline is synchronous and can take a long
         # time (rendering clips can be minutes). Run it on a thread so
-        # the asyncio loop stays responsive.
-        await asyncio.to_thread(
+        # the asyncio loop stays responsive. ``return_timings=True``
+        # makes the runner return the per-step duration roll-up so we
+        # can persist it on terminal state.
+        step_timings = await asyncio.to_thread(
             pipeline_mod.run_pipeline,
             session_id=run.session_id,
             opts=opts,
@@ -432,9 +440,14 @@ async def _run_pipeline_task(run: PipelineRun, opts: pipeline_mod.PipelineOpts) 
             force=run.force,
             dry_run=run.dry_run,
             sink=sink,
+            return_timings=True,
         )
         run.status = "done"
         run.finished_at = datetime.now(timezone.utc).isoformat()
+        # Stash timings on the dataclass; the model has a matching
+        # ``step_timings_json`` column (added in 0.9.0) which
+        # ``_ensure_persisted`` serializes on terminal state.
+        run.step_timings = list(step_timings or [])
         await _ensure_persisted(run)
         await publish_event(
             "pipeline_progress",
@@ -574,6 +587,9 @@ async def list_runs() -> list[dict[str, Any]]:
             "finished_at": row.finished_at.isoformat() if row.finished_at else None,
             "error": row.error,
             "last_lines": _decode_lines(row.last_lines_json),
+            "step_timings": _decode_lines(row.step_timings_json)
+            if row.step_timings_json
+            else [],
         }
 
     # Newest-first sort. The cache deque is already newest-first, but
@@ -616,4 +632,7 @@ async def get_run(run_id: str) -> dict[str, Any]:
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
         "error": row.error,
         "last_lines": _decode_lines(row.last_lines_json),
+        "step_timings": _decode_lines(row.step_timings_json)
+        if row.step_timings_json
+        else [],
     }

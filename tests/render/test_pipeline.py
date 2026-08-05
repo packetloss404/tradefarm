@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from tradefarm.render import pipeline as pipeline_mod
+from tradefarm.render.pipeline import run_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@ def _stub_session(
     beats: bool = True,
     silent_reel: bool = True,
     reel: bool = True,
+    thumb: bool = True,
     metadata: bool = True,
     clips: list[str] | None = None,
     vo_index: bool = True,
@@ -57,6 +59,8 @@ def _stub_session(
         (vo / "index.json").write_text(json.dumps({"lines": []}))
     if reel:
         (sdir / "reel.mp4").write_bytes(b"\x00" * 128)
+    if thumb:
+        (sdir / "thumb.jpg").write_bytes(b"\x00" * 32)
     if metadata:
         (sdir / "episode.yaml").write_text("title: stub\n")
     return sdir
@@ -185,13 +189,14 @@ def test_skip_when_outputs_present(monkeypatch, tmp_path: Path, capsys) -> None:
     out = capsys.readouterr().out
     # session.run is auto-disabled when manifest.json already exists
     # (--session-id used), so it gets the "not in --include set" banner
-    # rather than "outputs present". The 4 output-bearing enabled steps
-    # (beats, stitch, mix, metadata) all get the outputs-present banner.
+    # rather than "outputs present". The 5 output-bearing enabled steps
+    # (beats, stitch, mix, thumb, metadata) all get the outputs-present
+    # banner.
     skip_count = out.count("skipped — outputs present")
-    assert skip_count == 4, f"expected 4 skip banners, got {skip_count}; full output:\n{out}"
-    # The runner walks 8 steps total.
-    assert "step 1/8" in out
-    assert "step 8/8" in out
+    assert skip_count == 5, f"expected 5 skip banners, got {skip_count}; full output:\n{out}"
+    # The runner walks 9 steps total.
+    assert "step 1/9" in out
+    assert "step 9/9" in out
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +211,7 @@ def test_force_bypasses_idempotency(monkeypatch, tmp_path: Path, capsys) -> None
     The Step dataclass is frozen, so we patch a single attribute
     (``run``) on each step via ``object.__setattr__``. Each stub counts
     invocations into a shared dict; the assertions confirm that all
-    six enabled steps (default 4 + tts + upload via --include flags)
+    seven enabled steps (default 5 + tts + upload via --include flags)
     ran exactly once.
     """
     session_id = "s_force"
@@ -214,7 +219,7 @@ def test_force_bypasses_idempotency(monkeypatch, tmp_path: Path, capsys) -> None
 
     calls: dict[str, int] = {
         "session": 0, "beats": 0, "headless": 0, "stitch": 0,
-        "tts": 0, "mix": 0, "metadata": 0, "upload": 0,
+        "tts": 0, "mix": 0, "thumb": 0, "metadata": 0, "upload": 0,
     }
 
     for step in pipeline_mod.STEPS:
@@ -252,6 +257,7 @@ def test_force_bypasses_idempotency(monkeypatch, tmp_path: Path, capsys) -> None
     assert calls["stitch"] == 1
     assert calls["tts"] == 1
     assert calls["mix"] == 1
+    assert calls["thumb"] == 1
     assert calls["metadata"] == 1
     assert calls["upload"] == 1
 
@@ -319,3 +325,76 @@ def test_headless_done_when_clips_dir_has_webm(tmp_path: Path) -> None:
     assert not pipeline_mod._has_outputs(headless_step, session_id, opts)
     (clips / "b1.webm").write_bytes(b"\x00")
     assert pipeline_mod._has_outputs(headless_step, session_id, opts)
+
+
+# ---------------------------------------------------------------------------
+# Per-step timing roll-up (return_timings)
+# ---------------------------------------------------------------------------
+
+
+def test_run_pipeline_return_timings_collects_per_step_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `return_timings=True`, `run_pipeline` returns a list of
+    {step, started_at, finished_at, duration_sec, status} dicts — one
+    per executed step. The HTTP wrapper persists this on terminal
+    state; the orchestrator scheduler does the same."""
+    session_id = "s_timing"
+    _stub_session(tmp_path, session_id)
+    opts = pipeline_mod.PipelineOpts(
+        sessions_dir=tmp_path,
+        music=None,
+        tts_provider="auto",
+        tts_voice="alloy",
+        upload_dry_run=True,
+        stitch_xfade=0.4,
+        force=False,
+    )
+    # Run only the cheap, no-network steps.
+    timings = run_pipeline(
+        session_id=session_id,
+        opts=opts,
+        enabled={"session", "beats", "metadata"},
+        force=True,
+        dry_run=False,
+        return_timings=True,
+    )
+    assert isinstance(timings, list)
+    assert len(timings) == 3
+    # Each record carries the documented shape.
+    for row in timings:
+        assert set(row.keys()) == {
+            "step", "started_at", "finished_at", "duration_sec", "status",
+        }
+        assert row["status"] == "done"
+        assert isinstance(row["duration_sec"], float)
+        assert row["duration_sec"] >= 0.0
+    # The step keys are the enabled set, in STEPS order.
+    assert [r["step"] for r in timings] == ["session", "beats", "metadata"]
+
+
+def test_run_pipeline_without_return_timings_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default behaviour (return_timings omitted) returns None so the
+    CLI path doesn't pay the cost of materializing a list the
+    operator isn't going to read."""
+    session_id = "s_no_timing"
+    _stub_session(tmp_path, session_id)
+    opts = pipeline_mod.PipelineOpts(
+        sessions_dir=tmp_path,
+        music=None,
+        tts_provider="auto",
+        tts_voice="alloy",
+        upload_dry_run=True,
+        stitch_xfade=0.4,
+        force=False,
+    )
+    out = run_pipeline(
+        session_id=session_id,
+        opts=opts,
+        enabled={"session", "beats", "metadata"},
+        force=True,
+        dry_run=False,
+    )
+    assert out is None

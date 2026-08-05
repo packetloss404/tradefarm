@@ -252,6 +252,12 @@ class PipelineRun(Base):
     live_today: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="1", nullable=False
     )
+    # 0.9.0 — per-step timing roll-up. JSON-encoded list[dict] of
+    # {step, started_at, finished_at, duration_sec, status}. Written
+    # incrementally as each step completes so a mid-run crash still
+    # has the partial timings (useful for "why did step N take 4h"
+    # post-mortems). TEXT for SQLite/Postgres portability.
+    step_timings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         # Hot path: "all runs for this session" (the live data

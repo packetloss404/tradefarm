@@ -33,7 +33,7 @@ SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=
 # v3: pipeline_runs.live_today boolean (autonomy polish). Fixes the
 # power-loss race in the daily VOD scheduler's per-day idempotency
 # check — see PipelineRun docstring in models.py for the full story.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 # (table, column, sqlite DDL fragment — just the "type + defaults" part)
@@ -308,6 +308,28 @@ async def _ensure_pipeline_runs_live_today(conn) -> None:
     )
 
 
+async def _ensure_pipeline_runs_step_timings(conn) -> None:
+    """0.9.0 migration: add the ``step_timings_json`` column to
+    ``pipeline_runs``. Stores a JSON list of per-step {step, started_at,
+    finished_at, duration_sec, status} dicts; written incrementally by
+    ``render.pipeline`` as each step completes. The post-mortem shape
+    is `why did step N take 4h?` and the live shape is `what's the
+    headless renderer ETA right now?`. The column is nullable for
+    pre-0.9.0 rows.
+    """
+    existing = await _table_columns(conn, "pipeline_runs")
+    if not existing:
+        return
+    if "step_timings_json" in existing:
+        return
+    if_not_exists = "IF NOT EXISTS " if _dialect_name(conn) == "postgresql" else ""
+    await conn.execute(
+        text(
+            f"ALTER TABLE pipeline_runs ADD COLUMN {if_not_exists}step_timings_json TEXT"
+        )
+    )
+
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -315,4 +337,5 @@ async def init_db() -> None:
         await _ensure_indexes(conn)
         await _ensure_pipeline_runs(conn)
         await _ensure_pipeline_runs_live_today(conn)
+        await _ensure_pipeline_runs_step_timings(conn)
         await _ensure_schema_version(conn)
