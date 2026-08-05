@@ -10,12 +10,13 @@
 // the poll stops and the last_lines log panel shows the runner's
 // banner output.
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type PipelineRunRow } from "../api";
 import { T } from "./tokens";
 import type { PipelineNode } from "./types";
 import { fmtInt, fmtMoney, ProgressBar, StatusDot } from "./widgets";
 import type { VodMock } from "./useVodMock";
+import { deriveNodesFromRun } from "./derivePipelineNodes";
 
 function pipelineBtn(border: string = T.border, color: string = T.text): CSSProperties {
   return {
@@ -160,16 +161,40 @@ function PipelineActions({
     };
   }, [activeRun, setActiveRun]);
 
-  const queued = vod.pipeline.filter((p) => p.status === "queued").length;
-  const runningMock = vod.pipeline.filter((p) => p.status === "running").length;
-  const doneMock = vod.pipeline.filter((p) => p.status === "done").length;
+  // Pill counts reflect the active pipeline run when one is in flight;
+  // otherwise they show the mock 10-subsystem state (the "today's
+  // session" pipeline). This is the merge between the two state
+  // models — the mock pills stay useful when no run is queued.
   const isRunning = activeRun?.status === "running" || activeRun?.status === "pending";
+  const mockQueued = vod.pipeline.filter((p) => p.status === "queued").length;
+  const mockRunning = vod.pipeline.filter((p) => p.status === "running").length;
+  const mockDone = vod.pipeline.filter((p) => p.status === "done").length;
+
+  // When a real run is active, count its enabled steps + how many
+  // we know are done. The backend publishes per-step events; for the
+  // polling path we infer from the log tail. A future improvement
+  // could expose per-step status in the run row.
+  const runDoneCount = activeRun
+    ? activeRun.last_lines.filter((ln) => /\bskipped|done|finished|passed/i.test(ln)).length
+    : 0;
+  const runTotalCount = activeRun ? activeRun.enabled.length : 0;
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <div style={{ display: "flex", gap: 8, fontFamily: T.mono, fontSize: 11, color: T.text2 }}>
-        <span style={{ color: T.ok }}>● {doneMock} mock done</span>
-        <span style={{ color: T.accent }}>● {runningMock} mock running</span>
-        <span>● {queued} mock queued</span>
+        {activeRun ? (
+          <>
+            <span style={{ color: T.ok }}>● {runDoneCount} done</span>
+            <span style={{ color: T.accent }}>● {runTotalCount - runDoneCount} pending</span>
+            <span style={{ color: T.text3 }}>({activeRun.status})</span>
+          </>
+        ) : (
+          <>
+            <span style={{ color: T.ok }}>● {mockDone} done</span>
+            <span style={{ color: T.accent }}>● {mockRunning} running</span>
+            <span>● {mockQueued} queued</span>
+          </>
+        )}
       </div>
       <button
         style={{
@@ -407,10 +432,12 @@ function DetailField({
 
 function PipelineGraph({
   vod,
+  nodes,
   selected,
   setSelected,
 }: {
   vod: VodMock;
+  nodes: PipelineNode[];
   selected: string;
   setSelected: (id: string) => void;
 }) {
@@ -421,7 +448,7 @@ function PipelineGraph({
     >
       <SectionLabel>pipeline · 2026-05-19 16:00:04 ET</SectionLabel>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-        {vod.pipeline.map((node) => (
+        {nodes.map((node) => (
           <SubsystemCard
             key={node.id}
             node={node}
@@ -435,8 +462,16 @@ function PipelineGraph({
   );
 }
 
-function DetailPane({ vod, selectedId }: { vod: VodMock; selectedId: string }) {
-  const node = vod.pipeline.find((p) => p.id === selectedId) ?? vod.pipeline[2];
+function DetailPane({
+  vod,
+  nodes,
+  selectedId,
+}: {
+  vod: VodMock;
+  nodes: PipelineNode[];
+  selectedId: string;
+}) {
+  const node = nodes.find((p) => p.id === selectedId) ?? nodes[2];
   if (!node) return null;
   return (
     <div
@@ -547,6 +582,17 @@ function DetailPane({ vod, selectedId }: { vod: VodMock; selectedId: string }) {
 export function PipelineBoard({ vod }: { vod: VodMock }) {
   const [selected, setSelected] = useState("render");
   const [activeRun, setActiveRun] = useState<PipelineRunRow | null>(null);
+
+  // When a real run is in flight, the 10-card grid mirrors the run's
+  // per-step state. Otherwise it falls back to the mock 10-subsystem
+  // fixture so the surface stays useful in a quiet dev sandbox. The
+  // grid always shows 10 cards — the two prototype-only cards
+  // (script, thumb) get an honest "no matching step" note.
+  const nodes = useMemo(
+    () => (activeRun ? deriveNodesFromRun(vod.pipeline, activeRun) : vod.pipeline),
+    [vod.pipeline, activeRun],
+  );
+
   return (
     <div
       style={{
@@ -566,8 +612,8 @@ export function PipelineBoard({ vod }: { vod: VodMock }) {
           <RunPanel run={activeRun} />
         </div>
       )}
-      <PipelineGraph vod={vod} selected={selected} setSelected={setSelected} />
-      <DetailPane vod={vod} selectedId={selected} />
+      <PipelineGraph vod={vod} nodes={nodes} selected={selected} setSelected={setSelected} />
+      <DetailPane vod={vod} nodes={nodes} selectedId={selected} />
     </div>
   );
 }
