@@ -175,6 +175,21 @@ class Settings(BaseSettings):
     vod_publish_at_et: str = "16:30"
     vod_notify_webhook: str = ""
 
+    # 0.11.0 — TTS auto-include. The render pipeline's ``tts`` step
+    # is opt-in by default (``enabled_by_default=False`` on the Step
+    # registry) because TTS costs money + needs creds. When this
+    # flag is True AND a TTS provider key is present in the env
+    # (ELEVENLABS_API_KEY or OPENAI_API_KEY), the chain's default
+    # enabled set includes ``tts`` automatically — so the operator
+    # doesn't have to remember to pass ``--include-tts`` once
+    # they've configured a key.
+    #
+    # Operators who explicitly want NO tts can set
+    # ``vod_tts_auto_include=false`` in the env, OR pass
+    # ``include_tts: false`` in the HTTP request body. The HTTP
+    # wrapper's request-body flag always wins.
+    vod_tts_auto_include: bool = True
+
     # 0.10.0 — asset archival on terminal state. Empty / unset means
     # the backup step is a no-op (the default — operators opt in).
     # Set to a directory path (e.g. "/var/backups/tradefarm") to

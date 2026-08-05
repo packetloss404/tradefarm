@@ -6,18 +6,19 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.10.0 shipped 2026-08-04.** A "weekly formats ship + autonomy
-hardening" release. The research doc's top 3 weekly formats
-now have at least one studio surface: **Intern Watch** and
-**Rivalry Week** are full VOD studio tabs reading from a new
-`/vod/{id}/extras` endpoint, and **Strategy Wars** is
-already in the beats layer (0.9.0). Asset archival
-(`vod_archive_path`) is the missing piece that closes the
-"destroyed local box loses source artifacts" gap. 833 tests
-passing (up from 823). See [CHANGELOG.md](./CHANGELOG.md) for
-the full release notes. The current focus is the post-0.10.0
-audit findings (TTS defaults, shorts visual verification,
-the legacy `StrategyLegacy` carryover) — not new features.
+**0.11.0 shipped 2026-08-05.** A "TTS env wiring + Intern
+Watch / Rivalry Week live-mode" release. The TTS step is now
+auto-included when the operator has provider creds in the env
+(no more forgetting `--include-tts`), the Intern Watch and
+Rivalry Week studio surfaces read from real session data via
+`/vod/{id}/extras` instead of the synthetic fallback, and
+Session Control's live strategy breakdown finally shows the
+full 8 buckets instead of the 3-bucket legacy view. 853 tests
+passing (up from 833). See [CHANGELOG.md](./CHANGELOG.md) for
+the full release notes. The current focus is the carryover
+from the post-0.10.0 audit — shorts visual verification, TTS
+provider switching, the podcast episode format — not new
+features.
 
 Status legend:
 
@@ -30,16 +31,15 @@ Status legend:
 
 ## Now — current focus
 
-The 0.10.0 release (2026-08-04) shipped Intern Watch +
-Rivalry Week studio surfaces (the missing weekly formats
-from the research doc) and asset archival on run-done
-(`vod_archive_path`). The autonomy policy ("auto private +
-publish_at 16:30 ET") and the daily scheduler loop are
-unchanged from 0.9.0. **The current focus is the post-0.10.0
-audit findings** (TTS operator credentials, shorts visual
-QA, the legacy `StrategyLegacy` carryover) — not new
-features. The research docs at `docs/research/` are the
-source of truth for what's left.
+The 0.11.0 release (2026-08-05) closed the TTS env wiring +
+Intern Watch / Rivalry Week live-mode + `StrategyLegacy`
+3-bucket carryover audit findings from 0.10.0. The remaining
+**post-0.10.0 audit carryover** is the shorts visual QA +
+TTS provider switching + podcast episode format. None of
+these are blocking; the operator is happy with the 0.11.0
+shape and is using it for the daily-render flow. The research
+docs at `docs/research/` are the source of truth for what's
+left.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 

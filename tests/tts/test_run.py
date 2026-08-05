@@ -19,8 +19,11 @@ from tradefarm.tts.run import (
     SilentTtsProvider,
     _slug,
     _wav_duration_sec,
+    available_providers,
     build_provider,
+    has_tts_creds,
     run_tts,
+    should_auto_include_tts,
 )
 
 
@@ -269,3 +272,78 @@ async def test_integration_elevenlabs(tmp_path: Path):
     assert not result.failed
     assert result.lines[0].wav.is_file()
     assert result.lines[0].duration_sec > 0
+
+
+# ----- 0.11.0 — env wiring (auto-include) --------------------------------
+#
+# These are the helpers the chain's `_resolve_enabled` uses to decide
+# whether to add the `tts` step to the default enabled set when the
+# operator hasn't explicitly set `include_tts`. They read the env at
+# call time so a process that imports the module with no TTS keys
+# still works — a hot-reload that injects ELEVENLABS_API_KEY into
+# os.environ at runtime takes effect on the next call.
+
+
+def test_available_providers_empty_when_no_keys(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert available_providers() == []
+
+
+def test_available_providers_lists_elevenlabs_when_set(monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert available_providers() == ["elevenlabs"]
+
+
+def test_available_providers_lists_openai_when_only_openai_set(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "oa")
+    assert available_providers() == ["openai"]
+
+
+def test_available_providers_prefers_elevenlabs_order_when_both_set(monkeypatch):
+    """The order matches `build_provider`'s auto: elevenlabs first.
+    `available_providers()[0]` is the same pick the auto path takes."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el")
+    monkeypatch.setenv("OPENAI_API_KEY", "oa")
+    assert available_providers() == ["elevenlabs", "openai"]
+
+
+def test_has_tts_creds_true_when_any_key_present(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "oa")
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    assert has_tts_creds() is True
+
+
+def test_has_tts_creds_false_when_no_keys(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert has_tts_creds() is False
+
+
+def test_should_auto_include_tts_true_when_creds_and_flag_default(monkeypatch):
+    """Default `vod_tts_auto_include=True` + any TTS key → auto-include."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert should_auto_include_tts() is True
+
+
+def test_should_auto_include_tts_false_when_no_creds(monkeypatch):
+    """No TTS key in env → don't auto-include, even with the flag on."""
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert should_auto_include_tts() is False
+
+
+def test_should_auto_include_tts_false_when_flag_disabled(monkeypatch):
+    """Operator opted out via vod_tts_auto_include=False → no auto."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el")
+    assert should_auto_include_tts(vod_tts_auto_include=False) is False
+
+
+def test_should_auto_include_tts_false_when_no_creds_and_flag_off(monkeypatch):
+    """Both off — same answer, but covered for symmetry."""
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert should_auto_include_tts(vod_tts_auto_include=False) is False

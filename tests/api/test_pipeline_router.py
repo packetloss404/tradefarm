@@ -257,3 +257,83 @@ def test_runner_dry_run_marks_done_without_invoking_steps(
     # session.run is included even on dry-run — the runner still prints
     # the plan for it.
     assert "session" in inv["enabled"]
+
+
+# ---------------------------------------------------------------------------
+# 0.11.0 — TTS env auto-include
+# ---------------------------------------------------------------------------
+#
+# The chain's `tts` step is opt-in by default (enabled_by_default=False)
+# because TTS costs money + needs creds. When the operator has a TTS key
+# in the env AND vod_tts_auto_include is True (the default), the HTTP
+# wrapper auto-includes `tts` in the enabled set so the operator
+# doesn't have to remember to set `include_tts` on every request.
+#
+# The HTTP request body's `include_tts=False` is the second-class
+# override: it always wins. `include_tts=True` is the loud override
+# that always wins. The mid path (no body field) consults the
+# auto-include knob.
+
+
+def test_tts_auto_includes_when_creds_present(
+    client: TestClient, stub_runner: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ELEVENLABS_API_KEY in env + no body `include_tts` → tts step
+    is auto-included in the default enabled set."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test_el")
+    # `vod_tts_auto_include` defaults to True; no need to set it.
+    r = client.post("/pipeline/run", json={"date": "2026-08-04", "dry_run": True})
+    assert r.status_code == 200
+    assert "tts" in r.json()["enabled"]
+
+
+def test_tts_not_auto_included_when_no_creds(
+    client: TestClient, stub_runner: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No TTS keys in env → tts step NOT in the default enabled set."""
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    r = client.post("/pipeline/run", json={"date": "2026-08-04", "dry_run": True})
+    assert r.status_code == 200
+    assert "tts" not in r.json()["enabled"]
+
+
+def test_tts_include_true_works_without_creds(
+    client: TestClient, stub_runner: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Loud `include_tts=True` overrides the env check — tts is in
+    the set even without creds. (The step itself will fail inside
+    the runner, but `_resolve_enabled` is the gating layer.)"""
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    r = client.post(
+        "/pipeline/run",
+        json={"date": "2026-08-04", "dry_run": True, "include_tts": True},
+    )
+    assert r.status_code == 200
+    assert "tts" in r.json()["enabled"]
+
+
+def test_tts_auto_includes_with_openai_creds(
+    client: TestClient, stub_runner: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OPENAI_API_KEY alone (no elevenlabs) still triggers auto-include."""
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test_oa")
+    r = client.post("/pipeline/run", json={"date": "2026-08-04", "dry_run": True})
+    assert r.status_code == 200
+    assert "tts" in r.json()["enabled"]
+
+
+def test_tts_auto_include_can_be_disabled_via_settings(
+    client: TestClient, stub_runner: pytest.MonkeyPatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator sets vod_tts_auto_include=False in the env (or .env) →
+    no auto-include even with creds present."""
+    from tradefarm.config import settings as _settings
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test_el")
+    monkeypatch.setattr(_settings, "vod_tts_auto_include", False)
+    r = client.post("/pipeline/run", json={"date": "2026-08-04", "dry_run": True})
+    assert r.status_code == 200
+    assert "tts" not in r.json()["enabled"]

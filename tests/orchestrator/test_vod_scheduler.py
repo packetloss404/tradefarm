@@ -449,9 +449,21 @@ async def test_scheduler_idempotency_allows_refire_if_live_today_false(
     """
     monkeypatch.setattr(settings, "vod_pipeline_enabled", True)
 
+    # 0.11.0 — pin the runtime clock to a post-close wall time so
+    # ``is_market_closed_for_n_minutes(5)`` is True. Without this
+    # the test only passes when the developer happens to be
+    # running it between 16:05 and 09:29 ET on a real trading
+    # day. The other 8 "skips" tests asserted ``fired is False``
+    # so the time-gate failure was silent; this test asserts
+    # ``fired is True`` so the same wall-clock drift surfaces
+    # here.
     from tradefarm.market.hours import ET as _ET
+    from tradefarm.runtime.clock import set_replay_now, reset_replay_now
 
-    today = datetime(2026, 8, 4, 17, 0, 0, tzinfo=timezone.utc).astimezone(_ET).date().isoformat()
+    fixed_now_utc = datetime(2026, 8, 4, 21, 0, 0, tzinfo=timezone.utc)  # 17:00 ET, post-close
+    token = set_replay_now(fixed_now_utc)
+
+    today = fixed_now_utc.astimezone(_ET).date().isoformat()
     # A failed run from earlier today with live_today=False
     # (e.g. the operator cleared it after the failure).
     await repo_mod.create_pipeline_run(
@@ -490,6 +502,7 @@ async def test_scheduler_idempotency_allows_refire_if_live_today_false(
         if t is not _asyncio.current_task():
             t.cancel()
     await _asyncio.sleep(0.05)
+    reset_replay_now(token)
 
 
 async def test_scheduler_live_today_set_on_new_run(

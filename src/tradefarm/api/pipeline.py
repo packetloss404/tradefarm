@@ -65,6 +65,7 @@ from tradefarm.render import pipeline as pipeline_mod
 from tradefarm.runtime.money import D  # noqa: F401  (kept for back-compat)
 from tradefarm.storage import repo
 from tradefarm.storage.models import PipelineRun as _PipelineRunRow  # noqa: F401  (re-aliased to dodge the local dataclass name)
+from tradefarm.tts.run import should_auto_include_tts
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
@@ -233,7 +234,21 @@ def _resolve_session_id(req: RunRequest) -> str:
 
 def _resolve_enabled(req: RunRequest) -> set[str]:
     enabled = {step.key for step in pipeline_mod.STEPS if step.enabled_by_default}
+    # 0.11.0 — TTS auto-include. When the operator has TTS creds in
+    # the env (ELEVENLABS_API_KEY or OPENAI_API_KEY) and hasn't
+    # disabled the auto-include knob, the `tts` step is part of the
+    # default enabled set so the operator doesn't have to remember
+    # to pass `include_tts` on every HTTP request.
+    #
+    # The HTTP request body's `include_tts` is the second-class
+    # override: explicit True always wins, explicit False always
+    # wins. When the body field is left at its default (False), we
+    # check the auto-include knob. This mirrors the test pattern in
+    # ``tests/api/test_pipeline_router.py::test_tts_auto_include``
+    # (added in 0.11.0).
     if req.include_tts:
+        enabled.add("tts")
+    elif should_auto_include_tts(vod_tts_auto_include=settings.vod_tts_auto_include):
         enabled.add("tts")
     if req.include_upload:
         enabled.add("upload")

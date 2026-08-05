@@ -37,7 +37,9 @@ import type {
   Agent,
   Beat,
   DaySummary,
+  InternCastRow,
   PipelineNode,
+  RivalryRow,
   StrategyBucket,
   StrategyRollup,
 } from "./types";
@@ -283,6 +285,36 @@ export function useVodLiveData(sessionId?: string): VodLiveData {
     { refreshInterval: REFRESH_MS * 6, errorRetryCount: 1 },
   );
 
+  // 0.11.0 — Intern Watch + Rivalry Week live-mode wire. The
+  // /vod/{id}/extras endpoint (added in 0.10.0) returns the
+  // 0.9.0-era manifest extras as one payload: `rivalries`,
+  // `lowest_ranks`, `strategy_rollup`, `interns_under_watch`. Both
+  // InternWatch and RivalryWeek surfaces already read from the
+  // `lowest_ranks` / `rivalries` fields on the VodMock shape — so
+  // when the endpoint returns data, the surfaces populate from the
+  // real session instead of the synthetic head-to-head fallback.
+  //
+  // The endpoint is best-effort: 404 (no session, no manifest) is
+  // normal, the surfaces just show the fallback content. We swallow
+  // the 404 into `null` so SWR's `error` stays clean (otherwise the
+  // error indicator on the studio chrome would flash red on every
+  // cold load).
+  const { data: liveExtras } = useSWR<{
+    lowest_ranks?: InternCastRow[];
+    rivalries?: RivalryRow[];
+  } | null>(
+    sid ? `vod-extras-${sid}` : null,
+    async () => {
+      const r = await fetch(`/vod/${encodeURIComponent(sid)}/extras`);
+      if (!r.ok) return null;
+      return (await r.json()) as {
+        lowest_ranks?: InternCastRow[];
+        rivalries?: RivalryRow[];
+      };
+    },
+    { refreshInterval: REFRESH_MS * 6, errorRetryCount: 1 },
+  );
+
   const renderTick = 0;
   const acct = feed.account ?? account ?? null;
   const lastTickIso = feed.lastTick?.ts ?? acct?.last_tick_at ?? null;
@@ -356,14 +388,14 @@ export function useVodLiveData(sessionId?: string): VodLiveData {
     renderProgress: 0,
     renderTick,
     summary,
-    // 0.10.0 — Intern Watch + Rivalry Week surfaces. The live
-    // data hook currently returns empty arrays; the future
-    // /vod/{id}/extras fetch (or a direct manifest read) will
-    // populate these. The surfaces fall back to a synthetic
-    // head-to-head when empty so they stay useful in the
-    // meantime.
-    lowest_ranks: [],
-    rivalries: [],
+    // 0.11.0 — Intern Watch + Rivalry Week live-mode wire.
+    // `lowest_ranks` and `rivalries` come from /vod/{id}/extras
+    // (the 0.9.0-era manifest extras endpoint). When the session
+    // has a manifest, the surfaces populate from real session
+    // data; otherwise the surfaces fall back to the synthetic
+    // head-to-head against the live agents list.
+    lowest_ranks: liveExtras?.lowest_ranks ?? [],
+    rivalries: liveExtras?.rivalries ?? [],
     liveStatus,
     liveError,
     equityCurve,

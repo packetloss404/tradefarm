@@ -13,6 +13,112 @@ commit on GitHub.
 
 ---
 
+## [0.11.0] — 2026-08-05
+
+A "TTS env wiring + Intern Watch / Rivalry Week live-mode" release.
+Three small but operator-visible wins: the TTS step is now
+auto-included in the default pipeline when the operator has a
+provider key in the env (no more forgetting `--include-tts`), the
+Intern Watch and Rivalry Week studio surfaces read from real
+session data via `/vod/{id}/extras` instead of the synthetic
+fallback, and Session Control's live strategy breakdown finally
+shows the full 8 buckets instead of the 3-bucket legacy view.
+
+### Added — TTS env wiring
+
+- **`should_auto_include_tts` plumbed into the pipeline HTTP
+  wrapper** (`src/tradefarm/api/pipeline.py:_resolve_enabled`).
+  When the operator has `ELEVENLABS_API_KEY` or `OPENAI_API_KEY`
+  in the env AND `vod_tts_auto_include=true` (the default), the
+  chain's default enabled set now includes `tts` automatically.
+  The HTTP request body's `include_tts=False` is the explicit
+  override and always wins; `include_tts=True` is the loud
+  override that always wins. The pattern mirrors the "you have
+  creds → stop remembering the flag" UX of provider-backed
+  features.
+- **`available_providers` / `has_tts_creds` helpers in
+  `tradefarm.tts.run`** (added in this release). `available_providers()`
+  lists the providers with at least one env key present
+  (ordered `elevenlabs` → `openai`, matching `build_provider`'s
+  auto selection — `available_providers()[0]` is the same pick
+  the auto path takes). `has_tts_creds()` is a thin
+  `bool(available_providers())` wrapper used by the auto-include
+  decision. The `silence` provider is intentionally NOT in
+  `available_providers()` — it has no key to check.
+- **`vod_tts_auto_include` setting** (`src/tradefarm/config.py`).
+  Default `True`. Operators who explicitly want NO tts can set
+  `vod_tts_auto_include=false` in `.env`, OR pass
+  `include_tts: false` in the HTTP request body. The request-body
+  flag always wins — the env flag is a default, not a forced
+  override.
+
+### Added — Intern Watch / Rivalry Week live-mode wire
+
+- **`useVodLiveData` now reads `/vod/{id}/extras`**
+  (`web/src/vod/data.live.ts`). The 0.10.0 release shipped the
+  endpoint but the live data hook returned `lowest_ranks: []`
+  and `rivalries: []`, leaving both studio surfaces on the
+  synthetic fallback. The new SWR key `vod-extras-${sid}`
+  populates both fields from the session's manifest — when the
+  session has a manifest, the surfaces show the real cast list
+  and the real weekly rivalries instead of the mock.
+- **404 is treated as "no data" rather than "error"**. The
+  fetch returns `null` on non-2xx; SWR's `error` stays clean so
+  the studio's live indicator doesn't flash red on a fresh
+  session. The surfaces still fall back to the synthetic
+  head-to-head when no session is loaded.
+
+### Fixed — `useVodSessionLive` 3-bucket carryover
+
+- **Session Control now aggregates all 8 strategy buckets**
+  (`web/src/vod/useVodSessionLive.ts:makeSummary`). The
+  pre-0.11 hook mapped every non-LSTM/non-LLM live agent into
+  the legacy 3-bucket "momentum" slot and padded the other 5
+  buckets with zero rollups — the live strategy breakdown
+  always showed a giant "momentum" bar with 5 empty bars
+  alongside. The new `mapStrategy` mirrors
+  `data.live.ts`'s 8-bucket mapping (`momentum_12_1`,
+  `mean_reversion_bb`, `rsi2`, `donchian_breakout`,
+  `pairs_zscore`, `momentum`, `lstm`, `llm`), and `makeSummary`
+  aggregates across all 8. The `StrategyLegacy` type is still
+  declared in `web/src/vod/types.ts` for any future back-compat
+  caller but no longer shapes the live breakdown.
+
+### Tests
+
+- **`tests/tts/test_run.py`**: 10 new tests for
+  `available_providers` / `has_tts_creds` /
+  `should_auto_include_tts`. Cover the empty case, single-key
+  case, both-keys ordering, the operator-opt-out flag, and
+  the matrix of `vod_tts_auto_include` × `has_tts_creds`.
+- **`tests/api/test_pipeline_router.py`**: 5 new tests for the
+  HTTP wrapper's auto-include behavior. Cover the
+  `ELEVENLABS_API_KEY` + default-flag path, the no-creds path
+  (tts NOT in enabled), the loud `include_tts=True` override
+  that bypasses env, the `OPENAI_API_KEY`-only path, and the
+  `vod_tts_auto_include=False` opt-out path.
+- **`tests/orchestrator/test_vod_scheduler.py`** carryover fix:
+  the `test_scheduler_idempotency_allows_refire_if_live_today_false`
+  test pinned the runtime clock to a post-close wall time via
+  `set_replay_now` / `reset_replay_now` so the
+  `is_market_closed_for_n_minutes(5)` time gate is deterministically
+  True. The test was the canary for a 0.9.0 carryover — the
+  other 8 scheduler "skip" tests asserted `fired is False` so
+  the time-gate failure was silent; this test asserts
+  `fired is True` so the same wall-clock drift surfaced here.
+  Now passes deterministically regardless of when the developer
+  runs the suite.
+
+### Carryover
+
+- **833 → 848 tests pass.** 15 new tests + 1 newly-passing
+  scheduler test, no removals.
+- **No DB schema changes.** `SCHEMA_VERSION` still at 4.
+- **No new env vars.** `vod_tts_auto_include` joins the existing
+  `vod_*` env var family.
+
+---
+
 ## [0.10.0] — 2026-08-04
 
 A "weekly formats ship + autonomy hardening" release. The

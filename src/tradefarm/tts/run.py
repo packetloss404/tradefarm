@@ -250,6 +250,59 @@ def build_provider(
     raise RuntimeError(f"unknown provider {name!r}")
 
 
+# Provider → env key that gates the auto-detect path. Used by
+# :func:`available_providers` and the chain's auto-include logic.
+_PROVIDER_KEYS: dict[str, str] = {
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+
+def available_providers() -> list[str]:
+    """List the providers with at least one env key present.
+
+    The order matches :func:`build_provider`'s ``auto`` selection
+    (elevenlabs → openai → silence-as-fallback) so callers that
+    want a single ``auto`` decision can read ``available_providers()[0]``
+    when the list is non-empty. The ``silence`` provider is always
+    available and is NOT in this list (it has no key to check).
+    """
+    return [
+        name
+        for name, key in _PROVIDER_KEYS.items()
+        if os.environ.get(key)
+    ]
+
+
+def has_tts_creds() -> bool:
+    """True if any TTS provider has a key in the env.
+
+    Used by the chain's default enabled set: when the operator has
+    TTS creds configured, the ``tts`` step is auto-included in the
+    chain so they don't have to remember ``--include-tts`` (or the
+    HTTP wrapper's ``include_tts`` request body) on every run.
+    """
+    return bool(available_providers())
+
+
+def should_auto_include_tts(*, vod_tts_auto_include: bool = True) -> bool:
+    """Combine the operator's `vod_tts_auto_include` config with the
+    presence of provider keys.
+
+    Returns True when both conditions hold:
+    1. The operator has ``vod_tts_auto_include`` enabled (the default
+       is True — operators who want a hard "no tts" default can
+       disable it in the env).
+    2. At least one TTS provider key is present in the env.
+
+    The HTTP wrapper's per-request ``include_tts`` body field is
+    the second-class override: when the request body says
+    ``include_tts=False``, the chain respects that regardless of
+    the auto-include decision.
+    """
+    return bool(vod_tts_auto_include) and has_tts_creds()
+
+
 # ----- record types -------------------------------------------------------
 
 

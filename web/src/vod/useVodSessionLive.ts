@@ -17,20 +17,27 @@ import type {
   DaySummary,
   PipelineNode,
   Strategy,
-  StrategyLegacy,
+  StrategyBucket,
   StrategyRollup,
 } from "./types";
 import type { VodMock } from "./useVodMock";
 
 const REFRESH_MS = 5_000;
 
-// This hook renders the live session through the studio's narrow
-// 3-bucket strategy view (momentum / lstm / llm). The prototype's
-// `data.ts` expanded to 8 buckets in 0.8.0, but Session Control's
-// charts + tables still show 3 — the `StrategyLegacy` union keeps
-// this hook's `Record<StrategyLegacy, StrategyRollup>` honest. The
-// data.live.ts hook is the one that surfaces all 8.
-const VOD_STRATEGIES_LEGACY: readonly StrategyLegacy[] = [
+// 0.11.0 — migrated from the 3-bucket `StrategyLegacy` to the
+// 8-bucket `StrategyBucket` so Session Control's strategy
+// breakdown matches the prototype's 0.8.0-era 8-bucket view. The
+// pre-0.11 hook bucketed every non-LSTM/non-LLM agent as
+// `momentum` and padded the other 5 with zero rollups — the live
+// view always showed a giant "momentum" bar with 5 empty bars
+// alongside. Mapping each agent into its real 8-bucket gives an
+// accurate live breakdown that matches `data.live.ts`.
+const VOD_STRATEGIES_ALL: readonly StrategyBucket[] = [
+  "momentum_12_1",
+  "mean_reversion_bb",
+  "rsi2",
+  "donchian_breakout",
+  "pairs_zscore",
   "momentum",
   "lstm",
   "llm",
@@ -38,12 +45,18 @@ const VOD_STRATEGIES_LEGACY: readonly StrategyLegacy[] = [
 
 // Backend strategy strings (`momentum_12_1`, `mean_reversion_bb`, `rsi2`,
 // `donchian_breakout`, `pairs_zscore`, `lstm_v1`, `lstm_llm_v1`) → VOD
-// studio's three-bucket enum. The new rule-based strategies all bucket
-// as "momentum" in the VOD studio's 3-bucket view; expand the union
-// here if the studio needs a per-strategy bucket.
-function mapStrategy(s: string): StrategyLegacy {
+// studio's 8-bucket union. The legacy "momentum" slot catches
+// `momentum_sma20` (pre-0.7) and any unknown strategy.
+function mapStrategy(s: string): StrategyBucket {
   if (s.includes("llm")) return "llm";
   if (s.includes("lstm")) return "lstm";
+  if (s === "momentum_12_1" || s.includes("momentum_12_1")) return "momentum_12_1";
+  if (s === "mean_reversion_bb" || s.includes("bb")) return "mean_reversion_bb";
+  if (s === "rsi2" || s.includes("rsi2")) return "rsi2";
+  if (s === "donchian_breakout" || s.includes("donchian")) return "donchian_breakout";
+  if (s === "pairs_zscore" || s.includes("pairs")) return "pairs_zscore";
+  // Catch-all: any momentum-family strategy we don't have a
+  // dedicated bucket for lands in the legacy "momentum" slot.
   return "momentum";
 }
 
@@ -113,8 +126,14 @@ function makeSummary(
   const allocated = agents.length * 1000;
   const totalEquity = acct?.total_equity ?? allocated + agents.reduce((s, a) => s + a.pnl, 0);
   const totalPnl = totalEquity - allocated;
+  // 0.11.0 — aggregate across all 8 buckets so the live view
+  // matches the prototype's 8-bucket breakdown. Previously the
+  // hook only computed 3 legacy buckets and padded the other 5
+  // with zero rollups, which meant a live momentum_12_1 agent
+  // contributed to the "momentum" total instead of the
+  // momentum_12_1 total — wrong carryover from the pre-0.7 view.
   const byStrategy: Record<Strategy, StrategyRollup> = {} as Record<Strategy, StrategyRollup>;
-  for (const s of VOD_STRATEGIES_LEGACY) {
+  for (const s of VOD_STRATEGIES_ALL) {
     const list = agents.filter((a) => a.strategy === s);
     const e = list.reduce((x, a) => x + a.equity, 0);
     const p = list.reduce((x, a) => x + a.pnl, 0);
@@ -125,20 +144,6 @@ function makeSummary(
       pnlPct: list.length === 0 ? 0 : (p / (list.length * 1000)) * 100,
       fills: 0,
     };
-  }
-  // DaySummary's `byStrategy` is the wider 8-bucket Record (data.ts
-  // expanded it in 0.8.0). This hook's live summary is still 3-bucket
-  // (Session Control's charts only know the legacy view) — pad the
-  // missing 5 with zero rollups so the return type stays total.
-  const zeroRollup: StrategyRollup = { agents: 0, equity: 0, pnl: 0, pnlPct: 0, fills: 0 };
-  for (const s of [
-    "momentum_12_1",
-    "mean_reversion_bb",
-    "rsi2",
-    "donchian_breakout",
-    "pairs_zscore",
-  ] as const) {
-    byStrategy[s] = zeroRollup;
   }
   const ranked = [...agents].sort((a, b) => b.pnl - a.pnl);
   return {
