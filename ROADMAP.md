@@ -65,12 +65,19 @@ by impact — pick any one when the operator wants a small, contained PR.
 - ✅ **Backend — fix 4 stale "skeleton" docstrings** — none found; the modules are fully documented.
 - ✅ **Backend — audience lock** — shipped in 0.12.0 (asyncio.Lock + dict refactor; closes the double-publish race).
 - ✅ **Backend — pin `pandas<3` and rebuild the venv** — shipped in round 6.
-- **Frontend — `RecentFillsRail` age label bug.** `Date.now()` only
-  re-evaluates on a new fill, so a 5-minute-old fill reads "0s".
-  Add a 1s re-render or own the tick in a child. *~30 min.*
-- **Frontend — single `WebSocket` per tab via a context provider.**
-  Dashboard opens 3, stream opens 2. The H12 multi-WS issue from
-  prior rounds was only half-fixed. *~½ day.*
+- ✅ ~~**Frontend — `RecentFillsRail` age label bug.**~~ Already
+  shipped — `RecentFillsRail.tsx` has a `useState` + `setInterval`
+  that ticks `now` every 1s so a stale fill's age label stays
+  accurate (the parent only re-renders on new fill events). The
+  fix is in the file at the top of the `RecentFillsRail`
+  function; nothing to do.
+- ✅ ~~**Frontend — single `WebSocket` per tab via a context
+  provider.**~~ Already shipped in 0.13.0/0.14.0 — both apps
+  wrap the root in `<LiveProvider urlOverride={wsUrl}>` (see
+  `web/src/main.tsx:41` + `stream/src/App.tsx:193`). The
+  provider owns the single `new WebSocket(target)` and the
+  hooks (`useLiveEvents`, `useLiveContext`) are fan-out
+  registrations. The H12 multi-WS issue is fully closed.
 - ✅ ~~**Frontend — gate mock data behind `import.meta.env.DEV`.**~~
   Already shipped in 0.13.0 — Vite tree-shakes the dev branch of
   `web/src/vod/data.ts` + `web/src/dash/data.ts` exports in
