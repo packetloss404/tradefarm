@@ -304,6 +304,18 @@ const BUBBLE_MAX_CHARS = 60;
 const DOLLY_MS = 2_000;
 const DOLLY_SCALE = 1.55;
 const DOLLY_MIN_NOTIONAL = 5_000;
+// 0.30.0 — promotion cutscene. When a promotion event lands, the
+// matching sprite's halo radius ramps to CUTSCENE_HALO_PEAK over
+// CUTSCENE_MS, and a small SVG particle burst radiates outward
+// (CUTSCENE_PARTICLES circles flying along pre-computed unit
+// vectors). The world drift is NOT paused - the rAF keeps
+// ticking so the cutscene reads as "this agent is being
+// celebrated" rather than "time froze", which is a smaller
+// visual interruption for the broadcast.
+const CUTSCENE_MS = 1_500;
+const CUTSCENE_HALO_PEAK = 40;
+const CUTSCENE_PARTICLES = 8;
+const CUTSCENE_PARTICLE_RADIUS = 30;
 
 type Transition = { from: ZoneId; to: ZoneId; expiresAt: number };
 
@@ -448,7 +460,14 @@ export function AgentWorldXL({
   }, []);
 
   // Promotion halos
-  const [halos, setHalos] = useState<Map<number, { kind: "promotion" | "demotion"; expiresAt: number }>>(new Map());
+  // 0.30.0 — extended window + float signal. Promotion events
+  // use CUTSCENE_MS (1.5s, larger than the base HALO_MS of
+  // 2.4s for the ring animation) so the float + particle burst
+  // can play out. The Map value carries a `startedAt` so the
+  // render layer can compute the float interpolation.
+  const [halos, setHalos] = useState<
+    Map<number, { kind: "promotion" | "demotion"; startedAt: number; expiresAt: number }>
+  >(new Map());
 
   useEffect(() => {
     if (!promotionEvents || promotionEvents.length === 0) return;
@@ -457,8 +476,16 @@ export function AgentWorldXL({
       const next = new Map(prev);
       for (const e of promotionEvents) {
         const evtTime = new Date(e.ts).getTime();
-        if (now - evtTime > HALO_MS) continue;
-        next.set(e.payload.agent_id, { kind: e.type, expiresAt: evtTime + HALO_MS });
+        if (now - evtTime > CUTSCENE_MS) continue;
+        // Promotions get the full cutscene; demotions stay on the
+        // shorter HALO_MS so the visual contrast is preserved
+        // (promo = celebration, demo = brief flash).
+        const duration = e.type === "promotion" ? CUTSCENE_MS : HALO_MS;
+        next.set(e.payload.agent_id, {
+          kind: e.type,
+          startedAt: evtTime,
+          expiresAt: evtTime + duration,
+        });
       }
       return next;
     });
@@ -986,12 +1013,65 @@ export function AgentWorldXL({
                   transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
                 />
               )}
-              {haloColor && (
-                <circle r={20} fill="none" stroke={haloColor} strokeOpacity={0.85} strokeWidth={2.4}>
-                  <animate attributeName="r" from={10} to={28} dur="1.5s" repeatCount="indefinite" />
-                  <animate attributeName="stroke-opacity" from={0.9} to={0} dur="1.5s" repeatCount="indefinite" />
-                </circle>
-              )}
+              {haloColor && (() => {
+                // 0.30.0 — promotion cutscene render. The basic
+                // growing ring is kept (it's the "halo" the audit
+                // asked for), and we add a small particle burst
+                // (CUTSCENE_PARTICLES SVG circles flying outward
+                // along pre-computed unit vectors) for the
+                // celebration visual. The sprite float is left to
+                // the motion.g below (bouncing / slumping); a
+                // separate float keyframe would conflict with the
+                // bounce animation, so the cutscene reads as
+                // "halo + particles" without a sprite lift.
+                const isPromo = halo?.kind === "promotion";
+                const t = halo
+                  ? Math.max(0, Math.min(1, (replayNow() - halo.startedAt) / CUTSCENE_MS))
+                  : 0;
+                return (
+                  <>
+                    <circle
+                      r={20}
+                      fill="none"
+                      stroke={haloColor}
+                      strokeOpacity={0.85}
+                      strokeWidth={2.4}
+                    >
+                      <animate
+                        attributeName="r"
+                        from={20}
+                        to={CUTSCENE_HALO_PEAK}
+                        dur="1.5s"
+                        repeatCount="indefinite"
+                      />
+                      <animate
+                        attributeName="stroke-opacity"
+                        from="0.9"
+                        to="0"
+                        dur="1.5s"
+                        repeatCount="indefinite"
+                      />
+                    </circle>
+                    {isPromo &&
+                      Array.from({ length: CUTSCENE_PARTICLES }, (_, i) => {
+                        // 8 unit vectors, evenly spaced.
+                        const angle = (i / CUTSCENE_PARTICLES) * Math.PI * 2;
+                        const dx = Math.cos(angle) * CUTSCENE_PARTICLE_RADIUS * t;
+                        const dy = Math.sin(angle) * CUTSCENE_PARTICLE_RADIUS * t;
+                        return (
+                          <circle
+                            key={i}
+                            cx={dx}
+                            cy={dy}
+                            r={Math.max(0.4, 1.6 - 1.2 * t)}
+                            fill={haloColor}
+                            opacity={1 - t}
+                          />
+                        );
+                      })}
+                  </>
+                );
+              })()}
               {hasPosition && (
                 <circle r={15} fill="none" stroke="#fbbf24" strokeOpacity={0.85} strokeWidth={1.6} />
               )}

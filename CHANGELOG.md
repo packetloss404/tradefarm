@@ -11,6 +11,32 @@ commit on GitHub.
 
 - None yet.
 
+## [0.30.0] - 2026-08-05
+
+A "promotion cutscene" release.
+AgentWorldXL's promotion event now plays
+a 1.5s cutscene: the existing halo
+animates to a peak radius of 40 (up from
+28) and a particle burst of 8 SVG circles
+radiates outward along pre-computed unit
+vectors (shrinking + fading over the
+window). Demotions stay on the shorter
+2.4s halo so the visual contrast between
+"celebration" and "brief flash" is
+preserved. The world drift is NOT paused
+- the rAF keeps ticking so the cutscene
+reads as "this agent is being celebrated"
+rather than "time froze", which is a
+smaller visual interruption for the
+broadcast. The sprite-float portion of
+the original feature spec was skipped
+because it conflicts with the existing
+bounce / slump motion.g keyframes; the
+halo + particle burst carries the
+celebration signal on its own. No new
+env vars, no backend changes, no test
+infra. 1107 tests pass; stream tsc clean.
+
 ## [0.29.0] - 2026-08-05
 
 A "per-agent profile page" release.
