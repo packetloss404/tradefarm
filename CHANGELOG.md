@@ -11,6 +11,46 @@ commit on GitHub.
 
 - None yet.
 
+## [0.18.1] - 2026-08-05
+
+Hotfix for the legacy `web/src/dash/Admin.tsx`
+admin *tab* (the one at `localhost:5179/#admin`)
+that the 0.18.0 McLove pass missed. Three fixes:
+
+- The Strategies section was hardcoded to 3
+  strategies. Now reads the 8-strategy list from
+  the live `/admin/config._meta.known_strategies`
+  (same path the McLoved modal uses).
+- The BRAIN PROVIDER section had no model
+  picker. Mounted `<LlmModelPicker />` and added
+  `openai` to the provider Segment + an
+  `openai_api_key` field, mirroring the modal.
+- The legacy route used a 640px modal treatment
+  that hid the strategies table below the fold.
+  Added a `fullPage` prop to `AdminModal`; the
+  legacy `Admin.tsx` now passes `fullPage=true`
+  so the admin renders as an in-page takeover
+  (no overlay, "back to dashboard" button).
+
+Also: demo catalog fallback for the LLM model
+catalog. When an API key is missing, the backend
+returns a curated demo list with `ok: true` and
+a `warning: "<KEY> not set; showing demo catalog"`
+so dev/QA sees the real lineup with cost hints.
+Production always has keys so the demo path is
+unreachable in practice.
+
+Test fix: 5th instance of the carryover test
+isolation family. `tests/orchestrator/test_daily_recap_scheduler.py`
+now uses the canonical `set_replay_now` ContextVar
+pattern instead of `monkeypatch.setattr(clock_mod,
+...)`. The market clock's `is_market_closed_for_n_minutes`
+reads `now_utc` via module-level import, so a direct
+monkeypatch on `clock_mod.now_utc` was leaking the
+real wall clock to the market-clock check; the
+ContextVar pattern is the only one that affects
+every reader. 1069 passed, 8 skipped, 0 failed.
+
 ---
 
 ## [0.18.0] — 2026-08-05
