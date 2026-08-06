@@ -339,9 +339,18 @@ function ModelDropdown({
       {providerSection && providerSection.ok && providerSection.models.length > 0 && (
         <ModelListHint models={providerSection.models} value={value} />
       )}
-      {providerSection && !providerSection.ok && (
-        <div className="mt-1 text-[10px] text-(--color-loss) font-mono">
-          fetch failed: {providerSection.error ?? "unknown error"}
+      {providerSection && providerSection.error && (
+        // Two flavors: ok=false means the live fetch failed (red);
+        // ok=true with a warning string means the catalog is the
+        // 0.18.0 demo fallback (no API key set). Both should surface
+        // a one-liner so the operator knows what they're seeing.
+        <div
+          className={`mt-1 text-[10px] font-mono ${
+            providerSection.ok ? "text-amber-400" : "text-(--color-loss)"
+          }`}
+        >
+          {providerSection.ok ? "demo: " : "fetch failed: "}
+          {providerSection.error}
         </div>
       )}
     </div>

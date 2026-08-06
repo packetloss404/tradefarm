@@ -150,8 +150,15 @@ def _today_et_window() -> tuple[datetime, datetime, datetime]:
     test bounds + insertion timestamps. ``midday_utc`` is comfortably inside
     the window with ~5 minutes of headroom on both sides so individual
     rows can be offset by a few seconds without spilling past the end.
+
+    0.18.0 — reads the runtime clock (``tradefarm.runtime.clock.now_utc``)
+    so the test honours the `set_replay_now()` pin the calling test
+    installed. Without this, the test used `datetime.now(timezone.utc)`
+    directly and the pin had no effect.
     """
-    now_utc = datetime.now(timezone.utc)
+    from tradefarm.runtime.clock import now_utc as _runtime_now_utc
+
+    now_utc = _runtime_now_utc()
     now_et = now_utc.astimezone(ET)
     midnight_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
     start_utc = midnight_et.astimezone(timezone.utc)
@@ -457,63 +464,76 @@ async def test_promotions_today_filters_demotions_and_orders_newest(recap_db):
     from tradefarm.api.recap import build_recap
     from tradefarm.storage.models import AcademyPromotion
 
-    start_utc, end_utc, mid = _today_et_window()
-    mid_naive = mid.replace(tzinfo=None)
-    earlier_naive = mid_naive - timedelta(minutes=30)
-    async with recap_db() as s:
-        # Promotion (intern → junior), earlier today.
-        s.add(
-            AcademyPromotion(
-                agent_id=1,
-                from_rank="intern",
-                to_rank="junior",
-                reason="t1",
-                stats_snapshot="{}",
-                at=earlier_naive,
-            )
-        )
-        # Promotion (junior → senior), later today.
-        s.add(
-            AcademyPromotion(
-                agent_id=2,
-                from_rank="junior",
-                to_rank="senior",
-                reason="t2",
-                stats_snapshot="{}",
-                at=mid_naive,
-            )
-        )
-        # Demotion (should be filtered).
-        s.add(
-            AcademyPromotion(
-                agent_id=1,
-                from_rank="senior",
-                to_rank="junior",
-                reason="d",
-                stats_snapshot="{}",
-                at=mid_naive - timedelta(minutes=10),
-            )
-        )
-        await s.commit()
+    # 0.18.0 — pin the runtime clock to a known mid-day ET timestamp
+    # so the `_today_et_window()`'s `mid - 30min` math lands safely
+    # within the window. Without this, the test fails when run
+    # between 00:00-01:00 ET (where the bounds start at midnight
+    # and the "earlier" timestamp falls in the previous day).
+    # Mirrors the 0.11.0 carryover fix for the VOD scheduler test.
+    from tradefarm.runtime.clock import reset_replay_now, set_replay_now
 
-    orch = _make_orch(board=_StubBoard([]))
-    payload = await build_recap(
-        orch,
-        session_factory=recap_db,
-        bounds=(start_utc, end_utc),
-    )
-    promos = payload["promotions"]
-    assert len(promos) == 2
-    # Newest first.
-    assert promos[0]["to"] == "senior"
-    assert promos[0]["from"] == "junior"
-    assert promos[0]["agent_id"] == 2
-    assert promos[0]["agent_name"] == "agent-002"
-    assert promos[1]["to"] == "junior"
-    assert promos[1]["from"] == "intern"
-    # All ISO-UTC.
-    for p in promos:
-        assert p["at"].endswith("Z")
+    fixed_now_utc = datetime(2026, 8, 6, 18, 0, 0, tzinfo=timezone.utc)  # 14:00 ET
+    token = set_replay_now(fixed_now_utc)
+    try:
+        start_utc, end_utc, mid = _today_et_window()
+        mid_naive = mid.replace(tzinfo=None)
+        earlier_naive = mid_naive - timedelta(minutes=30)
+        async with recap_db() as s:
+            # Promotion (intern → junior), earlier today.
+            s.add(
+                AcademyPromotion(
+                    agent_id=1,
+                    from_rank="intern",
+                    to_rank="junior",
+                    reason="t1",
+                    stats_snapshot="{}",
+                    at=earlier_naive,
+                )
+            )
+            # Promotion (junior → senior), later today.
+            s.add(
+                AcademyPromotion(
+                    agent_id=2,
+                    from_rank="junior",
+                    to_rank="senior",
+                    reason="t2",
+                    stats_snapshot="{}",
+                    at=mid_naive,
+                )
+            )
+            # Demotion (should be filtered).
+            s.add(
+                AcademyPromotion(
+                    agent_id=1,
+                    from_rank="senior",
+                    to_rank="junior",
+                    reason="d",
+                    stats_snapshot="{}",
+                    at=mid_naive - timedelta(minutes=10),
+                )
+            )
+            await s.commit()
+
+        orch = _make_orch(board=_StubBoard([]))
+        payload = await build_recap(
+            orch,
+            session_factory=recap_db,
+            bounds=(start_utc, end_utc),
+        )
+        promos = payload["promotions"]
+        assert len(promos) == 2
+        # Newest first.
+        assert promos[0]["to"] == "senior"
+        assert promos[0]["from"] == "junior"
+        assert promos[0]["agent_id"] == 2
+        assert promos[0]["agent_name"] == "agent-002"
+        assert promos[1]["to"] == "junior"
+        assert promos[1]["from"] == "intern"
+        # All ISO-UTC.
+        for p in promos:
+            assert p["at"].endswith("Z")
+    finally:
+        reset_replay_now(token)
 
 
 # ---------------------------------------------------------------------------

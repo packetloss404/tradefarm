@@ -315,9 +315,10 @@ async def test_get_catalog_fans_out_to_all_three_providers(
 async def test_get_catalog_skips_provider_without_key(
     patch_get_shared_client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A missing env key short-circuits that provider's fetch - no
-    network call, ``ok=False`` with a specific error string. The
-    other providers' fetches still proceed."""
+    """A missing env key short-circuits to the 0.18.0 demo fallback -
+    the listing is ``ok=True`` with the static demo catalog + a
+    warning string in ``error``. The Anthropic fetch still proceeds
+    normally because its key is set."""
     # Only Anthropic set; OpenAI + MiniMax keys are absent.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -337,16 +338,25 @@ async def test_get_catalog_skips_provider_without_key(
             ),
             # OpenAI + MiniMax are NOT in the handler map; a
             # request to either URL would raise AssertionError
-            # from the mock transport.
+            # from the mock transport (proving the demo fallback
+            # short-circuited the network call).
         }
     )
 
     cat = await catalog.get_model_catalog()
+    # Anthropic: real fetch succeeded.
     assert cat.anthropic.ok is True
-    assert cat.openai.ok is False
+    assert {m.id for m in cat.anthropic.models} == {"claude-haiku-4-5-20251001"}
+    # OpenAI + MiniMax: demo fallback. ``ok=True`` so the dropdown
+    # populates; the warning lives in ``error``.
+    assert cat.openai.ok is True
+    assert len(cat.openai.models) > 0  # demo list non-empty
     assert "OPENAI_API_KEY" in (cat.openai.error or "")
-    assert cat.minimax.ok is False
+    assert "demo catalog" in (cat.openai.error or "").lower()
+    assert cat.minimax.ok is True
+    assert len(cat.minimax.models) > 0
     assert "MINIMAX_API_KEY" in (cat.minimax.error or "")
+    assert "demo catalog" in (cat.minimax.error or "").lower()
 
 
 async def test_get_catalog_handles_partial_failure(

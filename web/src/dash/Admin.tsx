@@ -12,6 +12,13 @@ import { useTheme } from "./ThemeContext";
 import { DEFAULT_ADMIN_CONFIG } from "./data";
 import type { DashAdminConfig } from "./types";
 import { fmtMoney } from "../vod/widgets";
+// 0.18.0 — live LLM model picker. The legacy admin page used a
+// free-form `llm_model` text input; the new `<LlmModelPicker />`
+// hits each provider's `/v1/models` API, caches for 60 minutes,
+// and shows the current top-line models with cost hints. We mount
+// it inside the BRAIN PROVIDER section so the legacy page has
+// parity with the McLoved modal.
+import { LlmModelPicker } from "../components/LlmModelPicker";
 
 // Recognise the backend's masked-secret sentinel so we never POST it
 // back as a literal value (which would persist the dots into .env and
@@ -165,7 +172,14 @@ function useDashAdminConfig() {
     };
   }, []);
 
-  return { config: local, update, liveReachable: !error, status, statusMsg };
+  return {
+    config: local,
+    update,
+    liveReachable: !error,
+    liveMeta: liveCfg?._meta,
+    status,
+    statusMsg,
+  };
 }
 
 // --- Tiny atoms used throughout the page ------------------------------
@@ -656,9 +670,19 @@ function Slider({
 function StrategyTable({
   config,
   update,
+  liveMeta,
 }: {
   config: DashAdminConfig;
   update: <K extends keyof DashAdminConfig>(k: K, v: DashAdminConfig[K]) => void;
+  // 0.18.0 — the strategy list + per-strategy agent counts now come
+  // from the live `/admin/config` payload (`_meta.known_strategies`
+  // + `_meta.strategy_agent_counts`) instead of a hardcoded 3-row
+  // fixture. The hardcoded list was 0.5.0-era and was missing the
+  // 5 active strategies that have been in the live system since
+  // round 6. Falls back to an empty list when `_meta` isn't loaded
+  // yet (the SWR hasn't returned) so the table renders "no data"
+  // instead of stale fixtures.
+  liveMeta?: { known_strategies?: string[]; strategy_agent_counts?: Record<string, number> };
 }) {
   const { T } = useTheme();
   const disabled = new Set(
@@ -667,12 +691,25 @@ function StrategyTable({
       .map((s) => s.trim())
       .filter(Boolean),
   );
-  const strategies = [
-    { key: "momentum_sma20", label: "momentum_sma20", agents: 33, pnl: 700, fills: 102 },
-    { key: "lstm_v1", label: "lstm_v1", agents: 33, pnl: 396, fills: 89 },
-    { key: "lstm_llm_v1", label: "lstm_llm_v1", agents: 34, pnl: 744, fills: 121 },
-  ];
+  // Live list: 8 strategies from the backend (some with 0 active
+  // agents — `momentum_sma20`, `lstm_v1`, `lstm_llm_v1` are
+  // configured but the runtime hasn't allocated any agents to
+  // them yet; the admin can still toggle them).
+  const liveKeys = liveMeta?.known_strategies ?? [];
+  const liveCounts = liveMeta?.strategy_agent_counts ?? {};
+  // Merge: live keys (in server order) + counts. If the live
+  // payload is still loading, fall back to a single "loading..."
+  // row so the table never renders the old 3-row fixture.
+  const strategies =
+    liveKeys.length > 0
+      ? liveKeys.map((key) => ({
+          key,
+          label: key,
+          agents: liveCounts[key] ?? 0,
+        }))
+      : [{ key: "_loading", label: "loading...", agents: 0 }];
   const toggle = (k: string) => {
+    if (k === "_loading") return;
     const next = new Set(disabled);
     if (next.has(k)) next.delete(k);
     else next.add(k);
@@ -701,19 +738,7 @@ function StrategyTable({
               {s.label}
             </span>
             <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: T.text2 }}>
-              {s.agents} agents · {s.fills} fills
-            </span>
-            <span
-              style={{
-                fontFamily: "JetBrains Mono, monospace",
-                fontSize: 13,
-                fontWeight: 600,
-                color: s.pnl > 0 ? T.ok : T.err,
-                width: 80,
-                textAlign: "right",
-              }}
-            >
-              {fmtMoney(s.pnl, { signed: true, dp: 0 })}
+              {s.agents} agent{s.agents === 1 ? "" : "s"}
             </span>
             <span
               style={{
@@ -1100,7 +1125,7 @@ function DangerZone() {
 
 export function AdminPage() {
   const { T } = useTheme();
-  const { config, update, liveReachable, status, statusMsg } = useDashAdminConfig();
+  const { config, update, liveReachable, liveMeta, status, statusMsg } = useDashAdminConfig();
   return (
     <div>
       <AdminHeader config={config} update={update} status={status} statusMsg={statusMsg} />
@@ -1126,33 +1151,37 @@ export function AdminPage() {
             title="BRAIN PROVIDER"
             sub="LLM overlay for lstm_llm_v1 agents. Switch hot-reloads the overlay."
           >
+            {/* 0.18.0 — added OpenAI to the provider list. The free-form
+                Model text input is replaced with the live model picker
+                below (3-provider radio + per-provider dropdown + 60s
+                SWR + cost hints). */}
             <Field label="Provider">
               <Segment
                 value={config.llm_provider}
                 onChange={(v) => update("llm_provider", v as DashAdminConfig["llm_provider"])}
                 options={[
                   { value: "anthropic", label: "Anthropic (Claude)" },
+                  { value: "openai", label: "OpenAI" },
                   { value: "minimax", label: "MiniMax" },
                 ]}
               />
             </Field>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              <Field label="Model">
-                <Input
-                  value={config.llm_model}
-                  onChange={(v) => update("llm_model", v)}
-                  placeholder={
-                    config.llm_provider === "minimax"
-                      ? "M2.7-highspeed"
-                      : "claude-haiku-4-5"
-                  }
-                />
-              </Field>
-              {/* Audit fix (round-3 W): condition the API-key field on
-                  the selected provider so MiniMax users get the right
-                  key editor instead of the silently-broken Anthropic
-                  field. Mirrors the legacy AdminModal pattern. */}
-              {config.llm_provider === "minimax" ? (
+            <div style={{ marginTop: 4 }}>
+              <LlmModelPicker />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 12 }}>
+              {config.llm_provider === "openai" ? (
+                <Field
+                  label="OpenAI API key"
+                  hint="masked · stored in .env · /admin/config POST"
+                >
+                  <Input
+                    value={config.openai_api_key ?? ""}
+                    onChange={(v) => update("openai_api_key", v)}
+                    mono
+                  />
+                </Field>
+              ) : config.llm_provider === "minimax" ? (
                 <Field
                   label="MiniMax API key"
                   hint="masked · stored in .env · /admin/config POST"
@@ -1225,7 +1254,7 @@ export function AdminPage() {
           title="STRATEGIES"
           sub="Freeze a strategy and its agents keep open positions but skip new decisions."
         >
-          <StrategyTable config={config} update={update} />
+          <StrategyTable config={config} update={update} liveMeta={liveMeta} />
         </AdminSection>
 
         <AdminSection

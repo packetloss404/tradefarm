@@ -46,9 +46,13 @@ export type LbHistory = { agents: Agent[]; series: LbDay[] };
 export type DashAdminConfig = {
   ai_enabled: boolean;
   execution_mode: "simulated" | "alpaca_paper";
-  llm_provider: "anthropic" | "minimax";
+  // 0.18.0 — OpenAI added to the provider union. Older backends
+  // (pre-0.18.0) might not have the field; the form reads through
+  // `liveMeta` to know what's available.
+  llm_provider: "anthropic" | "minimax" | "openai";
   llm_model: string;
   anthropic_api_key: string;
+  openai_api_key?: string;
   minimax_api_key: string;
   llm_min_confidence: number;
   // 0.14.0 — daily LLM spend cap (USD). Optional for older backends

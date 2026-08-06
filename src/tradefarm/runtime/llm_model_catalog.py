@@ -159,6 +159,149 @@ _cache: ModelCatalog | None = None
 _cache_fetched_monotonic: float = 0.0
 
 
+# 0.18.0 — demo catalog fallback. When the operator hasn't set a
+# provider's API key, the live `/v1/models` call can't happen, so
+# instead of returning `ok: false, error: "ANTHROPIC_API_KEY not
+# set"` (which leaves the admin modal's dropdown disabled), we
+# return a curated demo listing of the current top-line models
+# with `ok: true` and `error: "ANTHROPIC_API_KEY not set; showing
+# demo catalog"`. The dashboard's `<LlmModelPicker />` shows the
+# warning text + populates the dropdown + lets the operator see the
+# real lineup + cost hints. Production boxes always have keys set,
+# so the demo path is unreachable in practice; it's a dev/QA affordance.
+_DEMO_CATALOG: dict[str, tuple[ModelEntry, ...]] = {
+    "anthropic": (
+        ModelEntry(
+            id="claude-haiku-4-5-20251001",
+            display_name="Claude Haiku 4.5",
+            created_at="2025-10-01",
+            context_tokens=200_000,
+        ),
+        ModelEntry(
+            id="claude-sonnet-5",
+            display_name="Claude Sonnet 5",
+            created_at="2026-06-30",
+            context_tokens=1_000_000,
+        ),
+        ModelEntry(
+            id="claude-opus-4-8",
+            display_name="Claude Opus 4.8",
+            created_at="2026-07-01",
+            context_tokens=1_000_000,
+        ),
+        ModelEntry(
+            id="claude-fable-5",
+            display_name="Claude Fable 5",
+            created_at="2026-07-15",
+            context_tokens=1_000_000,
+        ),
+    ),
+    "openai": (
+        ModelEntry(
+            id="gpt-5.6-sol",
+            display_name="GPT-5.6 Sol (flagship)",
+            created_at="2026-07-09",
+            context_tokens=1_000_000,
+            cost_hint_usd={"input_per_million": 5.00, "output_per_million": 30.00},
+        ),
+        ModelEntry(
+            id="gpt-5.6",
+            display_name="GPT-5.6 (alias for Sol)",
+            created_at="2026-07-09",
+            context_tokens=1_000_000,
+            cost_hint_usd={"input_per_million": 5.00, "output_per_million": 30.00},
+        ),
+        ModelEntry(
+            id="gpt-5.6-terra",
+            display_name="GPT-5.6 Terra",
+            created_at="2026-07-09",
+            context_tokens=1_000_000,
+            cost_hint_usd={"input_per_million": 2.50, "output_per_million": 15.00},
+        ),
+        ModelEntry(
+            id="gpt-5.6-luna",
+            display_name="GPT-5.6 Luna (cheap)",
+            created_at="2026-07-09",
+            context_tokens=1_000_000,
+            cost_hint_usd={"input_per_million": 1.00, "output_per_million": 6.00},
+        ),
+        ModelEntry(
+            id="gpt-5",
+            display_name="GPT-5",
+            created_at="2025-12-01",
+            context_tokens=400_000,
+        ),
+        ModelEntry(
+            id="gpt-5-mini",
+            display_name="GPT-5 Mini",
+            created_at="2025-12-01",
+            context_tokens=400_000,
+        ),
+        ModelEntry(
+            id="o3",
+            display_name="o3 (reasoning)",
+            created_at="2026-01-15",
+            context_tokens=200_000,
+        ),
+        ModelEntry(
+            id="o4-mini",
+            display_name="o4-mini (reasoning)",
+            created_at="2026-04-01",
+            context_tokens=200_000,
+        ),
+    ),
+    "minimax": (
+        ModelEntry(
+            id="MiniMax-M3",
+            display_name="MiniMax-M3 (new top-line, 1M ctx)",
+            created_at="2026-06-01",
+            context_tokens=1_000_000,
+        ),
+        ModelEntry(
+            id="MiniMax-M2.7-highspeed",
+            display_name="MiniMax-M2.7-highspeed",
+            created_at="2026-03-15",
+            context_tokens=200_000,
+        ),
+        ModelEntry(
+            id="MiniMax-M2.7",
+            display_name="MiniMax-M2.7",
+            created_at="2026-03-15",
+            context_tokens=200_000,
+        ),
+        ModelEntry(
+            id="MiniMax-M2.5",
+            display_name="MiniMax-M2.5",
+            created_at="2025-11-20",
+            context_tokens=128_000,
+        ),
+    ),
+}
+
+
+def _demo_listing_for(provider: str) -> ProviderListing:
+    """Return a ``ProviderListing(ok=True)`` with the demo catalog for
+    ``provider`` and a warning string in the ``error`` field so the
+    dashboard can show "no API key set; showing demo catalog" inline
+    while the dropdown is still functional.
+
+    The demo lists mirror the per-provider top-line as of 2026-08;
+    the live fetch replaces them as soon as the operator sets a
+    real key. Updated in lockstep with ``docs/research/llm-model-discovery.md``.
+    """
+    env_var = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "minimax": "MINIMAX_API_KEY",
+    }.get(provider, "?")
+    return ProviderListing(
+        ok=True,
+        models=_DEMO_CATALOG.get(provider, ()),
+        fetched_at=None,
+        error=f"{env_var} not set; showing demo catalog (set the env var to fetch the real lineup)",
+    )
+
+
 # ---------------------------------------------------------------------------
 # /v1/models fetchers - one per provider. Each is a small async
 # function that returns a :class:`ProviderListing`. They swallow
@@ -172,10 +315,8 @@ async def _fetch_anthropic(client: httpx.AsyncClient) -> ProviderListing:
     """Fetch Anthropic's model list. Requires ``ANTHROPIC_API_KEY``."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        return ProviderListing(
-            ok=False,
-            error="ANTHROPIC_API_KEY not set",
-        )
+        # 0.18.0 — demo fallback. See _demo_listing_for docstring.
+        return _demo_listing_for("anthropic")
 
     async def _do_fetch() -> dict[str, Any]:
         response = await client.get(
@@ -201,10 +342,7 @@ async def _fetch_openai(client: httpx.AsyncClient) -> ProviderListing:
     """Fetch OpenAI's model list. Requires ``OPENAI_API_KEY``."""
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
-        return ProviderListing(
-            ok=False,
-            error="OPENAI_API_KEY not set",
-        )
+        return _demo_listing_for("openai")
 
     async def _do_fetch() -> dict[str, Any]:
         response = await client.get(
@@ -238,10 +376,7 @@ async def _fetch_minimax(client: httpx.AsyncClient) -> ProviderListing:
 
     api_key = os.environ.get("MINIMAX_API_KEY", "")
     if not api_key:
-        return ProviderListing(
-            ok=False,
-            error="MINIMAX_API_KEY not set",
-        )
+        return _demo_listing_for("minimax")
 
     # The base URL ends in /v1; the /v1/models endpoint is one
     # level deeper. Strip the trailing /v1 if present, then

@@ -117,41 +117,59 @@ def _disable_other_loops(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _freeze_now(monkeypatch, iso_utc: str) -> None:
-    """Pin ``runtime.clock.now_utc()`` to a specific instant for one test.
+@pytest.fixture
+def freeze_now():
+    """Pin the runtime clock for the duration of one test.
 
-    The scheduler reads the wall clock through ``runtime.clock.now_utc``;
-    we don't have a swap hook, so we patch the ``_runtime_clock_now_utc``
-    symbol in the broadcast_suite module directly. The module imports
-    it lazily inside the method, so we patch the source: ``runtime.clock``.
+    Uses ``set_replay_now`` (a ContextVar override) instead of patching
+    ``clock_mod.now_utc`` directly. Why: the suite calls
+    ``is_market_closed_for_n_minutes(0)`` which reads ``now_utc`` via
+    ``market_clock``'s module-level import. A direct ``monkeypatch`` on
+    ``clock_mod.now_utc`` does NOT affect ``market_clock.now_utc``'s
+    captured reference, so the market-clock check still uses wall-clock
+    time. That mismatch makes the test fail in any wall-clock window
+    that disagrees with the test's frozen time (e.g. real time in the
+    pre-16:00-ET morning, real time on a different date). The
+    ContextVar approach is the canonical pattern — ``now_utc()``
+    itself checks ``_replay_now.get()`` on every call, so every
+    module that imported ``now_utc`` (lazy or eager) sees the same
+    override.
+
+    We do NOT explicitly reset the override: pytest-asyncio with
+    ``asyncio: mode=Mode.AUTO`` runs each async test in a fresh event
+    loop, which gets a fresh ``Context`` with a fresh ContextVar.
+    The override from the previous test is unreachable from the new
+    context, so the leak is contained per-test.
+
+    Usage::
+
+        async def test_x(freeze_now):
+            freeze_now("2026-08-04T20:00:30+00:00")
+            ...
     """
-    import tradefarm.runtime.clock as clock_mod
+    from tradefarm.runtime.clock import set_replay_now
 
-    target = datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
+    def _set(iso_utc: str) -> None:
+        target = datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
+        set_replay_now(target)
 
-    def _frozen_now() -> datetime:
-        return target
-
-    monkeypatch.setattr(clock_mod, "now_utc", _frozen_now)
-    # The broadcast_suite module re-imports now_utc lazily at the call
-    # site, so the patched symbol in clock_mod is the one read. Nothing
-    # else to wire.
+    return _set
 
 
 async def test_should_fire_at_1600_et_on_a_trading_day(
-    monkeypatch, daily_recap_db, _isolate_arbiter
+    freeze_now, daily_recap_db, _isolate_arbiter
 ) -> None:
     """At 16:00 ET on a normal trading day (no prior row), the predicate
     returns True. The 30-min grace window covers a slow tick at 16:00:30.
     """
     # Tuesday 2026-08-04 is a normal NYSE trading day. 16:00 ET = 20:00 UTC.
-    _freeze_now(monkeypatch, "2026-08-04T20:00:30+00:00")
+    freeze_now("2026-08-04T20:00:30+00:00")
     suite = BroadcastSuite(_StubOrch())
     assert await suite._should_fire_daily_recap() is True
 
 
 async def test_should_not_fire_outside_window(
-    monkeypatch, daily_recap_db, _isolate_arbiter
+    freeze_now, daily_recap_db, _isolate_arbiter
 ) -> None:
     """Outside [16:00, 16:30) ET, the predicate returns False even on
     a trading day. Verify 15:59:59 (just before) and 16:30:00 (just
@@ -160,16 +178,16 @@ async def test_should_not_fire_outside_window(
     suite = BroadcastSuite(_StubOrch())
 
     # 15:59:59 ET = 19:59:59 UTC.
-    _freeze_now(monkeypatch, "2026-08-04T19:59:59+00:00")
+    freeze_now("2026-08-04T19:59:59+00:00")
     assert await suite._should_fire_daily_recap() is False
 
     # 16:30 ET = 20:30 UTC. After the grace window.
-    _freeze_now(monkeypatch, "2026-08-04T20:30:00+00:00")
+    freeze_now("2026-08-04T20:30:00+00:00")
     assert await suite._should_fire_daily_recap() is False
 
 
 async def test_should_not_fire_on_holiday(
-    monkeypatch, daily_recap_db, _isolate_arbiter
+    monkeypatch, freeze_now, daily_recap_db, _isolate_arbiter
 ) -> None:
     """A holiday at 16:00 ET must NOT trigger the recap. We mock
     ``is_market_closed_for_n_minutes(0)`` to return False (the
@@ -187,19 +205,19 @@ async def test_should_not_fire_on_holiday(
 
     # 16:00 ET on a Saturday (no market session) — predicate would
     # otherwise be True without the holiday guard.
-    _freeze_now(monkeypatch, "2026-08-08T20:00:00+00:00")
+    freeze_now("2026-08-08T20:00:00+00:00")
     suite = BroadcastSuite(_StubOrch())
     assert await suite._should_fire_daily_recap() is False
 
 
 async def test_should_not_fire_when_row_already_written(
-    monkeypatch, daily_recap_db, _isolate_arbiter
+    freeze_now, daily_recap_db, _isolate_arbiter
 ) -> None:
     """A pre-existing ``daily_recap_fired`` row for today makes the
     predicate skip. This is the per-day idempotency contract — a
     restart at 4:02pm must NOT re-fire the moment.
     """
-    _freeze_now(monkeypatch, "2026-08-04T20:00:30+00:00")
+    freeze_now("2026-08-04T20:00:30+00:00")
     # Seed a row for today's ET date. The predicate reads via
     # ``runtime.clock.now_utc()``; the row's date matches.
     today_iso = "2026-08-04"
@@ -217,7 +235,7 @@ async def test_should_not_fire_when_row_already_written(
 
 
 async def test_fire_publishes_canonical_moment_and_writes_row(
-    monkeypatch, daily_recap_db, _isolate_arbiter
+    freeze_now, daily_recap_db, _isolate_arbiter
 ) -> None:
     """``_fire_daily_recap_moment`` publishes a moment with the
     documented shape AND writes the per-day idempotency row.
@@ -226,7 +244,7 @@ async def test_fire_publishes_canonical_moment_and_writes_row(
     canonical record path is exercised end-to-end) and the row lands in
     ``daily_recap_fired`` (so the next tick sees the dedupe).
     """
-    _freeze_now(monkeypatch, "2026-08-04T20:00:30+00:00")
+    freeze_now("2026-08-04T20:00:30+00:00")
     suite = BroadcastSuite(_StubOrch())
     ledger = _isolate_arbiter  # autouse fixture installs a fresh ledger
 

@@ -35,7 +35,7 @@ import { useFocusTrap } from "../lib/useFocusTrap";
 
 const ADMIN_TITLE_ID = "admin-modal-title";
 
-export function AdminModal({ onClose }: { onClose: () => void }) {
+export function AdminModal({ onClose, fullPage = false }: { onClose: () => void; fullPage?: boolean }) {
   const [backtestOpen, setBacktestOpen] = useState(false);
   const { data, error, mutate } = useSWR<AdminConfig>("admin-config", api.adminConfig);
   const [draft, setDraft] = useState<AdminPatch>({});
@@ -124,7 +124,7 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
   const minimaxPlaceholder = data.minimax_api_key.set ? data.minimax_api_key.masked : "paste key";
 
   return (
-    <Shell onClose={onClose} titleId={ADMIN_TITLE_ID} dialogRef={dialogRef}>
+    <Shell onClose={onClose} titleId={ADMIN_TITLE_ID} dialogRef={dialogRef} fullPage={fullPage}>
       <header className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
         <div>
           <div id={ADMIN_TITLE_ID} className="text-lg font-semibold">Admin</div>
@@ -132,10 +132,10 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
         </div>
         <button
           onClick={onClose}
-          aria-label="Close admin modal"
+          aria-label={fullPage ? "Back to dashboard" : "Close admin modal"}
           className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
         >
-          esc
+          {fullPage ? "<- back" : "esc"}
         </button>
       </header>
 
@@ -431,12 +431,30 @@ function Shell({
   onClose,
   titleId,
   dialogRef,
+  fullPage = false,
 }: {
   children: React.ReactNode;
   onClose: () => void;
   titleId?: string;
   dialogRef?: React.RefObject<HTMLDivElement | null>;
+  fullPage?: boolean;
 }) {
+  // Two layouts share the same children:
+  //   - modal:    fixed overlay with a 640px-wide dialog, dark backdrop, click-outside-to-close
+  //   - fullPage: in-page takeover, no overlay, dialog fills the panel; "close" navigates back
+  if (fullPage) {
+    return (
+      <div
+        ref={dialogRef}
+        role="region"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="flex h-full w-full flex-col overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 focus:outline-none"
+      >
+        {children}
+      </div>
+    );
+  }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
