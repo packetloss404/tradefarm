@@ -18,33 +18,62 @@ edge for trading.
 ## Features
 
 - **100 agents × $1,000 virtual books** on top of one pooled Alpaca paper account
-- **Three strategy families** (`momentum_sma20`, `lstm_v1`, `lstm_llm_v1`) with
-  per-strategy enable/disable toggles
+- **Eight strategy families** (8 buckets, 100 agents spread across them)
+  with per-strategy enable/disable toggles:
+  `momentum_12_1`, `momentum_sma20`, `mean_reversion_bb`, `rsi2`,
+  `donchian_breakout`, `pairs_zscore`, `lstm_v1`, `lstm_llm_v1`
+  (`momentum_sma20` is the legacy alias kept for back-compat)
 - **LSTM brain** — 2-layer LSTM(64) per symbol with 19 engineered features,
   3-class direction head + confidence head, class-balanced training
-- **LLM overlay** — Claude Haiku 4.5 (prompt caching) *or* MiniMax
-  M2.7-highspeed (OpenAI-compatible endpoint). Pluggable provider interface
+- **LLM overlay** — Anthropic Claude (Haiku 4.5 + Sonnet 5 + Opus 4.8 +
+  Fable 5, prompt caching), OpenAI GPT-5.6 (Sol / Terra / Luna + aliases),
+  *or* MiniMax (M2.7 / M2.7-highspeed / M3). Pluggable provider
+  interface with live `/v1/models` discovery so the operator picks
+  the current model from a dropdown without touching `.env`
 - **Cost gate** — when LSTM max-prob < 0.40, the LLM call is skipped entirely;
   cuts ~78% of API calls with no loss of trades
+- **Intraday mark path** — 0.24.0 — during RTH with `INTRADAY_ENABLED=true`,
+  the orchestrator refreshes marks from EODHD's 5m bars instead of
+  yesterday's daily close (paid-tier endpoint; 401/403 short-circuits
+  to the daily mark). Off-RTH the daily path stays in charge regardless
+- **Daily recap scheduler** — 0.16.0 — at 4pm ET, fires a `broadcast_moment`
+  with the day's leader + a `LiveRecapScene` plays in the rotator.
+  Writes a per-day `daily_recap_fired` idempotency row, then snapshots
+  per-strategy attribution into `strategy_daily_attribution` so the
+  `/pnl/by-strategy/timeseries` endpoint doesn't re-aggregate on every
+  chart poll
+- **Rivalry Week podcast** — 0.16.0 — every Sunday, a 10–15 min LLM-narrated
+  podcast of the week's top-3 rivalries + leaderboard moves, composed
+  via the `render.podcast` pipeline
+- **Decision feed sidebar** — 0.19.0 — persistent sidebar on the
+  dashboard's Today page with the last ~50 per-agent decision-lab
+  entries; SWR-polled + WS-subscribed so fresh entries prepend
+  immediately. `?agent_id=N`, `?only_llm=true`, `?limit=N` filters
 - **Walk-forward backtester** — per-symbol Sharpe / CAGR / max-drawdown / win-rate,
   launchable from the admin modal
-- **Multi-page dashboard** (Vite + React 19) — four hash-routed surfaces
+- **Multi-page dashboard** (Vite + React 19) — six hash-routed surfaces
   sharing one theme (dark / light / amber-CRT with scanlines, density
   switcher, all in a bottom-right tweaks panel):
   - **Today** (`#today`) — hero strip, cost burn rail, live equity chart,
     25×4 agent pixel grid, tonight's render pipeline, episode preview,
-    recent fills, detected moments. Reads live `/api/account`,
+    recent fills, detected moments, open-positions sparkline strip,
+    **decision feed sidebar** (0.19.0). Reads live `/api/account`,
     `/api/agents`, `/api/llm/stats`, and the `/ws` fill stream.
   - **Episodes** (`#episodes`) — featured latest episode, 6-week P&L
     heatmap, archive grid with a "beats-as-day-shape" sparkline per
-    card (mocked until the episodes endpoint exists).
+    card.
   - **Research** (`#research`) — 14-session pool equity vs $100k
     baseline, top-10 leaderboard with rank-history sparklines, strategy
     attribution diverging bars, storyline cards (rivalries, streaks,
     leaderboard climbs) with 14-day activity ribbons.
   - **Admin** (`#admin`) — kill switch + brain provider / execution /
-    strategies / academy / VOD pipeline / danger zone, live-editable
-    against `/api/admin/config` with debounced auto-save.
+    strategies / academy / VOD pipeline / TTS / LLM model picker / danger
+    zone, live-editable against `/api/admin/config` with debounced
+    auto-save. Both the modal and the legacy single-page `#admin` route
+    show the same 8-strategy + LLM picker layout (0.18.0 hotfix).
+  - **Agent** (`#agent/<id>`, 0.29.0) — deep-linkable per-agent profile
+    page; URL is shareable, page renders the full `AgentDetailModal`
+    in a header-and-back-link layout.
   - Original single-page dashboard kept at `#legacy` as a fallback.
 - **VOD Studio** (`#vod-studio`) — post-production app for the day's
   auto-generated 10-minute recap episode. Four operator surfaces:
@@ -61,15 +90,33 @@ edge for trading.
     description, auto chapters from selected beats, tags, schedule +
     upload strip.
 - **Standalone broadcast app** (Tauri 2 + React) — fullscreen 1920x1080 window
-  with the isometric Agent World hero scene, top/bottom tickers, stat pillar,
-  promotion toasts and template-driven commentary captions. Designed for OBS
-  Window Capture. Native exe + MSI/NSIS installers
-- **WebSocket feed** — tick / fill / account / heartbeat events pushed to the UI
+  with the isometric Agent World XL diorama (continuous camera drift,
+  parallax clouds, 2x sprites, CSS CRT toggle), top/bottom tickers
+  (top has a 30-tick equity sparkline + countdown ring to the next
+  tick), stat pillar, promotion toasts and template-driven commentary
+  captions. **Broadcast OS** (0.15.0) consumes the canonical
+  `broadcast_moment` event and applies priority/TTL/cooldowns to one
+  active slot per output type. Designed for OBS Window Capture. Native
+  exe + MSI/NSIS installers
+- **Broadcast OS extras** (0.16.0 - 0.17.0):
+  - Lower-thirds builder — dedicated `lower_third` WS event with a
+    recent-rows ring buffer (`GET /api/admin/lower_third/recent`) and
+    a quick-input form on the dashboard
+  - TTS settings UI — runtime-mutable provider (openai / elevenlabs /
+    silence) with voice dropdown, rate slider, save/reset/preview
+  - WS event recording — `WsRecorder` writes every `/ws` frame to
+    `data_cache/ws_recordings/<session_id>.ndjson` for replay
+- **WebSocket feed** — tick / fill / account / heartbeat / agent_decisions_batch
+  / promotion / demotion / stream_state / pipeline_progress events pushed
+  to the UI. Single WebSocket per tab via the `<LiveProvider>` context
 - **Alpaca reconciler** — polls Alpaca every 10s, computes actual-vs-optimistic
   fill delta, applies idempotent cash + avg-price corrections to the virtual book
 - **Admin console** — runtime-editable config (persists to `.env`):
-  master AI switch, provider/model/keys, LSTM confidence gate, tick interval,
-  RTH gating, execution mode, strategy toggles, backtest launcher
+  master AI switch, LLM provider/model/keys (3 providers, live model
+  discovery), LSTM confidence gate, tick interval, RTH gating, intraday
+  path, daily LLM spend cap, daily recap master switch, podcast master
+  switch, execution mode, strategy toggles, backtest launcher, danger
+  zone (clear `.env`, force-resync)
 
 ## Architecture
 
@@ -242,23 +289,30 @@ python scripts/make_favicon.py
 
 Header → **Admin**. Live-editable sections:
 
-| Section        | Controls                                                    |
-|----------------|-------------------------------------------------------------|
-| AI Control     | Master on/off switch                                        |
-| Brain Provider | Anthropic ↔ MiniMax, API key (masked), model override, base URL |
-| Tuning         | Min LSTM confidence, tick interval, outside-RTH toggle      |
-| Strategies     | Per-strategy freeze toggles with live agent counts          |
-| Execution      | `simulated` ↔ `alpaca_paper` (set in `.env`; requires restart) |
-| Backtest       | Launch walk-forward backtest, sortable results              |
-| Academy        | Rank multipliers + min-trades / min-win-rate / min-Sharpe thresholds; eval interval; demote drawdown + consecutive-loss + cap |
-| Risk           | Stop-loss, take-profit, trailing-stop, max-hold-days        |
-| Retrieval      | Top-K similar setups, on/off toggle                         |
-| VOD Pipeline   | Per-stage en/disable (read-only summary; stage launchers live in VOD Studio) |
-| Danger zone    | Clear `.env` overrides, force-resync `tradefarm.db`         |
+| Section          | Controls                                                    |
+|------------------|-------------------------------------------------------------|
+| AI Control       | Master on/off switch, daily recap master switch, podcast master switch |
+| Brain Provider   | 3 API key fields (Anthropic, OpenAI, MiniMax — all rendering unconditionally), base URLs |
+| LLM Model        | Per-provider model picker driven by live `/v1/models` discovery (60-min cache); 8 strategies + cost hints in the Strategies section below |
+| Tuning           | Min LSTM confidence, daily LLM spend cap dial, tick interval, intraday path toggle, outside-RTH toggle |
+| Strategies       | Per-strategy freeze toggles (8 strategies) with live agent counts |
+| Execution        | `simulated` ↔ `alpaca_paper` (set in `.env`; requires restart) |
+| Backtest         | Launch walk-forward backtest, sortable results              |
+| Academy          | Rank multipliers + min-trades / min-win-rate / min-Sharpe thresholds; eval interval; demote drawdown + consecutive-loss + cap |
+| Risk             | Stop-loss, take-profit, trailing-stop, max-hold-days        |
+| Retrieval        | Top-K similar setups, on/off toggle                         |
+| TTS              | Runtime provider switch (openai / elevenlabs / silence), voice dropdown, rate slider, preview + spend |
+| VOD Pipeline     | Per-stage en/disable (read-only summary; stage launchers live in VOD Studio) |
+| Danger zone      | Clear `.env` overrides, force-resync `tradefarm.db`         |
 
 Changes are applied live and persisted to `.env`. Secrets (API keys, tokens)
 are masked on GET; the masked sentinel `••••` is never POSTed back, so typing
 into a key field does not clobber the real value.
+
+The legacy single-page `#admin` route (`web/src/dash/Admin.tsx`)
+mirrors the same layout — same 8-strategy list (read from
+`/admin/config._meta.known_strategies`), same LLM model picker
+component, same `openai` provider option.
 
 ## Key API endpoints
 
@@ -276,9 +330,17 @@ into a key field does not clobber the real value.
 | `GET /agents/{id}/promotions`         | Per-agent promotion log            |
 | `GET /pnl/daily?days=N`               | Daily equity rollup                |
 | `GET /pnl/by-strategy`                | Per-strategy attribution           |
-| `GET /pnl/by-strategy/timeseries`     | Per-strategy equity over time      |
+| `GET /pnl/by-strategy/timeseries`     | Per-strategy equity over time (0.20.0: pre-aggregated via `strategy_daily_attribution` snapshot table) |
+| `GET /decisions/recent`               | 0.19.0: persistent per-agent decision-lab feed (`?limit=`, `?agent_id=`, `?only_llm=`) |
 | `GET /orders?limit=N`                 | Recent Alpaca paper orders         |
 | `GET /llm/stats`                      | LLM call vs skip counters          |
+| `GET /tts/stats`                      | TTS spend counter (chars, cost, calls) |
+| `GET /llm/models?refresh=true|false`  | 0.18.0: live `/v1/models` discovery (60-min cache); demo catalog fallback when keys missing |
+| `POST /llm/select`                    | 0.18.0: set active provider + model |
+| `POST /llm/reset`                     | 0.18.0: clear the active override  |
+| `GET  /tts/status` / `POST /tts/switch|reset|preview` | 0.17.0: runtime TTS provider switch |
+| `GET  /admin/lower_third/recent` / `POST /admin/lower_third/push` | 0.17.0: lower-thirds ring buffer |
+| `POST /ws_recording/start|stop` + `GET /ws_recording/list` | 0.17.0: NDJSON record of every `/ws` frame |
 | `GET /academy/ranks`                  | All 100 agent ranks                |
 | `GET /academy/promotions`             | Promotion ledger                   |
 | `POST /academy/evaluate`              | Force a rank-evaluation pass       |
@@ -305,30 +367,40 @@ to a non-loopback host; loopback stays open for local dev. See
 ## Streaming setup
 
 The broadcast app (`stream/`) renders the same data as the dashboard but
-re-laid-out for a 1080p capture and rotates between four scenes:
+re-laid-out for a 1080p capture and rotates between five scenes:
 
 - **Hero** — left stat pillar (top 5 / pool PnL / biggest fill / roster) +
   isometric Agent World XL diorama (slow camera drift, parallax clouds,
-  2x sprites).
+  2x sprites, **camera dolly** that eases toward the agent with the
+  biggest fill for 2s on every notable trade, **speech bubbles** that
+  show the LLM's `last_decision.reason` above the matching sprite for 6s,
+  **promotion cutscene** that runs a halo + 8-particle burst for 1.5s on
+  every rank-up).
 - **Leaderboard** — full ranked list of every agent in 4 columns with
   mini PnL bars.
 - **Brain** — 3×4 cards of recent LLM decisions, each with LSTM
   probability bars and the overlay's stance / bias / size / reason.
 - **Strategy** — per-strategy attribution: equity, realized / unrealized
   PnL, profit/loss/wait counts.
+- **Live Recap** (0.16.0) — auto-shown at 4pm ET, summarizes the day's
+  leader + key moments.
 
-Persistent overlays across all scenes: top equity/PnL ticker, marquee
-bottom ticker (fills + rank changes), promotion toast, commentary
-caption, and (if enabled) Web Audio: tick kicks, sonified fills,
-promotion stingers.
+Persistent overlays across all scenes: top equity/PnL ticker (with a
+30-tick rolling sparkline + countdown ring to the next tick),
+marquee bottom ticker (fills + rank changes), promotion toast,
+commentary caption, and (if enabled) Web Audio: tick kicks, sonified
+fills, promotion stingers. The **CSS CRT toggle** (scanlines + chroma
+fringe + radial vignette) is one click away in the in-app Admin.
 
 A configurable pre-roll opener ("TradeFarm — Day N") fades in on launch.
 Cycle interval, pre-roll length, and audio volume are adjustable from
 the in-app **Ctrl+I** Admin overlay. See
 [`dev/feature-backlog.md`](./dev/feature-backlog.md) for the
-unshipped backlog (CRT shader, TTS narrator, recap MP4, OBS WebSocket
-integration, dashboard upgrades, etc.). Day/night sky and weather
-shipped 2026-05-09.
+unshipped backlog (TTS narrator, 30-sec social cut, OBS WebSocket
+integration, hourly newsroom bulletin, etc.). Day/night sky, weather,
+and the 0.18.0 provider model picker shipped; broadcast OS
+scheduler (0.15.0) and the recap scene (0.16.0) are the canonical
+`broadcast_moment` consumers.
 
 ```bash
 cd stream
@@ -369,7 +441,23 @@ overlay (Ctrl+I) to point at a separate trading host.
 At default settings (24/7 ticking, 33 LSTM+LLM agents, 5-minute interval, Haiku 4.5
 with the 0.40 confidence gate): roughly **$3/day** Claude + **$0.65/day** EODHD
 subscription. Flip `TICK_OUTSIDE_RTH=false` to drop to roughly **$1.35/day** by
-only ticking during market hours. See `/llm/stats` for the live call-vs-skip rate.
+only ticking during market hours. See `/llm/stats` and `/tts/stats` for the
+live call-vs-skip rate and TTS spend counter.
+
+Operator-tunable env vars (defaults shown):
+
+| Env var | Default | What |
+|---|---|---|
+| `LLM_PROVIDER` | `anthropic` | Provider dispatch (`anthropic` / `openai` / `minimax`) |
+| `DEFAULT_LLM_MODEL` | `claude-haiku-4-5-20251001` | Per-provider default model (overridden live in admin) |
+| `DAILY_LLM_SPEND_CAP_USD` | `13.10` | Soft cap surfaced in the dashboard's spend widget |
+| `INTRADAY_ENABLED` | `false` | 0.24.0: refresh marks from EODHD 5m bars (paid tier) |
+| `INTRADAY_PERIOD` | `5m` | EODHD intraday period (1m / 5m / 1h) |
+| `DAILY_RECAP_ENABLED` | `true` | 0.16.0: master switch on the 4pm-ET recap scheduler |
+| `PODCAST_ENABLED` | `false` | 0.16.0: master switch on the Sunday Rivalry Week podcast |
+| `PODCAST_TTS_PROVIDER` | `openai` | TTS voice for the podcast narration |
+| `PODCAST_FIRE_HOUR_ET` | `9` | Sunday hour the podcast fires (ET) |
+| `BROADCAST_RECORD_MOMENTS` | unset | 0.16.0: NDJSON path for the moment-record ledger (debug) |
 
 ## Licence
 
