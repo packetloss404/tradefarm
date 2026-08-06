@@ -18,7 +18,9 @@ from pathlib import Path
 from tradefarm.orchestrator.broadcast_fixtures import (
     FakeClock,
     load_fixture,
+    load_ws_recording,  # noqa: F401  (re-imported for the new tests below)
     replay_against,
+    replay_ws_recording,  # noqa: F401  (re-imported for the new tests below)
 )
 from tradefarm.orchestrator.broadcast_recap import BroadcastRecapLedger
 from tradefarm.orchestrator.broadcast_scheduler import BroadcastScheduler
@@ -413,3 +415,163 @@ def test_queue_overflow_8_drops_exactly_27_moments() -> None:
     # invariant: |dropped| = 35 - 8 = 27, and the 8 expected are all live.
     assert len(expected_kept) == 8
     assert len(all_ids) - len(expected_kept) == 27
+
+
+# ---------------------------------------------------------------------------
+# 0.17.0 — WS recording replay helpers
+# ---------------------------------------------------------------------------
+#
+# `load_ws_recording` parses a `WsRecorder` NDJSON into a list of
+# `{ts, session, direction, type, payload}` dicts.
+# `replay_ws_recording` yields them one at a time with a tick.
+# The contract they're pinning: a recording can be re-loaded and
+# re-played deterministically for tests, headless renders, or a
+# future "play this recording" mode in the stream app — without
+# spinning up a live orchestrator.
+
+
+def _fresh_recorder(tmp_path, session_id: str = "s_ws"):
+    """Build a WsRecorder in ``tmp_path`` and reset the module-level
+    registry around the call so a stray state from another test
+    doesn't leak in. Returns the recorder (still open)."""
+    from tradefarm.api import ws_recording
+    from tradefarm.api.ws_recording import WsRecorder
+
+    ws_recording.reset_for_tests()
+    rec = WsRecorder(session_id=session_id, base_dir=tmp_path)
+    return rec
+
+
+def test_load_ws_recording_round_trip(tmp_path: Path) -> None:
+    """Write 5 frames via a real WsRecorder, load them back via
+    ``load_ws_recording``, assert frame-by-frame equality (with
+    the on-disk `ts` discarded — we compare only the recorder's
+    contract fields, since the audit ts is regenerated on read
+    anyway and pinning it would be a timing-sensitive test)."""
+    rec = _fresh_recorder(tmp_path)
+    sample_frames = [
+        {"type": "fill", "payload": {"symbol": "AAPL", "qty": 5, "price": 100.0}},
+        {"type": "agent_pnl", "payload": {"agent_id": 7, "pnl": 0.012}},
+        {"type": "fill", "payload": {"symbol": "MSFT", "qty": 2, "price": 200.0}},
+        {"type": "heartbeat", "payload": {"qsize": 0}},
+        {"type": "broadcast_moment", "payload": {"id": "bigwin-1", "priority": 90}},
+    ]
+    for i, frame in enumerate(sample_frames):
+        rec.record(
+            frame,
+            direction="in" if i == 3 else "out",
+        )
+    rec.close()
+
+    loaded = load_ws_recording(tmp_path / "s_ws.ndjson")
+    assert len(loaded) == len(sample_frames)
+    for i, (loaded_frame, original) in enumerate(zip(loaded, sample_frames)):
+        # session / type / payload / direction round-trip exactly;
+        # `ts` is the recorder's wall clock — we just assert it's
+        # a non-empty ISO string, not the specific instant.
+        assert loaded_frame["session"] == "s_ws"
+        assert loaded_frame["type"] == original["type"]
+        assert loaded_frame["payload"] == original["payload"]
+        assert loaded_frame["direction"] == ("in" if i == 3 else "out")
+        assert isinstance(loaded_frame["ts"], str) and loaded_frame["ts"]
+
+
+def test_load_ws_recording_skips_corrupted_lines(tmp_path: Path) -> None:
+    """A corrupted JSON line is logged + skipped; the rest of the
+    file still loads. Mirrors ``load_fixture``'s resilience
+    contract so the two NDJSON consumers behave the same way."""
+    rec = _fresh_recorder(tmp_path, session_id="s_corrupt")
+    rec.record({"type": "good", "payload": {"i": 0}}, direction="out")
+    rec.close()
+    # Append a corrupted line + a 6th good line by hand.
+    p = tmp_path / "s_corrupt.ndjson"
+    with p.open("a", encoding="utf-8") as f:
+        f.write("not json at all {{{\n")
+        f.write(
+            '{"ts": "2026-08-05T00:00:01+00:00", "session": "s_corrupt", '
+            '"direction": "out", "type": "good", "payload": {"i": 1}}\n'
+        )
+
+    loaded = load_ws_recording(p)
+    assert len(loaded) == 2
+    assert [f["payload"]["i"] for f in loaded] == [0, 1]
+
+
+def test_load_ws_recording_missing_file_returns_empty(tmp_path: Path) -> None:
+    """A missing file is NOT an error — ``load_ws_recording`` returns
+    ``[]`` so a "fixture optional" pattern works the same as
+    ``load_fixture``."""
+    assert load_ws_recording(tmp_path / "does_not_exist.ndjson") == []
+
+
+def test_replay_ws_recording_yields_frames_in_order(tmp_path: Path) -> None:
+    """3 frames in, 3 frames out, in file order. A regression in
+    the iterator (e.g. accidental ``reversed``) would silently
+    change the playback order and the rotator would see moments
+    in the wrong sequence."""
+    rec = _fresh_recorder(tmp_path, session_id="s_replay")
+    for i in range(3):
+        rec.record({"type": "tick", "payload": {"i": i}}, direction="out")
+    rec.close()
+    frames = [
+        {"ts": "2026-08-05T00:00:00+00:00", "session": "s_replay", "direction": "out",
+         "type": "tick", "payload": {"i": 0}},
+        {"ts": "2026-08-05T00:00:01+00:00", "session": "s_replay", "direction": "out",
+         "type": "tick", "payload": {"i": 1}},
+        {"ts": "2026-08-05T00:00:02+00:00", "session": "s_replay", "direction": "out",
+         "type": "tick", "payload": {"i": 2}},
+    ]
+    out = list(replay_ws_recording(frames, tick_sec=0))
+    assert [f["payload"]["i"] for f in out] == [0, 1, 2]
+
+
+def test_replay_ws_recording_yields_frames_at_tick_sec(tmp_path: Path) -> None:
+    """With ``tick_sec=0.01`` and a fake sleeper, assert the gap
+    between consecutive yields is exactly the tick (the sleeper
+    records its calls; we assert the call count + per-call delay).
+    The live sleeper is time.sleep — we don't wait on wall clock
+    in a test."""
+    frames = [
+        {"ts": "t0", "session": "s", "direction": "out", "type": "x", "payload": {"i": 0}},
+        {"ts": "t1", "session": "s", "direction": "out", "type": "x", "payload": {"i": 1}},
+        {"ts": "t2", "session": "s", "direction": "out", "type": "x", "payload": {"i": 2}},
+    ]
+    sleeps: list[float] = []
+
+    def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+
+    out = list(replay_ws_recording(frames, tick_sec=0.01, sleeper=fake_sleep))
+    assert len(out) == 3
+    # The first frame is yielded immediately (no leading sleep).
+    # Each subsequent frame sleeps `tick_sec` between yields — for
+    # 3 frames, that's 2 sleeps.
+    assert sleeps == [0.01, 0.01]
+
+
+def test_replay_ws_recording_zero_tick_yields_asap() -> None:
+    """``tick_sec=0`` (or negative) collapses the sleep entirely —
+    the iterator yields all frames in a single tight loop. A
+    regression that always sleeps would make the "as-fast-as-
+    possible" mode (used by the headless renderer's `speed=0`
+    replay path) silently slow down."""
+    frames = [
+        {"ts": "t", "session": "s", "direction": "out", "type": "x", "payload": {"i": i}}
+        for i in range(5)
+    ]
+    sleeps: list[float] = []
+
+    def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+
+    list(replay_ws_recording(frames, tick_sec=0, sleeper=fake_sleep))
+    assert sleeps == []
+
+
+def test_replay_ws_recording_empty_input_yields_nothing() -> None:
+    """An empty frame list yields nothing — a no-op replay. Pins
+    the iterator's StopIteration on first-call contract so a
+    future refactor (e.g. ``yield from``) can't silently skip
+    the empty case."""
+    out = list(replay_ws_recording([], tick_sec=0.01))
+    assert out == []

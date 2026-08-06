@@ -13,9 +13,10 @@ from typing import Any, Literal
 
 from dotenv import set_key
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tradefarm.config import settings
+from tradefarm.runtime.tts_config import TtsConfig
 from tradefarm.storage import repo
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -472,4 +473,478 @@ async def push_recap(body: _RecapPushBody | None = None) -> dict[str, Any]:
         "date": date_str,
         "week_id": week_id,
         "pushed_at": now.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 0.17.0 — TTS settings panel.
+#
+# The dashboard's `<TtsSettingsPanel />` (web/src/components/TtsSettingsPanel.tsx)
+# reads `/admin/tts/status` to populate the form, POSTs `/admin/tts/switch`
+# when the operator flips provider/voice/rate, and POSTs `/admin/tts/preview`
+# to synthesize a sample line. The runtime config singleton in
+# `tradefarm.runtime.tts_config` is the source of truth for the synthesis
+# paths; the env-var settings remain the defaults.
+# ---------------------------------------------------------------------------
+
+
+class _TtsSwitchBody(BaseModel):
+    """Body for `POST /admin/tts/switch`.
+
+    All fields required (the dashboard sends the whole config on every
+    save; partial patches would make the UI state machine more complex
+    for no real win).
+    """
+
+    provider: str = Field(..., description="openai | elevenlabs | silence")
+    voice: str = Field(..., min_length=1, max_length=128)
+    speaking_rate: float = Field(1.0, ge=0.25, le=4.0)
+
+
+class _TtsPreviewBody(BaseModel):
+    """Body for `POST /admin/tts/preview`."""
+
+    text: str = Field(..., min_length=1, max_length=2000)
+    provider: str | None = Field(None, description="Override the active provider for this one call")
+    voice: str | None = Field(None, description="Override the active voice for this one call")
+
+
+@router.get("/tts/status")
+async def tts_status() -> dict[str, Any]:
+    """Return the current TTS runtime config + availability map.
+
+    Used by the dashboard's `<TtsSettingsPanel />` to populate the
+    provider/voice/rate controls. The availability map (``has_creds``)
+    gates the radio cards — the operator can't switch to a provider
+    whose env key isn't set, the radio shows as disabled.
+    """
+    from tradefarm.runtime.tts_config import (
+        COST_PER_1K_CHARS_USD,
+        VOICES_BY_PROVIDER,
+        get_tts_config,
+    )
+    from tradefarm.tts.run import available_providers, has_tts_creds
+
+    config = get_tts_config()
+    available = list(available_providers())
+    has_creds = {
+        "openai": bool(__import__("os").environ.get("OPENAI_API_KEY")),
+        "elevenlabs": bool(__import__("os").environ.get("ELEVENLABS_API_KEY")),
+        "silence": True,  # always available
+    }
+    return {
+        "config": config.to_payload(),
+        "available_providers": available + ["silence"],
+        "has_creds": has_creds,
+        "voices_by_provider": {
+            provider: list(voices)
+            for provider, voices in VOICES_BY_PROVIDER.items()
+        },
+        "cost_per_1k_chars_usd": dict(COST_PER_1K_CHARS_USD),
+        "creds_present": has_tts_creds(),
+    }
+
+
+@router.post("/tts/switch")
+async def tts_switch(body: _TtsSwitchBody) -> dict[str, Any]:
+    """Replace the active TTS config at runtime.
+
+    Validates: provider must be in `VALID_TTS_PROVIDERS`; if a cloud
+    provider is requested, its env key must be set. Returns 400 with a
+    human-readable error so the dashboard can show "no API key for
+    ElevenLabs; set ELEVENLABS_API_KEY in .env".
+
+    Does NOT persist to .env — a process restart reverts to the
+    env-var settings. The dashboard's "revert to env" button (when
+    added) will call `POST /admin/tts/reset`.
+    """
+    import os
+
+    from tradefarm.runtime.tts_config import VALID_TTS_PROVIDERS, set_tts_config
+
+    if body.provider not in VALID_TTS_PROVIDERS:
+        raise HTTPException(400, f"unknown provider: {body.provider!r}")
+
+    # Gate on creds. The `silence` provider is always allowed.
+    if body.provider == "openai" and not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(400, "OPENAI_API_KEY is not set; cannot switch to openai")
+    if body.provider == "elevenlabs" and not os.environ.get("ELEVENLABS_API_KEY"):
+        raise HTTPException(400, "ELEVENLABS_API_KEY is not set; cannot switch to elevenlabs")
+
+    new_config = TtsConfig(
+        provider=body.provider,
+        voice=body.voice,
+        speaking_rate=body.speaking_rate,
+    )
+    previous = set_tts_config(new_config)
+    return {
+        "previous": previous.to_payload(),
+        "active": new_config.to_payload(),
+    }
+
+
+@router.post("/tts/reset")
+async def tts_reset() -> dict[str, Any]:
+    """Reset the active TTS config to the env-var defaults.
+
+    Symmetric to `/admin/tts/switch` but reads from `settings.podcast_*`
+    instead of accepting a body. Useful when the operator wants to
+    revert a runtime override without restarting the process.
+    """
+    from tradefarm.runtime.tts_config import reset_tts_config
+
+    previous = reset_tts_config()
+    return {"previous": previous.to_payload()}
+
+
+@router.post("/tts/preview")
+async def tts_preview(body: _TtsPreviewBody) -> dict[str, Any]:
+    """Synthesize a single line and return it as a base64-encoded wav.
+
+    Updates the TTS_SPEND counter atomically (one synthesize() call +
+    one cost entry). The dashboard's preview button plays the
+    returned audio inline.
+
+    The override fields (provider/voice) let the operator try a
+    different voice than the active config without committing a
+    switch — the synthesis uses the override for this call only, and
+    the active config is unchanged.
+    """
+    import base64
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from tradefarm.runtime.tts_config import estimate_cost_usd, get_tts_config
+    from tradefarm.tts.run import build_provider
+
+    config = get_tts_config()
+    provider_name = body.provider or config.provider
+    voice = body.voice or config.voice
+
+    if provider_name == "openai" and not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(400, "OPENAI_API_KEY is not set")
+    if provider_name == "elevenlabs" and not os.environ.get("ELEVENLABS_API_KEY"):
+        raise HTTPException(400, "ELEVENLABS_API_KEY is not set")
+
+    # Build the provider; raise 400 on unknown name (defensive — the
+    # switch endpoint already validates, but a curl caller might bypass).
+    try:
+        provider = build_provider(provider_name)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"failed to build provider {provider_name!r}: {exc}")
+
+    # Synthesize to a tmp wav. All current providers (silent, openai,
+    # elevenlabs) declare `synthesize` as `async def`; since this
+    # endpoint is itself `async def` we just await the coroutine
+    # directly — the event loop is already running. The `cast(Any, ...)`
+    # suppresses the protocol-vs-bound-method type narrowing.
+    from typing import Any, cast
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "preview.wav"
+        try:
+            synthesize = cast(Any, provider.synthesize)
+            duration = await synthesize(body.text, voice=voice, out_path=out_path)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"synthesis failed: {exc}")
+
+        wav_bytes = out_path.read_bytes()
+        audio_b64 = base64.b64encode(wav_bytes).decode("ascii")
+
+    # Update spend counter (atomic; no lock needed because asyncio
+    # serializes the request handler).
+    cost = estimate_cost_usd(provider_name, body.text)
+    from tradefarm.api.main import TTS_SPEND
+
+    TTS_SPEND["calls"] += 1
+    TTS_SPEND["chars_synthesized"] += len(body.text)
+    TTS_SPEND["cost_usd"] += cost
+
+    return {
+        "provider": provider_name,
+        "voice": voice,
+        "duration_sec": round(duration, 2),
+        "cost_usd": cost,
+        "total_calls": int(TTS_SPEND["calls"]),
+        "total_cost_usd": round(TTS_SPEND["cost_usd"], 6),
+        "audio_base64": audio_b64,
+        "mime": "audio/wav",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 0.17.0 — lower-third builder.
+#
+# The dashboard's BroadcastPanel gets a quick-input form for ad-hoc
+# lower-thirds ("back from break", "next guest", "outage notice", ...).
+# The form POSTs to this endpoint, which publishes a ``lower_third``
+# event to the WS bus (consumed by the stream's `useStreamCommands` and
+# routed to the same banner slot as the legacy `stream_banner`). The
+# `GET /admin/lower_third/recent` companion endpoint returns the in-memory
+# ring buffer so the dashboard can render a "recent" list with a
+# "replay" affordance per row.
+#
+# Why a dedicated event type rather than reusing `stream_banner`?
+# `stream_banner` is the legacy wire format the broadcast suite emits on
+# auto-fired moments; it doesn't carry an `id` (so the stream can't
+# dedup against the canonical `broadcast_moment` envelope) and doesn't
+# carry a `color` (so the visual is always the neutral accent). The
+# operator-driven path wants both, plus a clean grep target in WS
+# recordings and replay manifests.
+# ---------------------------------------------------------------------------
+
+
+class _LowerThirdPushBody(BaseModel):
+    """Request body for `POST /admin/lower_third/push`.
+
+    Field validation lives on the model so FastAPI emits a 422 with a
+    detailed error when a request is malformed (missing required field,
+    wrong type). The endpoint adds a final pass for the runtime
+    invariants (non-empty title after stripping whitespace, ttl range,
+    color allowlist) because pydantic can't express those without
+    custom validators, and we want the 400 to be specific (the
+    operator's eye will be on the response).
+    """
+
+    title: str
+    subtitle: str | None = None
+    ttl_sec: int | None = None
+    color: Literal["profit", "loss", "neutral"] | None = None
+    id: str | None = None
+
+
+@router.post("/lower_third/push")
+async def push_lower_third(body: _LowerThirdPushBody) -> dict[str, Any]:
+    """Publish a `lower_third` event and record it in the operator log.
+
+    The publish uses the existing ``publish_event`` helper (the same
+    one `stream_banner` and `commentary` use), so the stream's
+    ``useLiveEvents`` consumer sees the event with no extra wiring —
+    it just needs the new ``lower_third`` case in its switch.
+
+    Returns the entry that was recorded in the ring buffer so the
+    dashboard can show a "pushed at HH:MM:SS, id=..." toast without
+    a follow-up GET.
+    """
+    from tradefarm.api.events import (
+        EVENT_TYPE_LOWER_THIRD,
+        publish_event as _publish_event,
+    )
+    from tradefarm.api.lower_third_log import (
+        MAX_TTL_SEC,
+        MIN_TTL_SEC,
+        VALID_LOWER_THIRD_COLORS,
+        log as _lt_log,
+    )
+
+    # pydantic already coerced types per the BaseModel schema; the
+    # remaining checks are runtime invariants pydantic can't express
+    # cleanly (strip-then-non-empty, range, enum). We 400 explicitly
+    # so the operator's UI can show the actual reason (pydantic's
+    # default 422 has a nested array of error dicts that's noisy for
+    # a button-triggered push).
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(400, "title must be non-empty")
+    if body.color is not None and body.color not in VALID_LOWER_THIRD_COLORS:
+        raise HTTPException(
+            400, f"color must be one of {sorted(VALID_LOWER_THIRD_COLORS)}"
+        )
+    if body.ttl_sec is not None and not (
+        MIN_TTL_SEC <= int(body.ttl_sec) <= MAX_TTL_SEC
+    ):
+        raise HTTPException(
+            400, f"ttl_sec must be in [{MIN_TTL_SEC}, {MAX_TTL_SEC}]"
+        )
+
+    subtitle = (body.subtitle or "").strip()
+    entry = _lt_log.record(
+        title=title,
+        subtitle=subtitle,
+        ttl_sec=body.ttl_sec if body.ttl_sec is not None else 8,
+        color=body.color,
+        id=body.id,
+    )
+
+    # Publish to the WS bus. The stream's `lower_third` handler maps
+    # this to the same banner slot as `stream_banner`; the visual is
+    # identical, only the audit trail differs.
+    await _publish_event(
+        EVENT_TYPE_LOWER_THIRD,
+        {
+            "id": entry.id,
+            "title": entry.title,
+            "subtitle": entry.subtitle,
+            "ttl_sec": entry.ttl_sec,
+            "color": entry.color,
+        },
+    )
+
+    import structlog
+
+    structlog.get_logger().info(
+        "admin_lower_third_pushed",
+        id=entry.id,
+        title=entry.title,
+        ttl_sec=entry.ttl_sec,
+        color=entry.color,
+    )
+    return entry.to_payload()
+
+
+@router.get("/lower_third/recent")
+async def recent_lower_thirds(
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Return the most-recent operator-pushed lower-thirds, newest-first.
+
+    `limit` is clamped at the lower-third log's `MAX_RECENT_LIMIT` so
+    a runaway dashboard (limit=10000) can't trigger a multi-MB JSON
+    response. Default 50 covers the operator's "what did I push in
+    the last hour" UI without bloating the wire.
+    """
+    from tradefarm.api.lower_third_log import MAX_RECENT_LIMIT, log as _lt_log
+
+    if limit < 0:
+        raise HTTPException(400, "limit must be non-negative")
+    effective = min(limit, MAX_RECENT_LIMIT)
+    return {"items": _lt_log.recent(effective)}
+
+
+# ---------------------------------------------------------------------------
+# 0.17.0 — WS frame recording control surface.
+#
+# Three endpoints back the dashboard's RecordingPanel:
+#
+#   POST /admin/ws_recording/start   — pre-arm a recorder (idempotent)
+#   POST /admin/ws_recording/stop    — close + remove a recorder
+#   GET  /admin/ws_recording/list    — list session_ids with a recording
+#
+# Recording itself lives in `tradefarm.api.ws_recording`; the WS
+# handler attaches a recorder to a connection when the client
+# supplies `?session_id=...` in the query string. The admin endpoints
+# exist so an operator can pre-arm a recorder (e.g. before opening
+# the dashboard, so the very first frame lands on disk) and stop it
+# (closing the file handle) without reaching into the running
+# process.
+# ---------------------------------------------------------------------------
+
+
+class _WsRecordingStartBody(BaseModel):
+    """Request body for `POST /admin/ws_recording/start`.
+
+    `session_id` is mandatory and validated against the safe-id
+    regex (same one the replay path uses) so the recorder's
+    on-disk filename can't escape `data_cache/ws_recordings/`.
+    `base_dir` is optional — defaults to the module's
+    `DEFAULT_BASE_DIR` so a default install "just works".
+    """
+
+    session_id: str
+    base_dir: str | None = None
+
+
+class _WsRecordingStopBody(BaseModel):
+    """Request body for `POST /admin/ws_recording/stop`.
+
+    `session_id` is mandatory; 404 if no recorder is active for
+    that session.
+    """
+
+    session_id: str
+
+
+@router.post("/ws_recording/start")
+async def start_ws_recording(body: _WsRecordingStartBody) -> dict[str, Any]:
+    """Pre-arm (or reuse) a recorder for ``session_id``.
+
+    Idempotent: if a recorder for ``session_id`` is already active,
+    returns its path + frame count without touching the file. The
+    caller is the dashboard's RecordingPanel ("Start" button) or an
+    operator's curl to record a session that hasn't connected yet.
+
+    Returns ``{ok, path, session_id, frames_recorded, already_active}``
+    so the dashboard can show "already recording" vs "started fresh"
+    in the toast.
+    """
+    from pathlib import Path as _Path
+
+    from tradefarm.api import ws_recording
+    from tradefarm.session import replay_query as _rq
+
+    if not isinstance(body.session_id, str) or not body.session_id:
+        raise HTTPException(400, "session_id must be a non-empty string")
+    try:
+        safe_id = _rq._require_safe_session_id(body.session_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    base_dir = _Path(body.base_dir) if body.base_dir else None
+
+    existing = ws_recording.get_recorder(safe_id)
+    if existing is not None:
+        return {
+            "ok": True,
+            "session_id": safe_id,
+            "path": str(existing.path),
+            "frames_recorded": existing.frames_recorded,
+            "already_active": True,
+        }
+
+    rec = ws_recording.get_or_create_recorder(safe_id, base_dir=base_dir)
+    return {
+        "ok": True,
+        "session_id": safe_id,
+        "path": str(rec.path),
+        "frames_recorded": rec.frames_recorded,
+        "already_active": False,
+    }
+
+
+@router.post("/ws_recording/stop")
+async def stop_ws_recording(body: _WsRecordingStopBody) -> dict[str, Any]:
+    """Close the recorder for ``session_id``.
+
+    Returns ``{ok, session_id, frames_recorded, path}`` on success;
+    404 if no recorder was active for that session. The frames count
+    is the in-process tally since the recorder was opened — the
+    on-disk NDJSON is the durable source of truth (use
+    ``wc -l <path>`` to count after the process restarts).
+    """
+    from tradefarm.api import ws_recording
+
+    if not isinstance(body.session_id, str) or not body.session_id:
+        raise HTTPException(400, "session_id must be a non-empty string")
+    rec = ws_recording.stop_recorder(body.session_id)
+    if rec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no active recorder for session {body.session_id!r}",
+        )
+    return {
+        "ok": True,
+        "session_id": body.session_id,
+        "frames_recorded": rec.frames_recorded,
+        "path": str(rec.path),
+    }
+
+
+@router.get("/ws_recording/list")
+async def list_ws_recordings(base_dir: str | None = None) -> dict[str, Any]:
+    """List session_ids with a recording on disk.
+
+    Reads the directory listing (no DB). The default base dir is
+    `data_cache/ws_recordings/`; an operator can pass `?base_dir=...`
+    to inspect a different directory (e.g. a CI checkout of
+    `tests/fixtures/ws/`). Returns ``{sessions: [str], base_dir: str}``.
+    """
+    from pathlib import Path as _Path
+
+    from tradefarm.api import ws_recording
+
+    base = _Path(base_dir) if base_dir else None
+    return {
+        "base_dir": str(base) if base else str(ws_recording.DEFAULT_BASE_DIR),
+        "sessions": ws_recording.list_recorded_sessions(base),
     }

@@ -411,6 +411,35 @@ async def llm_stats() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# 0.17.0 — TTS spend counter (module-global; reset on process restart).
+# Mirrors the LLM_SKIPS pattern: cheap in-memory counter, no DB. The
+# dashboard's API spend widget reads it via ``/tts/stats`` to show today's
+# TTS cost next to the LLM cost.
+# ---------------------------------------------------------------------------
+
+TTS_SPEND: dict[str, float] = {
+    "chars_synthesized": 0.0,   # total chars across all previews + synth calls
+    "cost_usd": 0.0,            # rough cost; see ``tts_config.estimate_cost_usd``
+    "calls": 0.0,               # number of synthesize() calls
+}
+
+
+@app.get("/tts/stats")
+async def tts_stats() -> dict:
+    """TTS spend counter since boot. Mirrors the LLM ``/llm/stats`` shape
+    so the dashboard's ``<ApiSpendWidget />`` can render TTS and LLM
+    side-by-side without a custom format."""
+    from tradefarm.runtime.tts_config import get_tts_config
+
+    return {
+        "chars_synthesized": int(TTS_SPEND["chars_synthesized"]),
+        "cost_usd": round(TTS_SPEND["cost_usd"], 6),
+        "calls": int(TTS_SPEND["calls"]),
+        "active_provider": get_tts_config().provider,
+    }
+
+
 @app.get("/agents")
 async def list_agents(
     at: str | None = Query(None, description="ISO timestamp for historical state (replay mode)."),

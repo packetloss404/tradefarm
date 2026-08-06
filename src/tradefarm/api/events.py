@@ -10,6 +10,39 @@ process-wide drop counter and the timestamp of the first drop in the
 current window. The dashboard queries ``GET /stream-gap`` after a WS
 reconnect to learn how many events were lost and trigger a state
 re-fetch.
+
+0.17.0 — published event types. Constants below are the canonical
+strings callers pass as the first arg of ``publish_event``. They are
+duplicated intentionally (not derived from a registry) so the type
+literals stay grep-able and the stream-side ``LiveEvent`` union can
+include the same strings without importing this module.
+
+- ``"promotion"`` / ``"demotion"`` — agent rank moves
+  (see ``tradefarm.academy.curriculum``). Payload: ``PromotionEventPayload``.
+- ``"stream_commentary"`` — LLM/fallback play-by-play lines.
+- ``"chat_message"`` — YouTube live chat ingestion.
+- ``"prediction_state"`` — open / locked / revealed market calls.
+- ``"audience_sentiment"`` / ``"audience_pin_request"`` / ``"audience_pin_resolved"``
+  — audience interactivity.
+- ``"agent_decisions_batch"`` — per-tick decision-lab payload.
+- ``"lower_third"`` (0.17.0) — operator-pushed banner. Payload::
+
+      {
+        "id": str,                # uuid hex; server-assigned if omitted
+        "title": str,             # required, non-empty
+        "subtitle": str,          # optional, defaults to ""
+        "ttl_sec": int,           # 1..120; default 8
+        "color": "profit" | "loss" | "neutral" | None,
+      }
+
+  Both ``stream_banner`` (legacy, dispatched by the broadcast-moment
+  fan-out) and ``lower_third`` route to the same in-stream slot — the
+  visual is identical. ``lower_third`` is preferred for ad-hoc
+  operator pushes; ``stream_banner`` is reserved for the broadcast
+  suite's automatic fan-out.
+- ``"stream_banner"`` — legacy banner. Subsumed by ``lower_third`` for
+  new operator-driven pushes; the broadcast suite still emits this on
+  auto-fired moments for back-compat.
 """
 
 from __future__ import annotations
@@ -19,6 +52,12 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 MAX_QUEUE = 100
+
+# 0.17.0 — canonical event-type strings. Exposed as module constants so
+# the admin endpoint, the stream-side union, and the tests can all
+# reference the same identifier without copy/paste.
+EVENT_TYPE_LOWER_THIRD = "lower_third"
+EVENT_TYPE_STREAM_BANNER = "stream_banner"
 
 
 def _now_iso() -> str:

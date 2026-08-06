@@ -36,6 +36,19 @@ export type StreamBannerPayload = {
   subtitle?: string;
   ttl_sec?: number;
 };
+// 0.17.0 — operator-pushed lower-third. Mirrors the server-side
+// `lower_third` WS event published by `POST /admin/lower_third/push`.
+// Carries an `id` (uuid hex) so the stream can dedup against a
+// canonical publish, plus the optional `color` accent the legacy
+// `stream_banner` doesn't expose. Routed to the same in-stream slot
+// as `stream_banner` — the visual is identical.
+export type LowerThirdPayload = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  ttl_sec: number;
+  color?: "profit" | "loss" | "neutral";
+};
 export type StreamAudioPayload = { enabled: boolean; volume: number };
 export type StreamMacroFiredPayload = {
   id: string;
@@ -155,6 +168,7 @@ export type LiveEvent =
   | { type: "stream_state"; ts: string; payload: StreamStatePayload }
   | { type: "stream_scene"; ts: string; payload: StreamScenePayload }
   | { type: "stream_banner"; ts: string; payload: StreamBannerPayload }
+  | { type: "lower_third"; ts: string; payload: LowerThirdPayload }
   | { type: "stream_audio"; ts: string; payload: StreamAudioPayload }
   | { type: "stream_preroll"; ts: string; payload: Record<string, never> }
   | { type: "stream_rotation"; ts: string; payload: { enabled: boolean } }

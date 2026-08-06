@@ -7,6 +7,13 @@ speed}` frame as the first message; backend reads the named session's
 manifest and replays its events in the requested time window. The
 headless renderer leans on this — it loads stream/?replay=…&at=… with
 a high `speed`, captures N seconds, and closes the page.
+
+0.17.0 — WS frame recording. If the client supplies
+``?session_id=...`` in the query string (or the admin endpoint has
+pre-armed a recorder for the same id), every frame that flows
+through this connection is appended to a per-session NDJSON file
+under ``data_cache/ws_recordings/``. Recording is opt-in: a session
+with no active recorder is a single pointer check on the hot path.
 """
 
 from __future__ import annotations
@@ -18,6 +25,7 @@ from typing import Any
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from tradefarm.api.events import MAX_QUEUE, bus
+from tradefarm.api import ws_recording
 from tradefarm.session import replay_query
 
 router = APIRouter()
@@ -27,6 +35,12 @@ REPLAY_HANDSHAKE_TIMEOUT_SEC = 0.5  # if no replay frame within this, assume liv
 # Cap how long a replay can pump real-time. The headless renderer uses
 # speed >> 1 so this comes back well under a second per beat.
 REPLAY_MAX_WALL_SLEEP_SEC = 0.2
+
+# Max inbound frames the client can send before we treat them as
+# abuse. 0.17.0 doesn't expect the dashboard to send anything in
+# live mode beyond a single heartbeat; the cap is a safety net so a
+# stuck client can't pin a recorder's input reader forever.
+_MAX_INBOUND_FRAMES_PER_CONNECTION = 10_000
 
 
 def _now_iso() -> str:
@@ -45,7 +59,23 @@ async def _maybe_read_replay_handshake(ws: WebSocket) -> dict | None:
     return None
 
 
-async def _stream_live(ws: WebSocket) -> None:
+async def _stream_live(ws: WebSocket, session_id: str | None = None) -> None:
+    """Stream live EventBus envelopes to the connected client.
+
+    0.17.0 — when ``session_id`` is provided, attach a recorder and
+    log every frame the client sends (direction="in") and every
+    frame the server fans out (direction="out"). The recorder is
+    looked up once here (per connection) so the per-event hot path
+    is a single ``if recorder is not None`` check.
+
+    The recording input reader runs as a background task; it ends
+    when the client disconnects, the bus subscription exits, or a
+    cap is hit (defensive — a stuck client shouldn't pin a
+    recorder's writer forever).
+    """
+    recorder = (
+        ws_recording.get_or_create_recorder(session_id) if session_id else None
+    )
     async with bus.subscribe() as q:
 
         async def heartbeat() -> None:
@@ -59,13 +89,41 @@ async def _stream_live(ws: WebSocket) -> None:
                     }
                 )
 
+        async def read_inbound() -> None:
+            """Drain client->server frames into the recorder.
+
+            The 0.17.0 dashboard doesn't send any frames in live
+            mode beyond the handshake, so this task mostly just
+            sleeps on ``receive_json`` and exits on disconnect.
+            A future control channel (pause/resume, pin a session,
+            etc.) would land here.
+            """
+            assert recorder is not None  # narrow the type for mypy
+            n = 0
+            try:
+                while n < _MAX_INBOUND_FRAMES_PER_CONNECTION:
+                    frame = await ws.receive_json()
+                    recorder.record(frame, direction="in")
+                    n += 1
+            except WebSocketDisconnect:
+                return
+            except Exception:
+                # Malformed JSON, RuntimeError on closed socket, etc.
+                # The recorder is best-effort; never crash the WS.
+                return
+
         hb_task = asyncio.create_task(heartbeat())
+        in_task = (
+            asyncio.create_task(read_inbound()) if recorder is not None else None
+        )
         try:
             while True:
                 if q.qsize() > MAX_QUEUE:
                     await ws.close(code=1011, reason="slow client")
                     return
                 event = await q.get()
+                if recorder is not None:
+                    recorder.record(event, direction="out")
                 await ws.send_json(event)
         except WebSocketDisconnect:
             return
@@ -76,11 +134,14 @@ async def _stream_live(ws: WebSocket) -> None:
                 pass
             return
         finally:
-            hb_task.cancel()
-            try:
-                await hb_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            for task in (hb_task, in_task):
+                if task is None:
+                    continue
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
 
 async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
@@ -202,8 +263,37 @@ async def _stream_replay(ws: WebSocket, frame: dict[str, Any]) -> None:
 
 @router.websocket("/ws")
 async def ws_stream(ws: WebSocket) -> None:
+    # 0.17.0 — resolve the recording session_id from the query
+    # string. The client (or the dashboard's RecordingPanel) supplies
+    # ``?session_id=...`` to opt into frame capture; without it the
+    # connection streams live events with zero recording overhead.
+    # We validate against the same safe-id regex the replay path
+    # uses so a peer can't smuggle a path-traversal id into a
+    # recorder's filename.
+    raw_session = ws.query_params.get("session_id")
+    session_id: str | None = None
+    if isinstance(raw_session, str) and raw_session:
+        try:
+            session_id = replay_query._require_safe_session_id(raw_session)
+        except ValueError:
+            # Bad id: log + proceed without recording. The WS itself
+            # stays open; the client just doesn't get a recorder
+            # attached to its session.
+            import structlog
+
+            structlog.get_logger().warning(
+                "ws_recording_bad_session_id", session_id=raw_session
+            )
+            session_id = None
+
     await ws.accept()
-    await ws.send_json({"type": "hello", "ts": _now_iso(), "payload": {"subscribed": True}})
+    await ws.send_json(
+        {
+            "type": "hello",
+            "ts": _now_iso(),
+            "payload": {"subscribed": True, "recording_session_id": session_id},
+        }
+    )
 
     replay_frame = await _maybe_read_replay_handshake(ws)
     if replay_frame is not None:
@@ -218,7 +308,7 @@ async def ws_stream(ws: WebSocket) -> None:
                 pass
         return
 
-    await _stream_live(ws)
+    await _stream_live(ws, session_id=session_id)
 
 
 # Round-6 audit fix (B3-WS): queryable stream-gap report. The WS layer

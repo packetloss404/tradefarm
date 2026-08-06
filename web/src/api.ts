@@ -280,6 +280,68 @@ export type LlmStats = {
   threshold: number;
 };
 
+// 0.17.0 — lower-third builder payloads. Mirror the server-side schema
+// in `tradefarm.api.lower_third_log` and the lower_third WS event
+// payload shape. `ttl_sec` is required on the wire (the server-side
+// default of 8 is applied when the operator omits it) so the recent
+// list can always be rendered without per-row conditional state.
+export type LowerThirdColor = "profit" | "loss" | "neutral";
+
+export type LowerThirdPayload = {
+  id: string;
+  title: string;
+  subtitle: string;
+  ttl_sec: number;
+  color: LowerThirdColor | null;
+  // ISO-8601 wall-clock timestamp the server stamped at record-time;
+  // the dashboard's recent-list uses it for the relative age label.
+  pushed_at: string;
+};
+
+export type LowerThirdPushInput = {
+  title: string;
+  subtitle?: string;
+  ttl_sec?: number;
+  color?: LowerThirdColor;
+  id?: string;
+};
+
+// 0.17.0 — TTS settings panel types. The provider union is the same
+// three values the backend's `VALID_TTS_PROVIDERS` accepts; the
+// response shapes mirror the Pydantic response models in
+// `src/tradefarm/api/admin.py` so the SWR fetcher's `as Promise<X>`
+// casts are safe.
+export type TtsProvider = "openai" | "elevenlabs" | "silence";
+export type TtsConfigPayload = {
+  provider: TtsProvider;
+  voice: string;
+  speaking_rate: number;
+};
+export type TtsStatusPayload = {
+  config: TtsConfigPayload;
+  available_providers: TtsProvider[];
+  has_creds: Record<TtsProvider, boolean>;
+  voices_by_provider: Record<TtsProvider, string[]>;
+  cost_per_1k_chars_usd: Record<TtsProvider, number>;
+  creds_present: boolean;
+};
+export type TtsPreviewPayload = {
+  provider: TtsProvider;
+  voice: string;
+  duration_sec: number;
+  cost_usd: number;
+  total_calls: number;
+  total_cost_usd: number;
+  audio_base64: string;
+  mime: string;
+};
+export type TtsStatsPayload = {
+  chars_synthesized: number;
+  cost_usd: number;
+  calls: number;
+  active_provider: TtsProvider;
+};
+
 export type BacktestResult = {
   symbol: string;
   error?: string;
@@ -427,6 +489,66 @@ export const api = {
   pipelineRuns: () => fetcher<PipelineRunRow[]>("/api/pipeline/runs"),
   pipelineRunStatus: (runId: string) =>
     fetcher<PipelineRunRow>(`/api/pipeline/runs/${runId}`),
+  // 0.17.0 — lower-third builder endpoints. `pushLowerThird` posts to
+  // the admin endpoint; the server assigns the id when the request
+  // omits one. `getRecentLowerThirds` reads the in-memory ring buffer
+  // (newest-first) for the dashboard's replay list.
+  pushLowerThird: async (
+    payload: LowerThirdPushInput,
+  ): Promise<LowerThirdPayload> => {
+    const r = await fetch("/api/admin/lower_third/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json() as Promise<LowerThirdPayload>;
+  },
+  getRecentLowerThirds: async (limit = 10): Promise<LowerThirdPayload[]> => {
+    const data = await fetcher<{ items: LowerThirdPayload[] }>(
+      `/api/admin/lower_third/recent?limit=${limit}`,
+    );
+    return data.items;
+  },
+  // 0.17.0 — TTS settings panel endpoints. The status payload drives
+  // the form's availability map (gating cloud providers on
+  // `has_creds[provider]`); the switch endpoint accepts a full
+  // config (provider + voice + speaking_rate) and the reset endpoint
+  // reverts to the env-var defaults.
+  ttsStatus: () => fetcher<TtsStatusPayload>("/api/admin/tts/status"),
+  ttsSwitch: async (req: {
+    provider: "openai" | "elevenlabs" | "silence";
+    voice: string;
+    speaking_rate: number;
+  }): Promise<{ previous: TtsConfigPayload; active: TtsConfigPayload }> => {
+    const r = await fetch("/api/admin/tts/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
+  ttsReset: async (): Promise<{ previous: TtsConfigPayload }> => {
+    const r = await fetch("/api/admin/tts/reset", { method: "POST" });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
+  ttsPreview: async (req: {
+    text: string;
+    provider?: "openai" | "elevenlabs" | "silence";
+    voice?: string;
+  }): Promise<TtsPreviewPayload> => {
+    const r = await fetch("/api/admin/tts/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
+  ttsStats: () =>
+    fetcher<TtsStatsPayload>("/tts/stats"),
   // 0.16.0 — Rivalry Week weekly podcast tab. Reads the weekly
   // rollup (which now carries a `podcast` field when
   // `out/weekly/<week_id>/podcast/episode_*.mp4` exists on disk).

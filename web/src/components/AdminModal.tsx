@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { api, type AdminConfig, type AdminPatch } from "../api";
 import { BacktestModal } from "./BacktestModal";
+import { TtsSettingsPanel } from "./TtsSettingsPanel";
 import { useFocusTrap } from "../lib/useFocusTrap";
 
 const ADMIN_TITLE_ID = "admin-modal-title";
@@ -290,6 +291,11 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
               Launch →
             </button>
           </div>
+        </Section>
+
+        {/* 0.17.0 — TTS */}
+        <Section label="TTS">
+          <TtsSettingsPanel />
         </Section>
 
         {/* Curriculum — Phase 4 */}

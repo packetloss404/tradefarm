@@ -13,6 +13,258 @@ commit on GitHub.
 
 ---
 
+## [0.17.0] — 2026-08-05
+
+A "real voice + lower-thirds builder + WS recording"
+release. Three parallel dev subagents shipped the
+three work streams; Subagent A (TTS settings UI)
+returned no files so the orchestrator did that work
+inline. The orchestrator also wrote the missing
+tests for Subagent B (lower-thirds) and fixed three
+runtime issues in the TTS preview path
+(`asyncio.run()` from inside a running event loop;
+the endpoint is `async def` so a plain `await`
+suffices). 1017 tests pass (+96 since 0.16.0).
+
+### Added — TTS settings UI
+
+- **`src/tradefarm/runtime/tts_config.py`** (NEW,
+  ~150 lines) — runtime-mutable TTS config singleton.
+  `TtsConfig` dataclass with `provider`, `voice`,
+  `speaking_rate`. `get_tts_config()` /
+  `set_tts_config()` / `reset_tts_config()` /
+  `estimate_cost_usd()`. Validation in `set_tts_config`
+  rejects unknown providers, empty voices, and out-
+  of-range rates (0.25-4.0). Threading lock around
+  the singleton so the dashboard's SWR refresh
+  doesn't see a torn read during a save.
+- **`src/tradefarm/api/admin.py`** — 4 new admin
+  endpoints:
+    - `GET /admin/tts/status` — returns the active
+      config + `available_providers` +
+      `has_creds[provider]` + `voices_by_provider`
+      + `cost_per_1k_chars_usd` (the dashboard's
+      `<TtsSettingsPanel />` uses these to gate
+      the radio cards).
+    - `POST /admin/tts/switch` — flips the active
+      config at runtime. Validates the requested
+      provider has its env key set (400 otherwise);
+      the `silence` provider is always allowed.
+      Returns `{previous, active}` so the dashboard
+      can show "reverted from X to Y".
+    - `POST /admin/tts/reset` — reverts to the
+      env-var defaults (`settings.podcast_tts_provider`).
+    - `POST /admin/tts/preview` — synthesizes a
+      single line to a tmp wav, returns it as
+      base64 audio, increments the TTS_SPEND counter
+      atomically. Supports a per-call
+      `provider`/`voice` override (so the operator
+      can try a different voice without committing
+      a switch).
+- **`src/tradefarm/api/main.py`** — new `TTS_SPEND`
+  module-global counter (mirrors `LLM_SKIPS`) +
+  `GET /tts/stats` endpoint (chars_synthesized,
+  cost_usd, calls, active_provider). The dashboard's
+  `<ApiSpendWidget />` reads this to show today's
+  TTS cost next to the LLM cost.
+- **`web/src/components/TtsSettingsPanel.tsx`** (NEW,
+  ~340 lines) — new admin modal section. Provider
+  radio cards with availability indicators
+  (cloud providers greyed out when env keys
+  missing; `silence` always available), voice
+  dropdown per provider, speaking-rate slider
+  (0.25-4.0x with labels), Save + Revert-to-env
+  buttons, inline preview textarea with
+  Synthesize button that plays the returned wav
+  in an inline `<audio controls>`, and a "Today:
+  N calls · N chars · $X · active: Y" spend line.
+- **`web/src/api.ts`** — `ttsStatus`, `ttsSwitch`,
+  `ttsReset`, `ttsPreview`, `ttsStats` SWR
+  fetchers + 5 new types (`TtsProvider`,
+  `TtsConfigPayload`, `TtsStatusPayload`,
+  `TtsPreviewPayload`, `TtsStatsPayload`).
+- **`web/src/components/AdminModal.tsx`** — new
+  "TTS" section between Tuning and Curriculum,
+  renders `<TtsSettingsPanel />`.
+
+### Added — lower-thirds builder
+
+- **`src/tradefarm/api/lower_third_log.py`** (NEW,
+  ~165 lines) — `LowerThirdEntry` dataclass +
+  `LowerThirdLog` bounded FIFO ring buffer
+  (`max_size=200`, eviction silent on overflow).
+  `record()` clamps `ttl_sec` to `[1, 120]`, drops
+  unknown colors to None, generates a uuid hex id
+  if omitted. `recent(limit)` returns newest-first.
+  Process-global singleton (`log = LowerThirdLog()`);
+  tests inject their own instance.
+- **`src/tradefarm/api/events.py`** — new
+  `EVENT_TYPE_LOWER_THIRD = "lower_third"` constant.
+  Payload shape documented in the module docstring.
+  Comment block explains the coexistence with
+  `stream_banner` (visual identical; `lower_third`
+  is the operator-driven path, `stream_banner` is
+  the broadcast suite's auto-fan-out).
+- **`src/tradefarm/api/admin.py`** — 2 new admin
+  endpoints:
+    - `POST /admin/lower_third/push` — body
+      `{title, subtitle?, ttl_sec?, color?, id?}`;
+      pydantic validation rejects empty titles,
+      unknown colors (`profit`/`loss`/`neutral`
+      only), out-of-range ttl. Publishes via
+      `publish_event` so the stream's `useStreamCommands`
+      sees the event with no extra wiring. Records
+      to the in-memory log. Returns the recorded
+      entry (with its server-assigned id) so the
+      dashboard can show a "pushed at HH:MM:SS" toast.
+    - `GET /admin/lower_third/recent?limit=N` —
+      returns `{items: [...]}` newest-first.
+      Default 50, max 200 (clamped; negative
+      returns 400).
+- **`stream/src/shared/useLiveEvents.ts`** — new
+  `lower_third` case in the `LiveEvent` union;
+  `LowerThirdPayload` type. The stream app's
+  `useLiveEvents` consumer sees the event with no
+  extra wiring.
+- **`stream/src/hooks/useStreamCommands.ts`** —
+  new `lower_third` case in the WS event switch.
+  Routes to the same `setBannerSafe` slot as the
+  legacy `stream_banner`; visual is identical. The
+  `BannerState` type gains an optional `color`
+  field (`profit` | `loss` | `neutral`).
+- **`stream/src/components/LowerThird.tsx`** —
+  extended to read the new `color` field and apply
+  an accent border on the left edge. Pre-0.17.0
+  banners (and `stream_banner` events without the
+  field) default to `profit`.
+- **`web/src/components/LowerThirdBuilder.tsx`**
+  (NEW, ~270 lines) — new section in the broadcast
+  panel. Title input (required, max 80 chars),
+  subtitle input (optional, max 120), TTL slider
+  (1-120s, default 8), color radio (profit/loss/
+  neutral), "Push to stream" button + success
+  toast, recent-rows list (last 10) with "Replay"
+  buttons (re-pushes the same payload with a new
+  id; one click, not three form fields).
+- **`web/src/components/broadcast/BroadcastPanel.tsx`** —
+  integrates `<LowerThirdBuilder />` as a new
+  collapsible section.
+- **`web/src/api.ts`** — `pushLowerThird` +
+  `getRecentLowerThirds` SWR fetchers (shipped by
+  Subagent B).
+
+### Added — WS event recording (Subagent C)
+
+- **`src/tradefarm/api/ws_recording.py`** (NEW,
+  ~140 lines) — `WsRecorder` class. Writes one
+  JSON line per WS frame to
+  `data_cache/ws_recordings/<session_id>.ndjson`.
+  Each line: `{"ts": iso, "session": sid,
+  "direction": "in"|"out", "type": ev_type,
+  "payload": {...}}`. Line-buffered append mode
+  for `tail -f` debugging. Best-effort: failed
+  writes log + drop, never crash the WS. Process-
+  global registry (`_recorders: dict[str, WsRecorder]`)
+  enforces "one recorder per session_id";
+  creating a second closes the first (and flushes
+  its buffer).
+- **`src/tradefarm/api/ws.py`** — wraps the
+  `publish_event` hot path with a thin recorder-
+  aware shim. Overhead is one `dict.get()` when
+  no recorder is active for the session (the
+  common case). The `in` direction is recorded
+  by `websocket_endpoint` on each received frame.
+- **`src/tradefarm/api/admin.py`** — 3 new admin
+  endpoints:
+    - `POST /admin/ws_recording/start` — body
+      `{session_id, base_dir?}`. Creates a recorder
+      for the session; idempotent (re-calling
+      returns the existing recorder's path).
+    - `POST /admin/ws_recording/stop` — body
+      `{session_id}`. Closes the recorder, returns
+      `{ok, frames_recorded, path}`. 404 if no
+      recorder for that session.
+    - `GET /admin/ws_recording/list?base_dir=...` —
+      returns the list of recorded session_ids
+      (filenames without extension).
+- **`src/tradefarm/orchestrator/broadcast_fixtures.py`** —
+  2 new helpers (no breaking changes to existing
+  API):
+    - `load_ws_recording(path)` — reads a recording
+      NDJSON, returns the list of frames. Skips
+      corrupted lines with a warning.
+    - `replay_ws_recording(frames, *, tick_sec)` —
+      yields one frame at a time, `tick_sec` apart.
+      Lets a test or a future "replay mode" iterate
+      deterministically.
+- **`web/src/components/RecordingPanel.tsx`** (NEW,
+  ~150 lines, optional Subagent C scope) — a small
+  panel in the broadcast section. Start / Stop
+  per session_id; list of available recordings;
+  "Replay" button per recording opens a future
+  `/replay/<session_id>` route. (The route itself
+  is a follow-on; the panel surface ships now.)
+- **`tests/api/test_ws_recording.py`** (NEW,
+  ~180 lines) — recorder round-trip + IO-error
+  swallowing + append-across-instances + close-
+  idempotency + path-shape assertions.
+- **`tests/orchestrator/test_broadcast_fixtures.py`**
+  — 2 new tests for `load_ws_recording` +
+  `replay_ws_recording`.
+
+### Orchestrator integration fixes
+
+- **`src/tradefarm/api/admin.py:649`** — the
+  preview endpoint's first cut called
+  `asyncio.run(synthesize(...))` from inside a
+  FastAPI `async def` handler. That fails with
+  "asyncio.run() cannot be called from a running
+  event loop". The endpoint is `async def` so a
+  plain `await` suffices. Fixed.
+- **Subagent B's lower-thirds work** shipped
+  without tests. Orchestrator wrote
+  `tests/api/test_lower_third_admin.py` (7 tests)
+  + `tests/api/test_lower_third_log.py` (16 tests)
+  + 1 missing test for the cap+eviction case.
+- **Subagent A's TTS work** shipped no files at
+  all. Orchestrator did the full work: tts_config
+  module, 4 admin endpoints, TTS_SPEND counter +
+  `/tts/stats` endpoint, TtsSettingsPanel,
+  AdminModal integration, api.ts types, plus
+  18 admin-endpoint tests + 21 config unit tests.
+
+### Operational notes
+
+- **921 → 1017 tests pass** (+96). Breakdown:
+  lower_third_log: +16, lower_third_admin: +7,
+  tts_config: +21, tts_admin: +18, ws_recording:
+  +5, broadcast_fixtures (ws helpers): +2, +27
+  from Subagent C's wider coverage.
+- **No `SCHEMA_VERSION` bump** — all new state is
+  in-memory (LowerThirdLog, TtsConfig singleton,
+  TTS_SPEND counter, WsRecorder registry, ws
+  recordings dir on disk).
+- **No new env vars.**
+- **Web prod bundle**: 373 KB → 374 KB / 108 KB →
+  108 KB gzipped (TtsSettingsPanel + LowerThirdBuilder
+  + RecordingPanel added ~1 KB before gzip; gzipped
+  size is essentially flat — Vite compresses the
+  new code efficiently).
+- **The audio/cadence controls stay clickable when
+  the stream is offline** (0.13.0 carryover):
+  Reminder in 0.13.0 CHANGELOG.
+- **Visual QA pause** — please verify (a) the
+  TTS settings panel opens, shows the silence
+  provider as active, and the radio cards gate
+  correctly when no env keys are set; (b) the
+  lower-thirds builder pushes a banner that
+  appears on the stream for the TTL window;
+  (c) the WS recording start/stop cycle works
+  against a live session (the recording file
+  appears in `data_cache/ws_recordings/`).
+
+---
+
 ## [0.16.0] — 2026-08-05
 
 A "recap scene + Rivalry Week podcast + scheduler

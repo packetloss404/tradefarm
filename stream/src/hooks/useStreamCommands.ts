@@ -42,6 +42,11 @@ export type BannerState = {
   subtitle: string;
   ttl_sec: number;
   shown_at: number;
+  // 0.17.0 — optional accent color for the left bar. Pre-0.17.0
+  // banners (and `stream_banner` events that don't set the field)
+  // are treated as `profit` by the `LowerThird` component; the new
+  // `lower_third` WS case passes the operator-picked accent.
+  color?: "profit" | "loss" | "neutral";
 };
 
 export type MacroFireState = {
@@ -372,6 +377,36 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
             title: p.title,
             subtitle: p.subtitle ?? "",
             ttl_sec: typeof p.ttl_sec === "number" ? p.ttl_sec : 8,
+            shown_at: replayNow(),
+          });
+          break;
+        }
+        case "lower_third": {
+          // 0.17.0 — operator-pushed banner. Routes to the same
+          // banner slot as `stream_banner` (the visual is identical
+          // — only the audit trail differs). Defensive: server-side
+          // validation already rejects empty titles, but the wire
+          // might be stale (e.g. a pre-0.17.0 record replayed) so
+          // bail on missing title.
+          const p = ev.payload;
+          if (!p.title) {
+            setBannerSafe(null);
+            break;
+          }
+          const color =
+            p.color === "profit" || p.color === "loss" || p.color === "neutral"
+              ? p.color
+              : undefined;
+          // Same TTL clamp as the legacy banner handler so a
+          // dashboard-set value outside [1, 120] still renders
+          // instead of crashing the slot. Default 8s matches the
+          // server-side default in `lower_third_log.record()`.
+          const ttl = typeof p.ttl_sec === "number" ? p.ttl_sec : 8;
+          setBannerSafe({
+            title: p.title,
+            subtitle: p.subtitle ?? "",
+            ttl_sec: ttl,
+            color,
             shown_at: replayNow(),
           });
           break;

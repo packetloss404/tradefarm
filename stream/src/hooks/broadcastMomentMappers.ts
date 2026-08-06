@@ -56,10 +56,20 @@ export function broadcastMomentToBanner(
 ): BannerState | null {
   if (!payload.outputs.includes(LOWER_THIRD)) return null;
   if (typeof payload.title !== "string" || payload.title.length === 0) return null;
+  // 0.17.0 — surface the canonical `color` field to the banner slot
+  // so a `lower_third`-tagged moment can paint the accent bar
+  // profit/loss/neutral. The legacy fan-out's `stream_banner` event
+  // still goes through `setBannerSafe` directly (no color) so the
+  // pre-0.17.0 path is unchanged.
+  const color: BannerState["color"] =
+    payload.color === "profit" || payload.color === "loss" || payload.color === "neutral"
+      ? payload.color
+      : undefined;
   return {
     title: payload.title,
     subtitle: payload.subtitle ?? "",
     ttl_sec: typeof payload.ttl_sec === "number" ? Math.max(1, Math.min(120, payload.ttl_sec || 8)) : 8,
+    color,
     shown_at: shownAt,
   };
 }

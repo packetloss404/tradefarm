@@ -11,9 +11,11 @@ import { BroadcastCadenceSection } from "./broadcast/BroadcastCadenceSection";
 import { BroadcastFullscreenSection } from "./broadcast/BroadcastFullscreenSection";
 import { BroadcastMacrosSection } from "./broadcast/BroadcastMacrosSection";
 import { BroadcastSpotlightSection } from "./broadcast/BroadcastSpotlightSection";
+import { BroadcastRecordingSection } from "./broadcast/BroadcastRecordingSection";
 import { PreviewPopoutButton } from "./broadcast/PreviewPopoutButton";
 import { AudienceRequestsPanel } from "./AudienceRequestsPanel";
 import { OfflineWarning } from "./broadcast/OfflineWarning";
+import { LowerThirdBuilder } from "./LowerThirdBuilder";
 
 type RecapPushResult = {
   moment_id: string;
@@ -186,17 +188,28 @@ export function BroadcastPanel() {
             <AudienceRequestsPanel />
           </div>
 
-          <div className="grid grid-cols-12 gap-4 border-t border-zinc-800 pt-4">
-            <div className="col-span-12 md:col-span-5">
-              <BroadcastSceneSection
-                scene={ss.scene}
-                rotationEnabled={ss.rotationEnabled}
-                layoutMode={ss.layoutMode}
-              />
+          {/* 0.17.0 — lower-third builder. New ad-hoc push surface
+              (color picker, replay list) sitting above the existing
+              banner form. The two sections stay side-by-side at md+
+              widths so the operator sees both at once. */}
+          <div className="border-t border-zinc-800 pt-4">
+            <div className="grid grid-cols-12 gap-4">
+              <div className="col-span-12 md:col-span-7">
+                <LowerThirdBuilder />
+              </div>
+              <div className="col-span-12 md:col-span-5">
+                <BroadcastSceneSection
+                  scene={ss.scene}
+                  rotationEnabled={ss.rotationEnabled}
+                  layoutMode={ss.layoutMode}
+                />
+              </div>
             </div>
+          </div>
 
+          <div className="grid grid-cols-12 gap-4 border-t border-zinc-800 pt-4">
             <div className="col-span-12 md:col-span-7 space-y-2">
-              <SectionLabel>Lower-third banner</SectionLabel>
+              <SectionLabel>Lower-third banner (legacy)</SectionLabel>
               <input
                 type="text"
                 placeholder="Title"
@@ -295,6 +308,17 @@ export function BroadcastPanel() {
                 pushed {recapPushToast.week_id} at {recapPushToast.pushedAtLabel}
               </div>
             )}
+          </div>
+
+          {/* 0.17.0 — WS frame recording. The right rail already
+              hosts low-frequency operator controls; the recording
+              panel fits the same "touch once, leave it" rhythm.
+              Start/stop + on-disk list map to the three admin
+              endpoints; the per-recording "Replay" affordance is a
+              next-round deliverable (needs a second WS consumer
+              that walks the NDJSON). */}
+          <div className="border-t border-zinc-800 pt-4">
+            <BroadcastRecordingSection />
           </div>
         </div>
 

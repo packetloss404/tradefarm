@@ -6,7 +6,24 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.16.0 shipped 2026-08-05.** A "recap scene +
+**0.17.0 shipped 2026-08-05.** A "real voice +
+lower-thirds builder + WS recording" release.
+The TTS settings UI flips the active TTS
+provider at runtime (no env-var restart) with
+a save/reset/preview affordance per provider;
+the lower-thirds builder ships a dedicated
+`lower_third` WS event + dashboard quick-input
+form + in-memory recent-rows ring buffer for
+replay; the WS event recording layer logs every
+`/ws` frame to NDJSON for replay fixtures and
+audio-engine tuning. Three parallel dev
+subagents shipped the three work streams; the
+orchestrator integrated and fixed one
+cross-cutting issue (the preview endpoint's
+`asyncio.run` from inside a running event
+loop — replaced with `await`). 1017 tests pass
+(+96 since 0.16.0). See [CHANGELOG.md](./CHANGELOG.md)
+for the full release notes.
 Rivalry Week podcast + scheduler tuning fixtures"
 release. Closes three backlog items in one
 swing: item **4.5** (recap scene at 4pm ET), the
@@ -33,19 +50,22 @@ Status legend:
 
 ## Now — current focus
 
-The 0.16.0 release (2026-08-05) closed item **4.5**
-(recap scene at 4pm ET), the Rivalry Week podcast
-format, and milestone 3 of `docs/broadcast_os.md`
-(replay fixtures). All three Broadcast OS
-milestones are now closed. The **next leverage
-piece is a 0.17.0 "real voice" release** — the
-recap scene + podcast ship with `silence` TTS by
-default in CI; the operator needs to pick
-`ELEVENLABS_API_KEY` or `OPENAI_API_KEY` and
-accept the per-week cost to hear the actual
-voice. The 0.17.0 work is config + TTS provider
-switching (no infra change), then visual QA of
-the real voice on the next trading-day close.
+The 0.17.0 release (2026-08-05) shipped the
+"real voice" + lower-thirds builder + WS
+recording trio. The **next leverage piece is
+visual QA + the 0.18.0 "small wins" release**:
+lower-thirds builder is wired but the visual
+QA pass is operator-driven; WS recordings need
+a real-session smoke test; the TTS preview
+needs an `ELEVENLABS_API_KEY` / `OPENAI_API_KEY`
+to actually hear the real voice. Once QA
+passes, 0.18.0 candidates (in priority order):
+**Intraday data path** (5-min EODHD instead
+of daily bars), **Per-strategy daily
+attribution snapshot** table (avoid hot re-
+aggregation), and **Persistent LLM-decision
+feed sidebar** (the smallest of the three; pure
+dashboard widget).
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
@@ -132,8 +152,11 @@ by impact — pick any one when the operator wants a small, contained PR.
   the agent that just had the biggest fill. Hold, ease back.
 - **Promotion cutscene** — pause the world, particle burst, halo
   growth, sprite floats. Replaces the current static halo.
-- **Lower-thirds builder** — generic title/subtitle component driven
-  by a new `lower_third` WS event so a CLI can pop banners on demand.
+- ✅ ~~**Lower-thirds builder** — generic title/subtitle
+  component driven by a new `lower_third` WS event so a
+  CLI can pop banners on demand.~~ Shipped in 0.17.0:
+  `lower_third` event + `<LowerThirdBuilder />` panel +
+  recent-rows ring buffer for replay.
 
 ### Dashboard
 - **Persistent LLM-decision feed** — the current commentary caption is
@@ -144,10 +167,12 @@ by impact — pick any one when the operator wants a small, contained PR.
   main grid.
 
 ### Operations
-- **WebSocket event recording** — log every `/ws` frame to a
-  `data_cache/ws_recordings/` ndjson per session so we can replay
-  sessions for testing without standing up real ticks. Useful for
-  audio-engine tuning and pre-recorded promo clips.
+- ✅ ~~**WebSocket event recording** — log every `/ws` frame
+  to a `data_cache/ws_recordings/` ndjson per session so we
+  can replay sessions for testing without standing up real
+  ticks.~~ Shipped in 0.17.0: `WsRecorder` class + admin
+  start/stop/list endpoints + `load_ws_recording` +
+  `replay_ws_recording` helpers.
 
 ---
 
