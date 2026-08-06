@@ -11,6 +11,31 @@ commit on GitHub.
 
 - None yet.
 
+## [0.29.0] - 2026-08-05
+
+A "per-agent profile page" release.
+The existing ``AgentDetailModal`` is now
+promoted to a deep-linkable routed page:
+`#agent/<id>`. New ``DashRouteState``
+discriminated union in ``useHashRoute``
+lets the four pre-existing routes (today,
+episodes, research, admin) keep their
+zero-param shape while ``agent`` carries
+the id. ``DashNav`` and ``Dashboard``
+were updated to switch on ``route.route``
+(not the bare route). New ``Agent.tsx``
+fetches the agent by id via SWR, holds
+the last-seen snapshot across transient
+re-renders, and renders the existing
+``AgentDetailModal`` in a full-page
+header-and-back-link layout. URL is
+deep-linkable: open `#agent/123` in a new
+tab and the page lands. The modal-style
+click-from-grid path is unchanged; this
+release is a parallel route, not a
+replacement. 1107 tests pass; web tsc
+clean; web build 401KB / 115.7KB gzipped.
+
 ## [0.28.0] - 2026-08-05
 
 A "camera dolly cinematic" release.

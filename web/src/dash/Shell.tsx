@@ -5,7 +5,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useTheme } from "./ThemeContext";
 import { ETClock, fmtMoney, fmtPct } from "../vod/widgets";
 import type { VodSessionLive } from "../vod/useVodSessionLive";
-import type { DashRoute } from "./useHashRoute";
+import type { DashRoute, DashRouteState } from "./useHashRoute";
 import type { DashTweaks } from "./useDashTweaks";
 
 const ROUTES: { id: DashRoute; label: string }[] = [
@@ -21,8 +21,8 @@ export function DashNav({
   go,
 }: {
   vod: VodSessionLive;
-  route: DashRoute;
-  go: (id: DashRoute) => void;
+  route: DashRouteState;
+  go: (id: DashRouteState) => void;
 }) {
   const { T } = useTheme();
   return (
@@ -75,17 +75,17 @@ export function DashNav({
         {ROUTES.map((r) => (
           <button
             key={r.id}
-            onClick={() => go(r.id)}
+            onClick={() => go({ route: r.id, param: null } as DashRouteState)}
             style={{
               fontFamily: '"Helvetica Neue", sans-serif',
               fontSize: 13,
-              fontWeight: route === r.id ? 600 : 500,
+              fontWeight: route.route === r.id ? 600 : 500,
               padding: "8px 14px",
               borderRadius: 4,
               border: "none",
               cursor: "pointer",
-              background: route === r.id ? T.panel2 : "transparent",
-              color: route === r.id ? T.text : T.text2,
+              background: route.route === r.id ? T.panel2 : "transparent",
+              color: route.route === r.id ? T.text : T.text2,
               transition: "background 120ms",
             }}
           >

@@ -12,6 +12,7 @@ import { TodayPage } from "./Today";
 import { EpisodesPage } from "./Episodes";
 import { ResearchPage } from "./Research";
 import { AdminPage } from "./Admin";
+import { AgentPage } from "./Agent";
 
 // One-time amber-CRT scanline overlay. Conditional on body[data-theme]
 // so the dark / light themes don't pay for it.
@@ -57,13 +58,15 @@ export default function Dashboard() {
   );
 
   const page = (() => {
-    switch (route) {
+    switch (route.route) {
       case "episodes":
         return <EpisodesPage />;
       case "research":
         return <ResearchPage vod={vod} />;
       case "admin":
         return <AdminPage />;
+      case "agent":
+        return <AgentPage />;
       case "today":
       default:
         return <TodayPage vod={vod} tweaks={tweaks} />;
@@ -80,7 +83,7 @@ export default function Dashboard() {
           fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
         }}
       >
-        <DashNav vod={vod} route={route} go={go} />
+        <DashNav vod={vod} route={route} go={go as never} />
         <div style={{ maxWidth: 1600, margin: "0 auto" }}>{page}</div>
         <TweaksButton onClick={() => setTweaksOpen((o) => !o)} />
         <TweaksPanel
