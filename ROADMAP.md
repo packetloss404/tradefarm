@@ -71,19 +71,25 @@ by impact — pick any one when the operator wants a small, contained PR.
 - **Frontend — single `WebSocket` per tab via a context provider.**
   Dashboard opens 3, stream opens 2. The H12 multi-WS issue from
   prior rounds was only half-fixed. *~½ day.*
-- **Frontend — gate mock data behind `import.meta.env.DEV`.** Both
-  `dash/mockData.ts` and `vod/mockData.ts` ship in the prod bundle.
-  *~1 hour.*
+- ✅ ~~**Frontend — gate mock data behind `import.meta.env.DEV`.**~~
+  Already shipped in 0.13.0 — Vite tree-shakes the dev branch of
+  `web/src/vod/data.ts` + `web/src/dash/data.ts` exports in
+  production (see 0.13.0 CHANGELOG). The prod bundle is 360 KB
+  / 108 KB gzipped, which is the proof.
 - ✅ ~~**Frontend — kill the 800ms `useVodSessionLive` heartbeat.**~~
   Already shipped in 0.10.0/0.11.0 — the cursor-blink moved to the
   `ETClock` leaf and the global 1.25Hz re-render is gone (see
   `useVodSessionLive.ts:206-211`).
-- **Frontend — a11y pass on the legacy modals.** `AdminModal.tsx` and
-  `BacktestModal.tsx` need `role="dialog"`, `aria-modal`, focus trap,
-  return-focus on close. *~1 hour.*
-- **Frontend — replace `disabled={!isOnline}` with a warning banner.**
-  If the stream heartbeat ever goes stale, the entire Broadcast
-  panel greys out at the worst possible moment. *~½ day.*
+- ✅ ~~**Frontend — a11y pass on the legacy modals.**~~ Already
+  shipped in 0.13.0/0.14.0 — `AdminModal.tsx` + `BacktestModal.tsx`
+  have `role="dialog"`, `aria-modal`, `useFocusTrap`,
+  return-focus on close, and `aria-label` coverage (see 0.13.0
+  + 0.14.0 CHANGELOGs).
+- ✅ ~~**Frontend — replace `disabled={!isOnline}` with a warning
+  banner.**~~ Already shipped in 0.13.0 — the Broadcast panel's
+  audio + cadence controls stay clickable when the stream
+  heartbeat goes stale; the `OfflineWarning` banner is the only
+  state flag. See 0.13.0 CHANGELOG.
 
 **Docs:**
 
@@ -209,7 +215,7 @@ question.
   and rate-limiting the WS feed. Not trivial.
 - **Mascot pet** in `AgentWorldXL` — a small farmer/chicken that
   wanders the bridges. Pure flavor; would survive a 2-day sprint.
-  _(Shipped 2026-05-09 — `stream/src/components/MascotPet.tsx`.)_
+  ~~_(Shipped 2026-05-09 — `stream/src/components/MascotPet.tsx`.)_~~
 
 ---
 
