@@ -55,20 +55,25 @@ The next things to actually pick up. Cross-surface, prioritized by
 1. `[stream]` **Tick countdown ring + equity sparkline in TopTicker**
    (2.1 + 2.2). The two HUD missing pieces. Dashboard already has the
    countdown ring; the stream's `TopTicker` doesn't. Effort: S + M.
-2. `[stream][backend]` **Broadcast OS scheduler v1.** Consume
-   `broadcast_moment`, apply priority/TTL/cooldowns, and expose one active
-   slot per output type before the UI migrates off legacy events. Effort: M.
+2. ~~`[stream][backend]` **Broadcast OS scheduler v1.**~~ **SHIPPED
+   (0.15.0)** — `useStreamCommands` consumes canonical
+   `broadcast_moment`, applies priority/TTL/cooldowns, exposes one
+   active slot per output type. UI fully migrated off legacy events.
 3. `[stream]` **CSS-only CRT toggle** (5.1, css path). Instant retro
    vibe without WebGL. Effort: S.
-4. `[stream]` **Recap scene at 4pm ET** (4.5). Closes the broadcast
-   day; fifth rotator scene auto-shown after 16:00 ET. Effort: L.
+4. ~~`[stream]` **Recap scene at 4pm ET** (4.5).~~ **SHIPPED (0.16.0)**
+   — `LiveRecapScene.tsx` is the fifth rotator scene, auto-shown
+   after 16:00 ET. Daily recap scheduler lives in
+   `broadcast_suite.run_daily_recap_scheduler`.
 5. `[dashboard]` **Open-positions sparkline strip** above the agent
    grid. One row per symbol with mark, P&L, qty. Effort: S. Source:
    `/positions`.
 6. `[dashboard]` **Keyboard map overlay** (`?`). Cheat sheet of every
    shortcut. Effort: S.
-7. `[dashboard]` **API spend widget** from `/llm/stats` plus a daily
-   cap dial. Effort: S.
+7. ~~`[dashboard]` **API spend widget** from `/llm/stats` plus a daily
+   cap dial.~~ **SHIPPED (0.14.0)** — `ApiSpendWidget.tsx` consumes
+   `/llm/stats`, daily cap dial is the `daily_llm_spend_cap_usd`
+   field on `AdminConfig` (dial lives in `AdminModal.tsx`).
 
 ---
 

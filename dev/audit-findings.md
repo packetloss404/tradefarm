@@ -72,7 +72,7 @@ Status: **FIXED** (committed), **FIX-NEXT** (next session), **DOC**
 | H9 | `youtube_chat.py` no circuit breaker for revoked refresh token. | **FIXED (round 3)** — circuit breaker + scrubbed-log on auth-error body (also closes C5). See `tests/orchestrator/test_youtube_chat.py`. |
 | H10 | `stream/` — `data-scene-ready` only on `SceneRotator`; PreRoll/v1-broadcast never signal ready → headless hangs. | **FIXED (round 4)** — ready signalling extended; headless renderer no longer hangs. |
 | H11 | `stream/` — `Date.now()` callsites wall-clock under replay. | **FIXED (round 4)** — `replayNow()` / `replayDate()` shim in `stream/src/shared/replayMode.ts`. CLAUDE.md gotcha #13 added. |
-| H12 | `stream/hooks/useStreamState` opens multiple `/ws` per tab. | FIX-NEXT (still open) |
+| H12 | `stream/hooks/useStreamState` opens multiple `/ws` per tab. | **FIXED (0.13.0/0.14.0)** — both apps wrap the root in `<LiveProvider urlOverride={wsUrl}>` (see `web/src/main.tsx:41` + `stream/src/App.tsx:193`); single WebSocket per tab, hooks fan out. |
 | H13 | `web/hooks/useEventFeed.feed.account` sticky after reconnect. | **FIXED (round 4)** — see `web/src/hooks/useEventFeed.ts` diff. |
 | H14 | `config.py` env-var shadowing hides admin `.env` writes. | FIX-NEXT (still open) |
 | H15 | `tts/run.py:198` may write `b"<coroutine>"`. | **FIXED (round 3)** — uses `with_streaming_response`; see `tests/tts/test_run.py`. |
@@ -142,8 +142,6 @@ rounds 2-8. List preserved for the audit trail:
 
 - H6 — `commentary_loop` recreates LLM overlay each 45s tick (defeats
   keepalive + prompt cache)
-- H12 — multiple `/ws` per tab (lift `useStreamState` into a context;
-  only half-fixed in round 4)
 - H14 — env-var shadowing hides admin `.env` writes after restart
 - Backend `pnl_daily` denominator hardcoded to 1000.0 (ignores
   `agent_starting_capital`)
@@ -307,8 +305,6 @@ frontends).
 
 ## New deferred items (not yet ticketed)
 
-- `H12` — multiple `/ws` connections per tab (lift `useStreamState`
-  into a context provider)
 - `H14` — config env-var shadowing makes admin `.env` writes invisible
   if env was set in shell; warn on boot
 - `H6` — `commentary_loop` recreates LLM overlay each 45s tick (still
