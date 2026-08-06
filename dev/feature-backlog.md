@@ -62,8 +62,12 @@ The next things to actually pick up. Cross-surface, prioritized by
    (0.15.0)** — `useStreamCommands` consumes canonical
    `broadcast_moment`, applies priority/TTL/cooldowns, exposes one
    active slot per output type. UI fully migrated off legacy events.
-3. `[stream]` **CSS-only CRT toggle** (5.1, css path). Instant retro
-   vibe without WebGL. Effort: S.
+3. ~~`[stream]` **CSS-only CRT toggle** (5.1, css path).~~ **SHIPPED**
+   — `body.crt-on` class in `stream/src/index.css` (lines 78-127):
+   chroma-fringe `text-shadow` + repeating-linear-gradient
+   scanlines + radial-gradient vignette, all `pointer-events:
+   none`. Toggled by `cmds.crtEnabled` in `App.tsx`; persists
+   to local storage via `settings.crtEnabled`.
 4. ~~`[stream]` **Recap scene at 4pm ET** (4.5).~~ **SHIPPED (0.16.0)**
    — `LiveRecapScene.tsx` is the fifth rotator scene, auto-shown
    after 16:00 ET. Daily recap scheduler lives in
