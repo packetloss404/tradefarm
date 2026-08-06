@@ -66,7 +66,7 @@ Status: **FIXED** (committed), **FIX-NEXT** (next session), **DOC**
 
 | ID | Finding | Status |
 |---|---|---|
-| H6 | `commentary_loop.py:298` recreates LLM overlay on every 45s tick. | FIX-NEXT (still open) |
+| H6 | `commentary_loop.py:298` recreates LLM overlay on every 45s tick. | **FIXED** — `_overlay_cache` field on `CommentaryLoop` holds the LlmOverlay across ticks; `_make_one_call` only constructs it when the cache is None. `invalidate_overlay()` resets the cache when the admin path flips provider/keys. See `src/tradefarm/orchestrator/commentary_loop.py:138,153,325-327`. |
 | H7 | `streak_watcher.py:165` serial DB queries per agent. | **FIXED (round 4 / via streak_watcher refactor)** — see commit `bbee2d5`. |
 | H8 | `predictions.py:256-266` daily reset double-walks `open → locked → revealed` in one tick. | **FIXED (round 2)** — see `tests/test_audit_round2_fixes.py::test_predictions_reset_evening_does_not_walk_to_revealed`. |
 | H9 | `youtube_chat.py` no circuit breaker for revoked refresh token. | **FIXED (round 3)** — circuit breaker + scrubbed-log on auth-error body (also closes C5). See `tests/orchestrator/test_youtube_chat.py`. |
@@ -74,7 +74,7 @@ Status: **FIXED** (committed), **FIX-NEXT** (next session), **DOC**
 | H11 | `stream/` — `Date.now()` callsites wall-clock under replay. | **FIXED (round 4)** — `replayNow()` / `replayDate()` shim in `stream/src/shared/replayMode.ts`. CLAUDE.md gotcha #13 added. |
 | H12 | `stream/hooks/useStreamState` opens multiple `/ws` per tab. | **FIXED (0.13.0/0.14.0)** — both apps wrap the root in `<LiveProvider urlOverride={wsUrl}>` (see `web/src/main.tsx:41` + `stream/src/App.tsx:193`); single WebSocket per tab, hooks fan out. |
 | H13 | `web/hooks/useEventFeed.feed.account` sticky after reconnect. | **FIXED (round 4)** — see `web/src/hooks/useEventFeed.ts` diff. |
-| H14 | `config.py` env-var shadowing hides admin `.env` writes. | FIX-NEXT (still open) |
+| H14 | `config.py` env-var shadowing hides admin `.env` writes. | **FIXED** — `_check_env_shadows()` runs at module import time and logs `env_shadow: <KEY> is set in both shell and .env; shell wins on restart` for every field whose shell value differs from the file-resolved value. See `src/tradefarm/config.py:319-352`. |
 | H15 | `tts/run.py:198` may write `b"<coroutine>"`. | **FIXED (round 3)** — uses `with_streaming_response`; see `tests/tts/test_run.py`. |
 | H16 | `script/write.py` prompt injection via beat headlines. | **FIXED (round 3)** — `<beat>…</beat>` delimiters; see `tests/script/test_write.py`. |
 | H17 | `risk/manager.py` per-symbol cap was per-trade. | **FIXED (round 2)** — `check_entry` accounts for existing notional; see `tests/test_risk_audit_fixes.py::test_check_entry_rejects_adds_that_breach_cap`. |
@@ -140,8 +140,6 @@ rounds 2-8. List preserved for the audit trail:
 
 **Post-0.6.0 priority surface (the next top-10 candidates):**
 
-- H6 — `commentary_loop` recreates LLM overlay each 45s tick (defeats
-  keepalive + prompt cache)
 - H14 — env-var shadowing hides admin `.env` writes after restart
 - Backend `pnl_daily` denominator hardcoded to 1000.0 (ignores
   `agent_starting_capital`)
@@ -305,10 +303,7 @@ frontends).
 
 ## New deferred items (not yet ticketed)
 
-- `H14` — config env-var shadowing makes admin `.env` writes invisible
-  if env was set in shell; warn on boot
-- `H6` — `commentary_loop` recreates LLM overlay each 45s tick (still
-  defeats keepalive + prompt cache)
+- *(none — all tracked items closed in 0.19.x)*
 - `AgentWorldXL` 60Hz re-render MED item closed in round 6 C5 (now
   marked FIXED above). All other MED / LOW items unchanged from
   round 1.
