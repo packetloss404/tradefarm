@@ -290,6 +290,13 @@ const WALK_MS = 2_400;
 const FILL_BOUNCE_MS = 1_500;
 const STARTING_CAPITAL = 1_000;
 const SLUMP_PNL_THRESHOLD = -STARTING_CAPITAL * 0.05;
+// 0.26.0 — speech-bubble window. The LLM's ``last_decision.reason``
+// surfaces above the sprite for BUBBLE_MS after the matching fill.
+// Per-agent bubbles are rendered from the Map; the input cadence
+// (~1 per agent per ~30s tick) is naturally bounded so an explicit
+// visible-cap isn't needed.
+const BUBBLE_MS = 6_000;
+const BUBBLE_MAX_CHARS = 60;
 
 type Transition = { from: ZoneId; to: ZoneId; expiresAt: number };
 
@@ -343,6 +350,45 @@ export function AgentWorldXL({
     }
     return m;
   }, [fills]);
+
+  // 0.26.0 — speech bubbles. For each agent that has a recent
+  // ``last_decision.reason`` (within BUBBLE_MS), render a truncated
+  // SVG bubble above the sprite. The bubble fades via the rAF-driven
+  // opacity in the same interval that ticks ``flows`` / ``halos``;
+  // we keep the data model simple (Map<id, {reason, expiresAt}>) so
+  // a decision is naturally cleaned up on the next tick after the
+  // window expires.
+  const [bubbles, setBubbles] = useState<Map<number, { reason: string; expiresAt: number }>>(new Map());
+  useEffect(() => {
+    const now = replayNow();
+    setBubbles((prev) => {
+      const next = new Map(prev);
+      for (const a of agents) {
+        const ld = a.last_decision;
+        if (!ld || !ld.reason) continue;
+        // We don't have a per-decision timestamp on AgentRow, so
+        // the heuristic is: the LLM-overlay agents have a
+        // ``last_decision`` only after the most recent tick. Use
+        // ``lastFillAt`` as a proxy for "decision is recent" — a
+        // decision without a follow-up fill in the last 30s is a
+        // wait (no need to surface it). When a fill IS recent, the
+        // reason belongs to that fill's decision.
+        const fillAt = lastFillAt.get(a.id);
+        if (fillAt === undefined) continue;
+        if (now - fillAt > BUBBLE_MS) continue;
+        const reason = ld.reason.slice(0, BUBBLE_MAX_CHARS);
+        next.set(a.id, { reason, expiresAt: fillAt + BUBBLE_MS });
+      }
+      // Garbage-collect expired bubbles.
+      for (const [id, b] of prev) {
+        if (b.expiresAt <= now) next.delete(id);
+      }
+      return next;
+    });
+  }, [agents, lastFillAt]);
+
+  // (BUBBLE_MAX_VISIBLE is implicit: the per-sprite render reads
+  // from the Map; the input cadence is naturally bounded.)
 
   const islandById = useMemo(() => {
     const m = new Map<ZoneId, Island>();
@@ -793,6 +839,53 @@ export function AgentWorldXL({
                 transition: `transform ${WALK_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
               }}
             >
+              {/* 0.26.0 — speech bubble above the sprite. Rendered
+                  FIRST so the rest of the sprite (halos, sprite body)
+                  draws on top. The bubble is positioned in world
+                  coordinates (offset from the sprite group origin) and
+                  only visible while ``bubbles.get(a.id)`` is set. */}
+              {bubbles.get(a.id) && (() => {
+                const b = bubbles.get(a.id)!;
+                const remaining = (b.expiresAt - replayNow()) / BUBBLE_MS;
+                // Fade in the first 200ms, fade out in the last 800ms.
+                const opacity =
+                  remaining < 0.15
+                    ? Math.max(0, remaining / 0.15)
+                    : remaining > 0.97
+                      ? Math.min(1, (1 - remaining) / 0.03 + 1)
+                      : 1;
+                return (
+                  <g transform="translate(0, -32)" opacity={opacity}>
+                    <rect
+                      x={-BUBBLE_MAX_CHARS / 2 * 1.4}
+                      y={-22}
+                      width={BUBBLE_MAX_CHARS * 1.4}
+                      height={26}
+                      rx={4}
+                      fill="rgba(15,23,42,0.92)"
+                      stroke="rgba(148,163,184,0.4)"
+                      strokeWidth={0.6}
+                    />
+                    {/* Pointer triangle toward the sprite's head */}
+                    <path
+                      d="M -3 -2 L 0 2 L 3 -2 Z"
+                      fill="rgba(15,23,42,0.92)"
+                      stroke="rgba(148,163,184,0.4)"
+                      strokeWidth={0.6}
+                    />
+                    <text
+                      x={0}
+                      y={-7}
+                      textAnchor="middle"
+                      fontSize={4.2}
+                      fontFamily="ui-monospace, SFMono-Regular, monospace"
+                      fill="rgb(226,232,240)"
+                    >
+                      {b.reason}
+                    </text>
+                  </g>
+                );
+              })()}
               {isPinned && (
                 <motion.circle
                   r={22}

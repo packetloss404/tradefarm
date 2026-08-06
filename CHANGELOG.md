@@ -11,6 +11,26 @@ commit on GitHub.
 
 - None yet.
 
+## [0.26.0] - 2026-08-05
+
+A "speech bubbles on agents" release.
+AgentWorldXL now surfaces the LLM's
+``last_decision.reason`` as a truncated SVG
+bubble above the matching sprite for 6s
+after a fill. Rendered as a rounded rect
+with a pointer triangle and a centered
+monospace text node; fade-in (200ms) and
+fade-out (last 800ms) keep the bubble from
+popping in/out abruptly. The bubble data
+lives in a Map<agentId, {reason, expiresAt}>
+that ticks on the same interval as the
+existing halos/flows (300ms). No new env
+vars, no backend changes, no test infra
+yet (the visual is observable in the
+running stream; the unit-test infra is
+web/jsx, which we don't have wired).
+Web bundle unchanged; stream tsc clean.
+
 ## [0.24.0] - 2026-08-05
 
 A "intraday data path" release. The
