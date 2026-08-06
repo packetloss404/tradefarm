@@ -164,6 +164,10 @@ export type AdminConfig = {
   llm_provider: "anthropic" | "minimax";
   llm_model: string;
   anthropic_api_key: AdminSecretField;
+  // 0.18.0 — OpenAI key field, populated by the backend once
+  // `OPENAI_API_KEY` is in the env. Optional so the picker
+  // gracefully degrades on 0.17.0 backends that don't emit it.
+  openai_api_key?: AdminSecretField;
   minimax_api_key: AdminSecretField;
   minimax_base_url: string;
   llm_min_confidence: number;
@@ -224,6 +228,7 @@ export type AdminPatch = Partial<{
   llm_provider: "anthropic" | "minimax";
   llm_model: string;
   anthropic_api_key: string;
+  openai_api_key: string;
   minimax_api_key: string;
   minimax_base_url: string;
   llm_min_confidence: number;
@@ -340,6 +345,71 @@ export type TtsStatsPayload = {
   cost_usd: number;
   calls: number;
   active_provider: TtsProvider;
+};
+
+// 0.18.0 — LLM model picker types. The picker hits
+// `GET /api/admin/llm/models` and gets back a partial-failure
+// envelope: each provider has its own `ok` flag, the model list, a
+// `fetched_at` ISO timestamp, and an optional one-line `error` for
+// the "fetch failed" case. The dashboard renders the providers
+// that answered and disables the radio cards that didn't.
+//
+// Field shape follows the spec doc
+// (`docs/research/llm-model-discovery.md` section 4.1):
+// `cost_hint_usd` is a nested dict keyed by the per-million input/
+// output/cached-input rates. `created_at` and `owned_by` are
+// optional because the wire format differs across providers
+// (Anthropic uses `created_at`, OpenAI uses `created` (unix ts) +
+// `owned_by`).
+export type LlmModelInfo = {
+  id: string;
+  display_name: string;
+  created_at?: string;
+  owned_by?: string;
+  context_tokens?: number;
+  cost_hint_usd?: {
+    input_per_million?: number;
+    output_per_million?: number;
+    cached_input_per_million?: number;
+  };
+  capabilities?: Record<string, unknown>;
+};
+
+export type ProviderModelsPayload = {
+  ok: boolean;
+  models: LlmModelInfo[];
+  fetched_at: string | null;
+  error?: string;
+  // 0.18.0 — per-provider cache TTL in seconds. The dashboard's
+  // "(cached at HH:MM:SS)" line uses this to compute "this list
+  // is X seconds old"; a future iteration can use it to
+  // selectively refresh the high-churn providers.
+  ttl_sec: number;
+};
+
+export type ProviderModelsResponse = {
+  anthropic: ProviderModelsPayload;
+  openai: ProviderModelsPayload;
+  minimax: ProviderModelsPayload;
+  // 0.18.0 — the moment THIS catalog was assembled (the
+  // per-provider `fetched_at` is when each individual provider
+  // was last hit; this is the catalog-level timestamp). Render
+  // in the dashboard's "(cached at HH:MM:SS)" line.
+  cached_at: string;
+};
+
+export type LlmModelConfigPayload = {
+  provider: "anthropic" | "openai" | "minimax";
+  model: string;
+};
+
+export type LlmSelectResult = {
+  previous: LlmModelConfigPayload;
+  active: LlmModelConfigPayload;
+};
+
+export type LlmResetResult = {
+  previous: LlmModelConfigPayload;
 };
 
 export type BacktestResult = {
@@ -549,6 +619,36 @@ export const api = {
   },
   ttsStats: () =>
     fetcher<TtsStatsPayload>("/tts/stats"),
+  // 0.18.0 — LLM model picker endpoints. `llmModels` is the
+  // partial-failure catalog (see ProviderModelsResponse above);
+  // the optional `refresh` flag bypasses the backend's 60-minute
+  // cache so the dashboard's "Refresh" button can force a fresh
+  // fan-out to all three providers. `llmSelect` writes the new
+  // runtime config + persists `LLM_MODEL` (and `LLM_PROVIDER`) to
+  // `.env`; `llmReset` reverts to the env-var defaults. Both
+  // return `previous` so the dashboard can show a "was X, now Y"
+  // toast.
+  llmModels: (refresh = false) =>
+    fetcher<ProviderModelsResponse>(
+      `/api/admin/llm/models${refresh ? "?refresh=true" : ""}`,
+    ),
+  llmSelect: async (req: {
+    provider: "anthropic" | "openai" | "minimax";
+    model: string;
+  }): Promise<LlmSelectResult> => {
+    const r = await fetch("/api/admin/llm/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
+  llmReset: async (): Promise<LlmResetResult> => {
+    const r = await fetch("/api/admin/llm/reset", { method: "POST" });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
   // 0.16.0 — Rivalry Week weekly podcast tab. Reads the weekly
   // rollup (which now carries a `podcast` field when
   // `out/weekly/<week_id>/podcast/episode_*.mp4` exists on disk).

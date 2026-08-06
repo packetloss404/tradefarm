@@ -91,9 +91,12 @@ class Settings(BaseSettings):
 
     # LLM provider dispatch.
     # anthropic: Claude (Haiku 4.5 default, prompt caching)
+    # openai:    OpenAI chat/completions (GPT-5.6 default; 0.18.0+)
     # minimax:   OpenAI-compatible MiniMax API (M2.7-highspeed default)
-    llm_provider: Literal["anthropic", "minimax"] = "anthropic"
-    llm_model: str = ""  # empty → provider default
+    llm_provider: Literal["anthropic", "openai", "minimax"] = "anthropic"
+    llm_model: str = ""  # empty -> provider default
+
+    openai_api_key: str = ""
 
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.io/v1"

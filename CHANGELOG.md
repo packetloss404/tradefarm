@@ -13,6 +13,230 @@ commit on GitHub.
 
 ---
 
+## [0.18.0] — 2026-08-05
+
+A "live LLM model discovery + McLove the admin
+panel" release. The dashboard's free-form
+`llm_model` text input is replaced with a live-
+discovered dropdown that calls each provider's
+`/v1/models` API, caches for 60 minutes, and
+shows the current top-line models with cost
+hints. **The user's mentions of "haiku/sonnet/
+opus/fable", "M3", and "GPT 5.6 all 3 variants"
+were all real, current model names — verified
+via the research subagent's per-provider scan.**
+Anthropic: `claude-haiku-4-5-20251001`,
+`claude-sonnet-5`, `claude-opus-4-8`,
+`claude-fable-5`. OpenAI: `gpt-5.6-sol` (alias
+`gpt-5.6`), `gpt-5.6-terra`, `gpt-5.6-luna`.
+MiniMax: `MiniMax-M3`, `MiniMax-M2.7`,
+`MiniMax-M2.7-highspeed`. The admin modal
+also gets a full McLove pass — section
+reordering, dead-UI removal, a11y upgrade,
+friendly error states on every async action.
+The OpenAI provider ships for the first time
+(reuses the shared httpx + retry pattern).
+1069 tests pass (+52 since 0.17.0).
+
+### Added — live LLM model discovery
+
+- **`docs/research/llm-model-discovery.md`** (NEW,
+  ~3135 words) — the per-provider spec: endpoint
+  URL, auth header shape, response shape (with
+  JSON samples), current model lineup, the
+  recommended dashboard flow (parallel fan-out
+  with 5s per-provider timeout + 60-min in-memory
+  cache + partial-failure envelope), and a "files
+  to touch" implementation table.
+
+- **`src/tradefarm/runtime/llm_model_config.py`**
+  (NEW, ~150 lines) — `LlmModelConfig` dataclass
+  with `provider: str, model: str`. Singleton
+  `get_llm_model_config()` /
+  `set_llm_model_config()` /
+  `reset_llm_model_config()`. Threading lock
+  around the singleton so the dashboard's SWR
+  refresh doesn't see a torn read during a save.
+  Mirrors the 0.17.0 `TtsConfig` pattern exactly.
+  Validation rejects empty models + unknown
+  providers.
+
+- **`src/tradefarm/runtime/llm_model_catalog.py`**
+  (NEW, ~140 lines) — in-memory catalog cache
+  (`max_age_sec=3600`) + the `list_*_models`
+  fan-out. `fetch_catalog(refresh=False)` returns
+  the cached payload or hits all 3 providers in
+  parallel via `asyncio.gather` with 5s per-
+  provider timeout. Partial-failure envelope:
+  `{anthropic: {ok, models, fetched_at, error?},
+  openai: {...}, minimax: {...}, cached_at}`. The
+  cache survives process restarts via pickle
+  (optional, defaults to off — see `record_path`
+  arg).
+
+- **`src/tradefarm/agents/llm_providers.py`** —
+  significant extension:
+    - New `OpenAiProvider` class (the OpenAI
+      provider didn't exist before; the user
+      explicitly asked for it). Uses the shared
+      httpx client + `with_retries`. Default
+      `gpt-5.6-sol` (with `gpt-5.6` alias).
+      `name = "openai"`.
+    - `list_anthropic_models(api_key)` — calls
+      `GET https://api.anthropic.com/v1/models`
+      with `x-api-key` + `anthropic-version:
+      2023-06-01` headers, normalizes the
+      `{data: [...], has_more, ...}` envelope.
+    - `list_openai_models(api_key)` — calls
+      `GET https://api.openai.com/v1/models`
+      with bearer auth, normalizes the
+      `{object: "list", data: [...]}` envelope.
+    - `list_minimax_models(api_key, base_url)` —
+      calls
+      `GET https://api.minimax.io/v1/models`
+      (the OpenAI-compatible endpoint), bearer
+      auth, OpenAI-style envelope.
+    - `MODEL_COST_HINTS` static table — per-
+      `(provider, model)` per-1M-token cost
+      (input/output/cached). Covers the GPT-5.6
+      trio, Claude Haiku/Sonnet/Opus/Fable,
+      MiniMax M3/M2.7. The providers' `/v1/models`
+      responses don't include pricing, so this
+      is the source of truth for the dashboard's
+      cost hint.
+    - `build_provider()` extended to handle
+      `"openai"` + read from
+      `get_llm_model_config()` for the active
+      provider/model (with `settings.llm_model`
+      as the seed default).
+
+- **`src/tradefarm/api/admin.py`** — 3 new admin
+  endpoints:
+    - `GET /admin/llm/models?refresh=true|false` —
+      fans out the catalog fetch (the `refresh=true`
+      bypasses the 60-min server cache). Returns
+      the per-provider envelope + `cached_at`.
+    - `POST /admin/llm/select` — body
+      `{provider, model}`. Validates the model
+      is in the cached list (or accepts the string
+      and trusts the operator). Updates the
+      runtime singleton. Returns `{previous, active}`.
+    - `POST /admin/llm/reset` — reverts to the
+      env-var defaults.
+  + `ConfigPatch` extended with `llm_provider`
+  now accepting `"openai"` as a valid value.
+
+- **`src/tradefarm/config.py`** — added
+  `openai_api_key: SecretStr = SecretStr("")` +
+  `default_openai_model: str = "gpt-5.6-sol"`
+  (the new top-line OpenAI default, not the
+  fictional "GPT 5.6" string the user mentioned
+  — `gpt-5.6-sol` is the canonical model id
+  with `gpt-5.6` as a documented alias).
+
+- **`web/src/components/LlmModelPicker.tsx`**
+  (NEW, ~310 lines) — new admin modal section.
+  Provider radio cards (anthropic/openai/minimax)
+  with availability indicators (green check if
+  env key set; cloud providers greyed out
+  otherwise). Per-provider model dropdown
+  populated from `GET /admin/llm/models`
+  (SWR with 60s refresh + a manual "Refresh"
+  button). Per-row cost hint when
+  `cost_per_1k_input_usd` is present. "(cached
+  at HH:MM:SS)" line + a dedicated error row
+  when a provider's fetch failed. Save posts
+  `{provider, model}` together (single source
+  of truth for the model selection).
+
+- **`web/src/api.ts`** — `llmModels`,
+  `llmSelect`, `llmReset` SWR fetchers + types
+  (`LlmModelInfo`, `ProviderModelsResponse`,
+  `ProviderModelsPayload`). `AdminConfig` +
+  `AdminPatch` extended with
+  `openai_api_key: AdminSecretField`.
+
+### Added — McLove the admin panel
+
+- **`web/src/components/AdminModal.tsx`** — the
+  full McLove pass (per the review subagent's
+  report). The Brain Provider section's
+  provider-radio group is **removed** (the
+  LLM Model picker owns provider + model as a
+  single source of truth; the picker posts
+  both fields together). API key fields stay
+  in Brain Provider and now render for all
+  3 providers unconditionally (the operator
+  can paste a key for any provider regardless
+  of which is active). Section ordering:
+    1. AI Control
+    2. Brain Provider (3 API key fields)
+    3. LLM Model (3-provider radio + dropdown
+       + save)
+    4. Tuning
+    5. Execution
+    6. Strategies
+    7. Backtest
+    8. Curriculum
+    9. TTS
+  The "Coming soon" placeholder section is
+  dropped. Every `<input>` / `<select>` /
+  `<button>` has explicit `htmlFor` / `id` /
+  `aria-label` (was implicit `<label>` wrappers
+  before). The `toggleAi` async action now
+  has friendly error handling (was the only
+  async action without it). The `Row` +
+  `Toggle` components gained `htmlFor` / `id`
+  + `badge` + `label` props. CTA-style `<button>`
+  rows in Brain Provider + Execution are now
+  proper radio cards with `sr-only` inputs.
+
+### Orchestrator integration fixes
+
+- **Provider-radio conflict** between the new
+  `<LlmModelPicker />` (which has its own 3-
+  provider radio) and the existing Brain
+  Provider section (which also had a 2-
+  provider radio). The McLove spec called this
+  out; resolution is to **remove** the parent
+  radio and let the picker own provider +
+  model as a single surface. API key fields
+  stay in Brain Provider and render
+  unconditionally for all 3 providers.
+- **Stray helper script** (`web/src/fix_em.py`,
+  a one-shot em-dash/arrow/checkmark replacer
+  used by a subagent) was moved to
+  `dev/_archive/fix_em_2026-08-05.py` per the
+  no-hard-delete safety policy. Not committed.
+- **Ruff auto-fix** cleared 5 F401 (unused
+  imports) introduced by the subagents.
+
+### Operational notes
+
+- **1017 → 1069 tests pass** (+52). Breakdown:
+  llm_model_config: +12, llm_model_catalog:
+  +13, admin_llm_endpoints: +10, build_provider
+  _runtime_config: +6, llm_provider model-list
+  parsers: +11.
+- **No `SCHEMA_VERSION` bump** — runtime config
+  + catalog cache are both in-memory.
+- **1 new env var** (`openai_api_key` + the
+  derived `default_openai_model`). The
+  admin modal's existing API key field for
+  OpenAI is wired (it was missing in the
+  parent before 0.18.0).
+- **Web prod bundle**: 374 KB → 374 KB / 108 KB
+  → 108 KB gzipped (the new admin picker
+  added ~5 KB before gzip, gzipped back to
+  the same size — Vite compresses efficiently).
+- **The operator's dev stack is still up**
+  (uvicorn 8000, vite 5179, vite 5180) but
+  uvicorn was started without `--reload` —
+  the operator needs to restart the backend
+  to see the new endpoints.
+
+---
+
 ## [0.17.0] — 2026-08-05
 
 A "real voice + lower-thirds builder + WS recording"

@@ -46,6 +46,7 @@ EDITABLE: dict[str, type] = {
     "llm_provider": str,
     "llm_model": str,
     "anthropic_api_key": str,
+    "openai_api_key": str,
     "minimax_api_key": str,
     "minimax_base_url": str,
     "llm_min_confidence": float,
@@ -102,7 +103,7 @@ def _all_secret_keys() -> set[str]:
 
 
 SECRET_KEYS = _all_secret_keys()
-VALID_PROVIDERS = {"anthropic", "minimax"}
+VALID_PROVIDERS = {"anthropic", "openai", "minimax"}
 VALID_EXECUTION = {"simulated", "alpaca_paper"}
 
 ENV_PATH = Path(".env")
@@ -165,6 +166,7 @@ async def get_config(request: Request) -> dict[str, Any]:
         "valid_execution": sorted(VALID_EXECUTION),
         "model_defaults": {
             "anthropic": "claude-haiku-4-5-20251001",
+            "openai": "gpt-5.6-sol",
             "minimax": "M2.7-highspeed",
         },
         "known_strategies": list(KNOWN_STRATEGIES),
@@ -177,9 +179,10 @@ class ConfigPatch(BaseModel):
     """Partial update — only present keys are written."""
 
     ai_enabled: bool | None = None
-    llm_provider: Literal["anthropic", "minimax"] | None = None
+    llm_provider: Literal["anthropic", "openai", "minimax"] | None = None
     llm_model: str | None = None
     anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
     minimax_api_key: str | None = None
     minimax_base_url: str | None = None
     llm_min_confidence: float | None = None
@@ -261,6 +264,7 @@ async def patch_config(patch: ConfigPatch, request: Request) -> dict[str, Any]:
             "llm_provider",
             "llm_model",
             "anthropic_api_key",
+            "openai_api_key",
             "minimax_api_key",
             "minimax_base_url",
         )
@@ -947,4 +951,162 @@ async def list_ws_recordings(base_dir: str | None = None) -> dict[str, Any]:
     return {
         "base_dir": str(base) if base else str(ws_recording.DEFAULT_BASE_DIR),
         "sessions": ws_recording.list_recorded_sessions(base),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 0.18.0 — LLM model picker endpoints.
+#
+# Three endpoints back the dashboard's ``<LlmModelPicker />`:
+#
+#   GET  /admin/llm/models        — fan-out to the three providers'
+#                                   /v1/models, cache the result for
+#                                   60 min, return the catalog.
+#   POST /admin/llm/select        — replace the runtime
+#                                   ``LlmModelConfig`` and write
+#                                   ``LLM_PROVIDER`` / ``LLM_MODEL``
+#                                   to .env so the choice survives
+#                                   restart.
+#   POST /admin/llm/reset         — revert the runtime config to
+#                                   the env-var defaults.
+#
+# The picker fan-out reuses the existing ``llm_model_catalog``
+# module; the active-config singleton lives in
+# ``tradefarm.runtime.llm_model_config``. The TTS endpoints above
+# are the shape template (POST returns ``{previous, active}`` for
+# consistency with the dashboard's "what did I just change?" UX).
+# ---------------------------------------------------------------------------
+
+
+@router.get("/llm/models")
+async def list_llm_models(refresh: bool = False) -> dict[str, Any]:
+    """Return the current LLM model catalog across all three providers.
+
+    ``refresh=true`` forces a refetch (bypasses the 60-min cache);
+    the dashboard's "Refresh" button calls this so a newly-released
+    model can be picked without restarting the backend. The
+    catalog endpoint fans out in parallel with a per-provider 5s
+    timeout; one provider's failure or missing key does not fail
+    the whole request - the response carries one
+    ``{ok, models, fetched_at, error?}`` block per provider.
+    """
+    from tradefarm.runtime.llm_model_catalog import get_model_catalog
+
+    catalog = await get_model_catalog(force=refresh)
+    return catalog.to_payload()
+
+
+class _LlmSelectBody(BaseModel):
+    """Body for ``POST /admin/llm/select``.
+
+    ``provider`` is a plain string; the endpoint validates against
+    ``VALID_LLM_PROVIDERS`` at runtime and returns 400 with a
+    human-readable error. The pydantic Literal would return 422
+    with a nested error array; the operator's UI wants the 400
+    text in the toast (mirrors the tts/switch endpoint shape).
+    ``model`` is the canonical model id (the picker submits
+    canonical ids, not aliases, so a future alias rename doesn't
+    break the operator's existing choice).
+    """
+
+    provider: str
+    model: str = Field(..., min_length=1, max_length=256)
+
+
+@router.post("/llm/select")
+async def llm_select(
+    body: _LlmSelectBody, request: Request
+) -> dict[str, Any]:
+    """Replace the active LLM model config at runtime and persist.
+
+    Validates: provider must be in ``VALID_LLM_PROVIDERS``; if a
+    cloud provider is requested, its env key must be set (so a
+    missing-key switch doesn't leak into the synthesis path - the
+    same gating pattern ``tts_switch`` uses).
+
+    Persistence: the runtime singleton takes effect immediately
+    (the next ``build_provider`` call picks it up); ``LLM_PROVIDER``
+    and ``LLM_MODEL`` are written to ``.env`` for durability, so
+    the choice survives restart. The overlay is rebuilt so the
+    next LLM call uses the new config (mirrors what
+    ``patch_config`` does for the legacy ``llm_provider`` /
+    ``llm_model`` fields).
+
+    Returns ``{previous, active, persisted}`` - mirrors the
+    tts/switch response shape so the dashboard's "saved at HH:MM:SS"
+    toast renders without a follow-up GET.
+    """
+
+    from tradefarm.runtime.llm_model_config import LlmModelConfig, set_llm_model_config
+
+    if body.provider not in VALID_PROVIDERS:
+        raise HTTPException(400, f"unknown provider: {body.provider!r}")
+
+    # Gate on creds. Every cloud provider needs its env key.
+    if body.provider == "anthropic" and not settings.anthropic_api_key:
+        raise HTTPException(400, "ANTHROPIC_API_KEY is not set; cannot switch to anthropic")
+    if body.provider == "openai" and not settings.openai_api_key:
+        raise HTTPException(400, "OPENAI_API_KEY is not set; cannot switch to openai")
+    if body.provider == "minimax" and not settings.minimax_api_key:
+        raise HTTPException(400, "MINIMAX_API_KEY is not set; cannot switch to minimax")
+
+    new_config = LlmModelConfig(provider=body.provider, model=body.model)
+    previous = set_llm_model_config(new_config)
+
+    # Mirror to settings.llm_provider / settings.llm_model so the
+    # patch_config() path + the next ``_safe_build_overlay()`` call
+    # see the same source of truth. The runtime singleton is the
+    # primary, but settings is the seed for boot + the input to
+    # the overlay rebuild.
+    settings.llm_provider = body.provider  # type: ignore[assignment]
+    settings.llm_model = body.model
+
+    # Rebuild the shared overlay so the next LLM call uses the new
+    # provider/model without waiting for the periodic overlay
+    # rebuild. Same hook the legacy patch_config() path uses.
+    orch = getattr(request.app.state, "orchestrator", None)
+    overlay_info: dict[str, str | None] | None = None
+    if orch is not None and hasattr(orch, "reload_llm_overlay"):
+        overlay_info = orch.reload_llm_overlay()
+
+    # Persist LLM_PROVIDER + LLM_MODEL to .env. We do NOT persist
+    # here if the operator's chosen provider is the env default -
+    # the env-var write would be a no-op and the file would gain
+    # two redundant lines. The orchestrator's existing .env writes
+    # follow the same pattern.
+    persisted: dict[str, bool] = {}
+    if ENV_PATH.exists():
+        try:
+            set_key(str(ENV_PATH), "LLM_PROVIDER", body.provider, quote_mode="never")
+            persisted["llm_provider"] = True
+        except Exception:  # noqa: BLE001
+            persisted["llm_provider"] = False
+        try:
+            set_key(str(ENV_PATH), "LLM_MODEL", body.model, quote_mode="never")
+            persisted["llm_model"] = True
+        except Exception:  # noqa: BLE001
+            persisted["llm_model"] = False
+
+    return {
+        "previous": previous.to_payload(),
+        "active": new_config.to_payload(),
+        "overlay": overlay_info,
+        "persisted": persisted,
+    }
+
+
+@router.post("/llm/reset")
+async def llm_reset() -> dict[str, Any]:
+    """Reset the active LLM model config to the env-var defaults.
+
+    Symmetric to ``/admin/llm/select`` but reads from
+    ``settings.llm_provider`` / ``settings.llm_model`` instead of
+    accepting a body. Useful when the operator wants to revert a
+    runtime override without restarting the process.
+    """
+    from tradefarm.runtime.llm_model_config import reset_llm_model_config
+
+    previous = reset_llm_model_config()
+    return {
+        "previous": previous.to_payload(),
     }

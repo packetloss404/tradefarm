@@ -6,7 +6,31 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.17.0 shipped 2026-08-05.** A "real voice +
+**0.18.0 shipped 2026-08-05.** A "live LLM
+model discovery + McLove the admin panel"
+release. The dashboard's free-form `llm_model`
+text input is replaced with a live-discovered
+dropdown that calls each provider's
+`/v1/models` endpoint, caches for 60 minutes,
+and shows the current top-line models with
+cost hints. The OpenAI provider ships for
+the first time (the user explicitly asked for
+it; it wasn't in the codebase). The admin
+modal gets a full McLove pass — section
+reordering, dead-UI removal, a11y upgrade,
+friendly error states on every async action.
+A research subagent verified the user's
+model-name mentions ("haiku/sonnet/opus/
+fable", "M3", "GPT 5.6 all 3 variants") —
+all real, current model names. Four subagents
+shipped under the orchestrator's integration;
+orchestrator removed a provider-radio
+conflict between the new picker and the
+existing Brain Provider section (the picker
+now owns provider + model as a single
+source of truth). 1069 tests pass (+52 since
+0.17.0). See [CHANGELOG.md](./CHANGELOG.md)
+for the full release notes.
 lower-thirds builder + WS recording" release.
 The TTS settings UI flips the active TTS
 provider at runtime (no env-var restart) with
@@ -50,22 +74,29 @@ Status legend:
 
 ## Now — current focus
 
-The 0.17.0 release (2026-08-05) shipped the
-"real voice" + lower-thirds builder + WS
-recording trio. The **next leverage piece is
-visual QA + the 0.18.0 "small wins" release**:
-lower-thirds builder is wired but the visual
-QA pass is operator-driven; WS recordings need
-a real-session smoke test; the TTS preview
-needs an `ELEVENLABS_API_KEY` / `OPENAI_API_KEY`
-to actually hear the real voice. Once QA
-passes, 0.18.0 candidates (in priority order):
-**Intraday data path** (5-min EODHD instead
-of daily bars), **Per-strategy daily
-attribution snapshot** table (avoid hot re-
-aggregation), and **Persistent LLM-decision
-feed sidebar** (the smallest of the three; pure
-dashboard widget).
+The 0.18.0 release (2026-08-05) shipped the
+"live LLM model discovery" + "McLove the
+admin panel" duo. The **next leverage piece is
+visual QA + a 0.19.0 small-wins release**.
+Remaining 0.18.0 items (operator-driven
+visual QA on the new picker against real API
+keys; uvicorn needs a restart to pick up the
+new endpoints) are pending. 0.19.0 candidates
+(in priority order):
+1. **Persistent LLM-decision feed sidebar**
+   — S-effort, dashboard widget only. ~½ day.
+   Sidebar that holds the last N decisions
+   for quick review; mirrors the Brain scene
+   in the stream app.
+2. **Per-strategy daily attribution snapshot**
+   table — M-effort, backend-only. New table
+   that pre-aggregates
+   `/pnl/by-strategy/timeseries` so the
+   endpoint doesn't re-aggregate from
+   `pnl_snapshots` on every request.
+3. **Intraday data path** — L-effort, data
+   layer. 5-min EODHD instead of daily bars;
+   agents reason on closer-to-live conditions.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
