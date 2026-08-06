@@ -297,6 +297,13 @@ const SLUMP_PNL_THRESHOLD = -STARTING_CAPITAL * 0.05;
 // visible-cap isn't needed.
 const BUBBLE_MS = 6_000;
 const BUBBLE_MAX_CHARS = 60;
+// 0.28.0 — camera-dolly cinematics. On a fill at or above
+// DOLLY_MIN_NOTIONAL, the viewBox eases toward the filling agent
+// for DOLLY_MS total (ease-in 30%, hold 40%, ease-out 30%); the
+// scale ramps from 1.0 to DOLLY_SCALE and back.
+const DOLLY_MS = 2_000;
+const DOLLY_SCALE = 1.55;
+const DOLLY_MIN_NOTIONAL = 5_000;
 
 type Transition = { from: ZoneId; to: ZoneId; expiresAt: number };
 
@@ -532,15 +539,96 @@ export function AgentWorldXL({
   // never reconciled (no setState per frame → no CPU-pinning re-renders).
   // The same loop also drifts the parallax clouds (cx mutation) so the sky
   // layer stays animated between data updates.
+  // 0.28.0 — camera dolly: on a "big fill" event, ease the viewBox
+  // toward the filling agent for 2s, then back. The dolly composes on
+  // top of the existing continuous drift; the rAF loop reads both.
   const camGroupRef = useRef<SVGGElement | null>(null);
+  const dollyRef = useRef<{ agentId: number; tx: number; ty: number; scale: number; expiresAt: number } | null>(null);
+  useEffect(() => {
+    if (!fills || fills.length === 0) return;
+    // Find the biggest fill by notional. The payload doesn't carry
+    // notional directly, so price * qty is the best proxy. Symbol
+    // / side are present.
+    let best: { agentId: number; notional: number; ts: number } | null = null;
+    for (const f of fills) {
+      const p = f.payload;
+      const notional = (p.qty ?? 0) * (p.price ?? 0);
+      const t = Date.parse(f.ts);
+      if (Number.isNaN(t)) continue;
+      if (best === null || notional > best.notional) {
+        best = { agentId: p.agent_id, notional, ts: t };
+      }
+    }
+    if (!best) return;
+    // Only kick off a dolly if the biggest fill is at least
+    // DOLLY_MIN_NOTIONAL worth. Below that, a fill doesn't justify
+    // the visual interruption.
+    if (best.notional < DOLLY_MIN_NOTIONAL) return;
+    const now = replayNow();
+    const pos = spots.get(best.agentId);
+    if (!pos) return;
+    // 2s dolly: 600ms ease-in, 800ms hold, 600ms ease-out. The
+    // composition model: drift translate + dolly translate, drift
+    // scale=1, dolly scale=1..SCALE.
+    dollyRef.current = {
+      agentId: best.agentId,
+      tx: pos.x,
+      ty: pos.y,
+      scale: 1,
+      expiresAt: now + DOLLY_MS,
+    };
+  }, [fills, spots]);
+
   useEffect(() => {
     let raf = 0;
     const loop = () => {
       const camPhase = (performance.now() / 1000) * 0.18;
       const camDx = Math.sin(camPhase) * 16;
       const camDy = Math.cos(camPhase * 0.7) * 8;
+      // Compose drift + dolly. The dolly moves the world so the
+      // target agent sits near the visual center while the scale
+      // ramps up; when the dolly expires, the scale eases back to 1
+      // and the translate to 0.
+      let dollyDx = 0;
+      let dollyDy = 0;
+      let dollyScale = 1;
+      const d = dollyRef.current;
+      if (d) {
+        const now = performance.now();
+        const elapsed = now - (d.expiresAt - DOLLY_MS);
+        // elapsed in [0, DOLLY_MS]
+        const t = Math.max(0, Math.min(1, elapsed / DOLLY_MS));
+        // Triangular envelope: 0 -> 1 over the first 30% (ease-in),
+        // hold at 1 from 30% to 70%, then 1 -> 0 over the last 30%.
+        let env: number;
+        if (t < 0.3) env = t / 0.3;
+        else if (t < 0.7) env = 1;
+        else env = (1 - t) / 0.3;
+        // Soft-ease the envelope (smoothstep-ish).
+        env = env * env * (3 - 2 * env);
+        // Center the target: the world is centered around the
+        // midpoint of the bounds; pushing the target to the origin
+        // makes the dolly a "look at the agent" effect.
+        const cx = (bounds.minX + bounds.maxX) / 2;
+        const cy = (bounds.minY + bounds.maxY) / 2;
+        dollyScale = 1 + (DOLLY_SCALE - 1) * env;
+        dollyDx = (cx - d.tx) * env;
+        dollyDy = (cy - d.ty) * env;
+        if (elapsed >= DOLLY_MS) dollyRef.current = null;
+      }
       const g = camGroupRef.current;
-      if (g) g.setAttribute("transform", `translate(${-camDx} ${-camDy})`);
+      if (g) {
+        // Combined transform: scale around the visual center, then
+        // translate. Order matters — translate is in the scaled
+        // frame, so we apply the drift in world units and the
+        // dolly's centering in scaled units.
+        const totalDx = -camDx + dollyDx;
+        const totalDy = -camDy + dollyDy;
+        g.setAttribute(
+          "transform",
+          `translate(${totalDx} ${totalDy}) scale(${dollyScale.toFixed(4)})`,
+        );
+      }
       for (let i = 0; i < CLOUDS.length; i++) {
         const el = cloudRefs.current[i];
         const c = CLOUDS[i]!;
@@ -553,7 +641,7 @@ export function AgentWorldXL({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [CLOUDS, bounds.minX]);
+  }, [CLOUDS, bounds.minX, bounds.maxX, bounds.maxY, bounds.minY]);
 
   const mascotNodes = useMemo(() => {
     const out: { x: number; y: number }[] = [];

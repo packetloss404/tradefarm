@@ -11,6 +11,25 @@ commit on GitHub.
 
 - None yet.
 
+## [0.28.0] - 2026-08-05
+
+A "camera dolly cinematic" release.
+AgentWorldXL now eases the camera toward
+the agent that just had the biggest fill
+(notional >= $5000), holds for ~800ms, and
+eases back. Total duration 2s; scale
+ramps 1.0 -> 1.55 -> 1.0 with a smoothstep
+envelope (30% ease-in, 40% hold, 30%
+ease-out). The dolly composes on top of the
+existing continuous drift via the same
+rAF loop, so the visual is "drift + dolly"
+not "drift then dolly". Below the notional
+threshold the dolly is skipped (a small
+fill doesn't justify a camera move). The
+target's pixel position is read from the
+``spots`` map, so the camera always lands
+on the actual sprite, not the zone center.
+
 ## [0.26.0] - 2026-08-05
 
 A "speech bubbles on agents" release.
