@@ -320,6 +320,65 @@ class Orchestrator:
                 log.warning("bars_load_failed", symbol=s, error=str(e))
         return out
 
+    async def _refresh_intraday_marks(
+        self, symbols: list[str], marks: dict[str, float]
+    ) -> None:
+        """0.24.0 — replace each symbol's daily mark with the most
+        recent intraday bar's close (typically <5min stale during
+        RTH). Mutates ``marks`` in place. Symbols whose intraday
+        fetch returns an empty frame (no subscription, weekend
+        data, delisted) keep their daily mark.
+
+        Implemented as a per-symbol coroutine that runs the fetches
+        serially rather than concurrently: EODHD's /intraday endpoint
+        is rate-limited per-key, and 100 parallel calls at the start
+        of a tick would burn the rate budget in one go. Serial
+        fetches at ~150ms each keep the tick under 20s while leaving
+        headroom.
+        """
+        from tradefarm.runtime.clock import now_utc as _runtime_clock_now_utc
+
+        period = settings.intraday_period
+        # Look back the duration of one bar plus a small buffer; the
+        # 5m period wants a 30-min window so we have ~5 bars in
+        # flight. The 1h period wants a 4h window.
+        if period.endswith("m"):
+            minutes = int(period[:-1])
+            window_min = max(30, minutes * 6)
+        elif period.endswith("h"):
+            hours = int(period[:-1])
+            window_min = max(120, hours * 4 * 60)
+        else:
+            window_min = 30
+        end_dt = _runtime_clock_now_utc()
+        start_dt = end_dt - timedelta(minutes=window_min)
+        refreshed = 0
+        for sym in symbols:
+            try:
+                df = await self.data.get_intraday(
+                    sym, start=start_dt, end=end_dt, period=period
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "intraday_fetch_failed",
+                    symbol=sym,
+                    error=str(exc),
+                )
+                continue
+            if df.empty:
+                continue
+            last_close = float(df["close"].iloc[-1])
+            if last_close > 0:
+                marks[sym] = last_close
+                refreshed += 1
+        if refreshed:
+            log.debug(
+                "intraday_marks_refreshed",
+                refreshed=refreshed,
+                total=len(symbols),
+                period=period,
+            )
+
     async def tick_once(self) -> dict:
         # Audit fix (C9): real asyncio.Lock instead of poll-on-flag, so
         # the curriculum loop can't swap agent.risk mid-tick AND so two
@@ -345,6 +404,28 @@ class Orchestrator:
         marks: dict[str, float] = {
             s: float(df["adjusted_close"].iloc[-1]) for s, df in bars.items() if not df.empty
         }
+        # 0.24.0 — intraday mark path. During RTH (or when the master
+        # switch ``intraday_enabled`` is on), refresh marks from the
+        # most recent 5m bar instead of yesterday's daily close. The
+        # 24h-stale mark was a known limitation of the daily-only path:
+        # at 10:00 ET the orchestrator was reasoning on yesterday's
+        # 16:00 settle, ~18h stale. A 5m intraday mark is <5min stale.
+        #
+        # Disabled by default (EODHD's intraday endpoint is paid-tier
+        # on the free plan; the operator opts in via the env var when
+        # the subscription is in place). The fall-through to the daily
+        # mark keeps every existing tick's behavior unchanged when off.
+        if settings.intraday_enabled:
+            from tradefarm.market.hours import is_market_open as _is_market_open
+
+            if _is_market_open():
+                try:
+                    await self._refresh_intraday_marks(symbols, marks)
+                except Exception as exc:  # noqa: BLE001
+                    # The daily mark is the source of truth; a
+                    # transient intraday failure should never kill
+                    # the tick. Log + continue on the daily mark.
+                    log.warning("intraday_marks_refresh_failed", error=str(exc))
         self.last_marks = marks
         # Use the injectable clock so replay sessions stamp last_tick_at
         # with the replayed timestamp, not wall-clock today. Otherwise

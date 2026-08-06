@@ -11,6 +11,34 @@ commit on GitHub.
 
 - None yet.
 
+## [0.24.0] - 2026-08-05
+
+A "intraday data path" release. The
+orchestrator was reasoning on a 24h-stale
+mark (yesterday's daily close) at the
+start of every RTH tick; at 10:00 ET an
+agent's `mark` was still last night's
+settle. New `EodhdClient.get_intraday()`
+fetches EODHD's 5m intraday bars (paid
+tier; the free tier short-circuits to an
+empty frame so the daily mark stays in
+charge). The orchestrator's
+`_refresh_intraday_marks()` mutates
+`marks` in place when `intraday_enabled`
+is on AND the market is open. Off-RTH
+the daily path stays in charge regardless.
+The 5m window auto-scales with the period
+(30m for 5m, 4h for 1h). The intraday
+mark is <5min stale vs the 18h-stale
+daily mark. Subscription-required (401/403)
+is a logged info + empty frame, not a
+crash; the existing daily path is the
+fall-through. Two new env vars:
+`intraday_enabled=False` (master switch,
+off until the operator has an EODHD
+subscription), `intraday_period="5m"`.
+6 new tests; total 1107 passing.
+
 ## [0.20.0] - 2026-08-05
 
 A "per-strategy daily attribution snapshot" release.

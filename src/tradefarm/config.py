@@ -80,6 +80,15 @@ class Settings(BaseSettings):
     auto_tick_interval_sec: int = Field(default=300, ge=0)
     tick_outside_rth: bool = False
 
+    # 0.24.0 — intraday mark path. When True and the market is open
+    # the orchestrator refreshes marks from EODHD's 5m intraday bars
+    # instead of yesterday's daily close. Off by default because
+    # EODHD's /intraday endpoint is a paid-tier feature; the operator
+    # opts in once the subscription is in place. Off-RTH the daily
+    # path stays in charge regardless.
+    intraday_enabled: bool = False
+    intraday_period: str = Field(default="5m", description="EODHD period: 1m, 5m, 1h.")
+
     # LLM cost gate: if LSTM max_prob is below this OR predicts flat, the
     # LSTM+LLM agent skips the Claude call entirely and records a synthetic
     # "wait" decision. Cuts API spend dramatically on weak signals.
