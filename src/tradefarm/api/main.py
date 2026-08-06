@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
@@ -20,6 +21,7 @@ from tradefarm.academy import repo as academy_repo
 from tradefarm.api.admin import router as admin_router
 from tradefarm.api.audience import router as audience_router
 from tradefarm.api.backtest import router as backtest_router
+from tradefarm.api.events import bus
 from tradefarm.api.market_clock import router as market_clock_router
 from tradefarm.api.pipeline import router as pipeline_router
 from tradefarm.api.recap import router as recap_router
@@ -27,6 +29,7 @@ from tradefarm.api.stream_control import router as stream_control_router
 from tradefarm.api.vod import router as vod_router
 from tradefarm.api.ws import router as ws_router
 from tradefarm.config import settings
+from tradefarm.orchestrator.recent_decisions import RecentDecisionsLedger
 from tradefarm.orchestrator.scheduler import Orchestrator
 from tradefarm.risk.manager import BASE_MAX_POSITION_NOTIONAL_PCT
 from tradefarm.runtime.clock import now_utc
@@ -37,6 +40,55 @@ from tradefarm.storage.models import PnlSnapshot
 
 
 log = structlog.get_logger(__name__)
+
+
+# 0.19.0 — process-wide bounded ledger of the most recent
+# ``agent_decisions_batch`` events. Backed by a deque, so memory is
+# O(max_entries) and queries are O(limit) walking the deque in
+# reverse. The ``lifespan`` hook below spawns a long-lived subscriber
+# task that feeds this ledger; the ``GET /decisions/recent`` endpoint
+# reads from it. See ``tradefarm.orchestrator.recent_decisions``.
+recent_decisions_ledger = RecentDecisionsLedger(max_entries=200)
+
+
+async def _recent_decisions_subscriber() -> None:
+    """Long-lived task: subscribe to the event bus and record every
+    ``agent_decisions_batch`` envelope into ``recent_decisions_ledger``.
+
+    Runs until cancelled by the FastAPI lifespan teardown. The
+    subscriber uses a private asyncio.Queue so a slow /decisions/recent
+    HTTP client (or a briefly-stuck serializer) cannot back up the
+    shared ``EventBus`` queue and trigger slow-client drops on the
+    WS layer — this is the same isolation pattern the WS recorder
+    follows (``api/ws_recording.py``).
+    """
+    LOG = structlog.get_logger("tradefarm.api.recent_decisions")
+    LOG.info("recent_decisions_subscriber_started")
+    try:
+        async with bus.subscribe() as q:
+            while True:
+                event = await q.get()
+                if event.get("type") != "agent_decisions_batch":
+                    continue
+                payload = event.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                appended = recent_decisions_ledger.record_batch(payload)
+                if appended:
+                    LOG.debug(
+                        "recent_decisions_recorded",
+                        appended=appended,
+                        ledger_size=len(recent_decisions_ledger),
+                    )
+    except asyncio.CancelledError:
+        LOG.info("recent_decisions_subscriber_cancelled")
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Defensive: the subscriber must never crash the app. A
+        # persistent failure (e.g. a poisoned event) would be visible
+        # in the log; a transient one is auto-recovered when the next
+        # lifespan restart spawns a fresh subscriber.
+        LOG.error("recent_decisions_subscriber_failed", error=str(exc))
 
 # Issue #3 (security): hosts that are safe to serve on without auth. Anything
 # else (0.0.0.0 or a concrete LAN IP) is reachable from other machines, so it
@@ -167,9 +219,22 @@ async def lifespan(app: FastAPI):
             pass
         raise
     app.state.orchestrator = orch
+    # 0.19.0 — spawn the recent-decisions subscriber. It runs as a
+    # sibling of the orchestrator's background tasks; teardown
+    # cancels it on lifespan exit. We use ``asyncio.create_task`` (not
+    # ``ensure_future``) so the task is anchored to the running loop
+    # and shows up in the standard task-diagnostics surface.
+    decisions_sub_task = asyncio.create_task(
+        _recent_decisions_subscriber(), name="recent_decisions_subscriber"
+    )
     try:
         yield
     finally:
+        decisions_sub_task.cancel()
+        try:
+            await decisions_sub_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await orch.stop_background()
 
 
@@ -437,6 +502,42 @@ async def tts_stats() -> dict:
         "cost_usd": round(TTS_SPEND["cost_usd"], 6),
         "calls": int(TTS_SPEND["calls"]),
         "active_provider": get_tts_config().provider,
+    }
+
+
+@app.get("/decisions/recent")
+async def decisions_recent(
+    limit: int = Query(50, ge=1, le=200, description="Max entries to return (1..200)."),
+    agent_id: int | None = Query(None, description="Filter to a single agent id."),
+    only_llm: bool = Query(
+        False,
+        description=(
+            "When true, return only entries where the agent had an LLM"
+            " call (i.e. llm_bias or llm_stance is set). Lstm-only and"
+            " rule-based agents are excluded."
+        ),
+    ),
+) -> dict[str, Any]:
+    """0.19.0 — return the most recent per-agent decision-lab entries.
+
+    Backs the new ``<DecisionFeedSidebar />`` on the dashboard's
+    Today page. Entries are newest-first; ``at`` is the per-batch ISO
+    timestamp the orchestrator stamped at publish time.
+
+    The endpoint is intentionally cheap: the ledger is a deque walk
+    in reverse (O(limit)), with no DB read, no per-request
+    serialization of large objects, and no LLM call. It is safe to
+    poll at a few seconds interval from the dashboard.
+    """
+    entries = recent_decisions_ledger.recent(
+        limit=limit, agent_id=agent_id, only_llm=only_llm
+    )
+    return {
+        "entries": entries,
+        "total_in_ledger": len(recent_decisions_ledger),
+        "limit": limit,
+        "agent_id": agent_id,
+        "only_llm": only_llm,
     }
 
 

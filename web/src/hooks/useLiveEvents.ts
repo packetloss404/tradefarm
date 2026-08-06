@@ -1,6 +1,11 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useLiveContext } from "../contexts/LiveContext";
-import type { AccountSummary, PromotionEventPayload, TickResult } from "../api";
+import type {
+  AccountSummary,
+  DecisionEntry,
+  PromotionEventPayload,
+  TickResult,
+} from "../api";
 
 /** Connection lifecycle for the /ws socket. */
 export type LiveStatus = "connecting" | "open" | "closed";
@@ -74,7 +79,13 @@ export type LiveEvent =
   | { type: "stream_banner"; ts: string; payload: StreamBannerPayload }
   | { type: "stream_audio"; ts: string; payload: StreamAudioPayload }
   | { type: "stream_preroll"; ts: string; payload: Record<string, never> }
-  | { type: "pipeline_progress"; ts: string; payload: PipelineProgressPayload };
+  | { type: "pipeline_progress"; ts: string; payload: PipelineProgressPayload }
+  // 0.19.0 — per-tick decision-lab payload. The backend's
+  // ``RecentDecisionsLedger`` records these into a 200-entry ring
+  // buffer; the ``<DecisionFeedSidebar />`` on the Today page also
+  // listens for them so freshly-arriving entries prepend without
+  // waiting for the SWR refresh.
+  | { type: "agent_decisions_batch"; ts: string; payload: { at: string; tick_id: string; decisions: DecisionEntry[] } };
 
 export type LiveEventHandler = (ev: LiveEvent) => void;
 

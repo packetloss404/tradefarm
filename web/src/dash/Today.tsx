@@ -14,6 +14,7 @@ import {
   seededRngStr,
 } from "../vod/data";
 import { fmtMoney, fmtPct } from "../vod/widgets";
+import { DecisionFeedSidebar } from "../components/DecisionFeedSidebar";
 import type { VodSessionLive } from "../vod/useVodSessionLive";
 import type { DashTweaks } from "./useDashTweaks";
 
@@ -963,6 +964,11 @@ export function TodayPage({ vod, tweaks }: { vod: VodSessionLive; tweaks: DashTw
         <RecentFills vod={vod} />
         <MomentsToday vod={vod} />
       </div>
+      {/* 0.19.0 — persistent LLM-decision feed. Sits at the bottom
+          of the Today page so the operator can scroll back through
+          the last ~50 per-agent decisions without leaving the page.
+          Owns its own SWR + WS subscription, no parent plumbing. */}
+      <DecisionFeedSidebar />
     </div>
   );
 }

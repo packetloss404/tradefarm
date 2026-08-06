@@ -292,6 +292,35 @@ export type LlmStats = {
 // list can always be rendered without per-row conditional state.
 export type LowerThirdColor = "profit" | "loss" | "neutral";
 
+// 0.19.0 — recent-decisions feed. Mirrors the per-entry shape that
+// `tradefarm.orchestrator.recent_decisions.RecentDecisionsLedger.record_batch`
+// appends. The server stamps `at` and `tick_id` on every entry (see
+// the ledger docstring) so the client never has to re-join the
+// batch envelope. `llm_bias` / `llm_stance` are absent for non-LLM
+// agents — renderers should treat their absence as "rule-based".
+export type DecisionEntry = {
+  agent_id: number;
+  agent_name: string;
+  strategy: string;
+  symbol: string | null;
+  verdict: "trade" | "wait";
+  reason: string;
+  lstm_direction?: "up" | "flat" | "down" | null;
+  lstm_max_prob?: number | null;
+  llm_bias?: "long" | "flat" | "short" | null;
+  llm_stance?: "trade" | "wait" | null;
+  at: string;
+  tick_id: string;
+};
+
+export type DecisionsRecent = {
+  entries: DecisionEntry[];
+  total_in_ledger: number;
+  limit: number;
+  agent_id: number | null;
+  only_llm: boolean;
+};
+
 export type LowerThirdPayload = {
   id: string;
   title: string;
@@ -464,6 +493,18 @@ export const api = {
     fetcher<AgentAcademy>(`/api/agents/${agentId}/academy`),
   adminConfig: () => fetcher<AdminConfig>("/api/admin/config"),
   llmStats: () => fetcher<LlmStats>("/api/llm/stats"),
+  // 0.19.0 — persistent LLM-decision feed. Backs the
+  // ``<DecisionFeedSidebar />`` on the Today page. The server keeps a
+  // 200-entry ring buffer; we ask for 50 by default which covers the
+  // operator's "what was the LLM thinking 5 min ago?" review window.
+  decisionsRecent: (opts: { limit?: number; agentId?: number; onlyLlm?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts.agentId !== undefined) params.set("agent_id", String(opts.agentId));
+    if (opts.onlyLlm) params.set("only_llm", "true");
+    const qs = params.toString();
+    return fetcher<DecisionsRecent>(`/api/decisions/recent${qs ? `?${qs}` : ""}`);
+  },
   adminPatch: async (patch: AdminPatch): Promise<{ changed: Record<string, unknown>; overlay: { provider: string | null; model: string | null } | null }> => {
     const r = await fetch("/api/admin/config", {
       method: "POST",

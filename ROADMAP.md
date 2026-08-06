@@ -74,29 +74,39 @@ Status legend:
 
 ## Now — current focus
 
-The 0.18.0 release (2026-08-05) shipped the
-"live LLM model discovery" + "McLove the
-admin panel" duo. The **next leverage piece is
-visual QA + a 0.19.0 small-wins release**.
-Remaining 0.18.0 items (operator-driven
-visual QA on the new picker against real API
-keys; uvicorn needs a restart to pick up the
-new endpoints) are pending. 0.19.0 candidates
-(in priority order):
-1. **Persistent LLM-decision feed sidebar**
-   — S-effort, dashboard widget only. ~½ day.
-   Sidebar that holds the last N decisions
-   for quick review; mirrors the Brain scene
-   in the stream app.
-2. **Per-strategy daily attribution snapshot**
+The 0.19.0 release (2026-08-05) shipped the
+"persistent LLM-decision feed sidebar" — a
+new `<DecisionFeedSidebar />` on the dashboard's
+Today page that holds the last ~50 per-agent
+decision-lab entries for quick review.
+Backed by a process-wide bounded ring buffer
+(`RecentDecisionsLedger`, 200 entries) that
+a lifespan-spawned subscriber feeds from the
+event bus; a freshly-reloaded page sees recent
+history before any new tick lands. Refresh
+via SWR + live WS subscription; filters
+`?agent_id=N`, `?only_llm=true`, `?limit=N`.
+22 new tests (14 unit + 8 endpoint). Web
+bundle: 385 KB / 111.7 KB gzipped. See
+CHANGELOG.md for the full release notes.
+
+Remaining 0.19.0 candidates (in priority
+order):
+1. **Per-strategy daily attribution snapshot**
    table — M-effort, backend-only. New table
    that pre-aggregates
    `/pnl/by-strategy/timeseries` so the
    endpoint doesn't re-aggregate from
    `pnl_snapshots` on every request.
-3. **Intraday data path** — L-effort, data
+2. **Intraday data path** — L-effort, data
    layer. 5-min EODHD instead of daily bars;
    agents reason on closer-to-live conditions.
+
+0.18.0 follow-ups still pending: operator-
+driven visual QA on the new picker against
+real API keys (current visual state is the
+demo catalog, which is correct behavior
+without keys).
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 
@@ -190,9 +200,14 @@ by impact — pick any one when the operator wants a small, contained PR.
   recent-rows ring buffer for replay.
 
 ### Dashboard
-- **Persistent LLM-decision feed** — the current commentary caption is
-  transient (single line). Add a sidebar that holds the last N decisions
-  for quick review. Mirrors the Brain scene in the broadcast app.
+- ✅ ~~**Persistent LLM-decision feed** — the current commentary
+  caption is transient (single line). Add a sidebar that holds
+  the last N decisions for quick review. Mirrors the Brain scene
+  in the broadcast app.~~ Shipped in 0.19.0: new
+  `<DecisionFeedSidebar />` on the Today page backed by
+  `RecentDecisionsLedger` (200-entry ring buffer) +
+  `GET /api/decisions/recent` endpoint + WS subscription to
+  `agent_decisions_batch`. Filters: agent_id, only_llm, limit.
 - **Per-agent profile page** — promote the modal into a routed page so
   it deep-links and survives reload. Still a modal-style overlay on the
   main grid.

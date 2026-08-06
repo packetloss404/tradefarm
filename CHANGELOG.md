@@ -11,6 +11,30 @@ commit on GitHub.
 
 - None yet.
 
+## [0.19.0] - 2026-08-05
+
+A "persistent LLM-decision feed sidebar"
+release. The dashboard's Today page gets a
+new `<DecisionFeedSidebar />` at the bottom
+that holds the last ~50 per-agent decision-lab
+entries for quick review. Two refresh paths:
+SWR polling of the new `GET /api/decisions/recent`
+endpoint every 5s, plus a live WebSocket
+subscription to `agent_decisions_batch` so
+freshly-arriving entries prepend without
+waiting for the next poll. Backed by a
+process-wide bounded ring buffer
+(`RecentDecisionsLedger`, 200 entries) that
+a lifespan-spawned subscriber feeds from the
+event bus - so a freshly-reloaded page sees
+recent history before any new tick lands.
+Filters: `?agent_id=N` (single agent),
+`?only_llm=true` (skip rule-based + LSTM-only
+agents), `?limit=N` (1..200). 22 new tests
+(14 unit + 8 endpoint). Web bundle:
+385 KB / 111.7 KB gzipped (+5 KB / +1.7 KB
+vs 0.18.0 for the new sidebar).
+
 ## [0.18.1] - 2026-08-05
 
 Hotfix for the legacy `web/src/dash/Admin.tsx`
