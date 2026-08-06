@@ -448,3 +448,25 @@ class BroadcastSuite:
                 moment_id=moment.id,
                 error=str(exc),
             )
+
+        # 0.20.0 — snapshot the day's strategy attribution so the
+        # /pnl/by-strategy/timeseries endpoint doesn't have to
+        # re-aggregate on every chart poll. Wrapped in its own
+        # try/except so a snapshot-write failure is non-fatal —
+        # the recap moment has already been published; the chart
+        # would just fall back to live aggregation for this day.
+        try:
+            from tradefarm.storage import strategy_attribution as _sa
+
+            n = await _sa.compute_and_store_for_date(now_et.date())
+            log.info(
+                "strategy_attribution_snapshot_written",
+                date=date_str,
+                rows=n,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "strategy_attribution_snapshot_write_failed",
+                date=date_str,
+                error=str(exc),
+            )

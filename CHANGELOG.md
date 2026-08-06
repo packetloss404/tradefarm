@@ -11,6 +11,32 @@ commit on GitHub.
 
 - None yet.
 
+## [0.20.0] - 2026-08-05
+
+A "per-strategy daily attribution snapshot" release.
+The hot `GET /pnl/by-strategy/timeseries` endpoint
+used to aggregate from `pnl_snapshots` on every
+chart poll (a 2x group-by that scales with rows
+in the snapshot table). New `strategy_daily_attribution`
+table holds one row per (date, strategy), written
+once at end-of-day by the 4pm ET recap scheduler
+in `_fire_daily_recap_moment`. The endpoint now
+reads historical days from the snapshot, falling
+back to live aggregation for today and for any
+pre-0.20.0 history. The schema migration is a
+new `Base.metadata.create_all`-managed table;
+`SCHEMA_VERSION` bumped 4 -> 5. The repo helper
+`compute_and_store_for_date(day)` is the end-to-end
+write path; `upsert_attribution_rows` uses SQLite
+`ON CONFLICT DO UPDATE` so a same-day rerun
+replaces in place rather than appending. Live
+aggregation also got a fix: the join on
+`PnlSnapshot.taken_at == max(taken_at)` now also
+filters on `session_id IS NULL`, so a same-day
+replay snapshot sharing the live row's timestamp
+can't double-count. 10 new tests; total 1101
+passing. No new env vars, no new endpoints.
+
 ## [0.19.0] - 2026-08-05
 
 A "persistent LLM-decision feed sidebar"

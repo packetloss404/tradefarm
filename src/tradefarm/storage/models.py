@@ -300,3 +300,46 @@ class DailyRecapFired(Base):
     date: Mapped[str] = mapped_column(String(10), primary_key=True)
     moment_id: Mapped[str] = mapped_column(String(64), nullable=False)
     fired_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class StrategyDailyAttribution(Base):
+    """0.20.0 - per-(date, strategy) roll-up of live PnL.
+
+    The hot ``GET /pnl/by-strategy/timeseries`` endpoint used to
+    aggregate from ``pnl_snapshots`` on every request: a 2x group-by
+    (latest-snapshot subquery, then day+strategy sum) that scales
+    with rows in the snapshot table. This table is the pre-aggregated
+    alternative - one row per (date, strategy), written once at
+    end-of-day by the 4pm ET recap scheduler. The endpoint then reads
+    historical days from this table and live-aggregates only today.
+
+    Schema is identical in shape to what
+    ``repo.strategy_summary()`` returns per-strategy, so the API
+    surface doesn't change. ``best_agent_name`` / ``worst_agent_name``
+    are diagnostic strings; ``agent_count`` is the number of agents
+    in the strategy that had at least one ``pnl_snapshots`` row that
+    day (mirrors the live aggregation's bucket count).
+
+    The composite primary key (date, strategy) keeps the
+    upsert-on-rewrite path simple: a same-day rerun replaces the
+    row in place. ``computed_at`` is the ISO UTC stamp so a stale
+    row is observable from the dashboard.
+    """
+
+    __tablename__ = "strategy_daily_attribution"
+
+    date: Mapped[str] = mapped_column(String(10), primary_key=True)
+    strategy: Mapped[str] = mapped_column(String(32), primary_key=True)
+    agent_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    realized_pnl_total: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
+    unrealized_pnl_total: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
+    equity_total: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
+    trades_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    win_rate: Mapped[float] = mapped_column(Numeric(10, 4, asdecimal=True), nullable=False, default=0)
+    best_agent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    worst_agent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    computed_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        Index("ix_strategy_daily_attribution_date", "date"),
+    )

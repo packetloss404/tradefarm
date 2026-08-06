@@ -32,8 +32,15 @@ SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=
 # index/column guards).
 # v3: pipeline_runs.live_today boolean (autonomy polish). Fixes the
 # power-loss race in the daily VOD scheduler's per-day idempotency
-# check — see PipelineRun docstring in models.py for the full story.
-SCHEMA_VERSION = 4
+# check - see PipelineRun docstring in models.py for the full story.
+# v4: pipeline_runs.step_timings_json column (0.9.0). The per-step
+# duration roll-up; pre-existing pipeline_runs get the column added
+# via the explicit _ensure_pipeline_runs_step_timings helper.
+# v5: strategy_daily_attribution table (0.20.0). One row per
+# (date, strategy), written by the 4pm ET recap scheduler so
+# /pnl/by-strategy/timeseries doesn't re-aggregate from pnl_snapshots
+# on every request.
+SCHEMA_VERSION = 5
 
 
 # (table, column, sqlite DDL fragment — just the "type + defaults" part)

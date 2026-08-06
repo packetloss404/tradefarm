@@ -831,7 +831,58 @@ async def pnl_by_strategy() -> list[dict]:
 
 @app.get("/pnl/by-strategy/timeseries")
 async def pnl_by_strategy_timeseries(days: int = 7) -> list[dict]:
-    return await repo.strategy_equity_timeseries(days)
+    """0.20.0 — pre-aggregated per-(date, strategy) time series.
+
+    The endpoint is now backed by the ``strategy_daily_attribution``
+    snapshot table (one row per date+strategy, written by the 4pm
+    ET recap scheduler at end-of-day). Today is always live-
+    aggregated since the snapshot only lands after the close.
+
+    For each day in the ``days`` window, we read from the snapshot
+    table. Days with no rows fall back to a one-shot live
+    aggregation so a freshly-initialized DB (or a day before the
+    scheduler's first run) still returns data. The shape is
+    unchanged from the pre-0.20.0 endpoint.
+    """
+    from tradefarm.storage import strategy_attribution as sa
+
+    end_day = now_utc().date()
+    start_day = end_day - timedelta(days=days - 1)
+    snap = await sa.read_attribution_rows(start_day, end_day)
+    by_day: dict[str, list[dict]] = {}
+    for row in snap:
+        by_day.setdefault(row["date"], []).append(
+            {k: v for k, v in row.items() if k not in ("date", "computed_at")}
+        )
+    out: list[dict] = []
+    cursor = start_day
+    today_iso = end_day.isoformat()
+    while cursor <= end_day:
+        iso = cursor.isoformat()
+        if iso == today_iso:
+            # Today is always live; the snapshot only lands after 4pm.
+            live = await sa.live_strategy_attribution(cursor)
+            for r in live:
+                out.append({"date": iso, **r})
+        elif iso in by_day:
+            for r in by_day[iso]:
+                out.append({"date": iso, **r})
+        else:
+            # No snapshot for this historical day (e.g. pre-0.20.0
+            # history). Live-aggregate as a one-shot; this is the
+            # same code path the writer uses, so the result is
+            # identical to what the snapshot would have held.
+            try:
+                live = await sa.live_strategy_attribution(cursor)
+                for r in live:
+                    out.append({"date": iso, **r})
+            except Exception:
+                # Live-aggregation can fail for a date with no
+                # snapshots (e.g. pre-launch days). Skip silently
+                # rather than 500 the whole chart.
+                pass
+        cursor = cursor + timedelta(days=1)
+    return out
 
 
 @app.get("/agents/{agent_id}/trades")
