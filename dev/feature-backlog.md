@@ -52,9 +52,12 @@ Reverse-chronological. Surface tag in brackets.
 The next things to actually pick up. Cross-surface, prioritized by
 "impact per day." Anything here should fit in a single PR.
 
-1. `[stream]` **Tick countdown ring + equity sparkline in TopTicker**
-   (2.1 + 2.2). The two HUD missing pieces. Dashboard already has the
-   countdown ring; the stream's `TopTicker` doesn't. Effort: S + M.
+1. ~~`[stream]` **Tick countdown ring + equity sparkline in TopTicker**
+   (2.1 + 2.2).~~ **SHIPPED** — both live in
+   `stream/src/components/TopTicker.tsx`: `EquitySparkline` renders
+   a 30-tick rolling buffer of `account.total_equity`; `TickCountdownRing`
+   reads `auto_tick_interval_sec` from `/api/admin/config` and
+   draws a 30s arc that empties as the next tick approaches.
 2. ~~`[stream][backend]` **Broadcast OS scheduler v1.**~~ **SHIPPED
    (0.15.0)** — `useStreamCommands` consumes canonical
    `broadcast_moment`, applies priority/TTL/cooldowns, exposes one
