@@ -68,11 +68,13 @@ The next things to actually pick up. Cross-surface, prioritized by
    — `LiveRecapScene.tsx` is the fifth rotator scene, auto-shown
    after 16:00 ET. Daily recap scheduler lives in
    `broadcast_suite.run_daily_recap_scheduler`.
-5. `[dashboard]` **Open-positions sparkline strip** above the agent
-   grid. One row per symbol with mark, P&L, qty. Effort: S. Source:
-   `/positions`.
-6. `[dashboard]` **Keyboard map overlay** (`?`). Cheat sheet of every
-   shortcut. Effort: S.
+5. ~~`[dashboard]` **Open-positions sparkline strip** above the agent
+   grid.~~ **SHIPPED** — `PositionsSparklineStrip.tsx` aggregates
+   per-symbol qty/notional/mark across all agents and renders a
+   compact strip. Mounted in the dashboard's Today page.
+6. ~~`[dashboard]` **Keyboard map overlay** (`?`).~~ **SHIPPED** —
+   `KeyboardMapOverlay.tsx` + `useKeyboardMap` hook (`?` to toggle).
+   Three shortcut groups: Global, Command Palette, Admin Modal.
 7. ~~`[dashboard]` **API spend widget** from `/llm/stats` plus a daily
    cap dial.~~ **SHIPPED (0.14.0)** — `ApiSpendWidget.tsx` consumes
    `/llm/stats`, daily cap dial is the `daily_llm_spend_cap_usd`
