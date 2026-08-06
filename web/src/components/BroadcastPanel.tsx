@@ -15,6 +15,23 @@ import { PreviewPopoutButton } from "./broadcast/PreviewPopoutButton";
 import { AudienceRequestsPanel } from "./AudienceRequestsPanel";
 import { OfflineWarning } from "./broadcast/OfflineWarning";
 
+type RecapPushResult = {
+  moment_id: string;
+  date: string;
+  week_id: string;
+  pushed_at: string;
+};
+
+async function postRecapPush(): Promise<RecapPushResult> {
+  const r = await fetch("/admin/recap/push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json() as Promise<RecapPushResult>;
+}
+
 async function postCmd(type: string, payload: Record<string, unknown>): Promise<void> {
   const r = await fetch("/api/stream/cmd", {
     method: "POST",
@@ -48,6 +65,13 @@ export function BroadcastPanel() {
   const [bannerTtl, setBannerTtl] = useState(8);
   const [busy, setBusy] = useState<string>("");
   const [err, setErr] = useState<string>("");
+  // 0.16.0 — 4pm recap push toast. Non-null while a "pushed at HH:MM"
+  // confirmation is on screen. Auto-clears after a few seconds so the
+  // operator can fire again without manual housekeeping.
+  const [recapPushToast, setRecapPushToast] = useState<{
+    week_id: string;
+    pushedAtLabel: string;
+  } | null>(null);
 
   // Agent roster — already fetched elsewhere; shared SWR cache resolves the
   // pinned agent's name for the status header without a second request.
@@ -77,6 +101,22 @@ export function BroadcastPanel() {
     );
 
   const onPreroll = () => wrap("preroll", () => postCmd("stream_preroll", {}));
+
+  // 0.16.0 — push the 4pm recap moment manually. The endpoint
+  // publishes the canonical BroadcastMoment and returns the moment
+  // id + a timestamp; we surface the timestamp as a brief toast so
+  // the operator has visual confirmation that the push went through.
+  const onRecapPush = () =>
+    wrap("recap-push", async () => {
+      const res = await postRecapPush();
+      const at = new Date(res.pushed_at);
+      const label = Number.isFinite(at.getTime())
+        ? at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+        : "now";
+      setRecapPushToast({ week_id: res.week_id, pushedAtLabel: label });
+      // Auto-clear the toast after 6s so a re-push doesn't need manual cleanup.
+      setTimeout(() => setRecapPushToast(null), 6000);
+    });
 
   const onlineDotClass = ss.isOnline
     ? "size-2 rounded-full bg-(--color-profit) animate-pulse"
@@ -233,6 +273,28 @@ export function BroadcastPanel() {
             >
               Replay pre-roll opener
             </button>
+          </div>
+
+          {/* 0.16.0 — manual 4pm recap push. Bypasses the per-day
+              idempotency row so operators can re-show the live recap
+              during the last few minutes of a stream (the auto-fired
+              one may have missed an earlier-in-the-day restart).
+              Matches the panel's button style; uses the same `wrap`
+              helper as the banner / pre-roll buttons. */}
+          <div className="border-t border-zinc-800 pt-4 space-y-2">
+            <SectionLabel>4pm recap</SectionLabel>
+            <button
+              onClick={onRecapPush}
+              disabled={busy === "recap-push"}
+              className="w-full rounded-sm border border-emerald-700/60 bg-emerald-900/20 px-3 py-1.5 text-xs font-medium text-emerald-100 hover:bg-emerald-900/40 disabled:opacity-50"
+            >
+              {busy === "recap-push" ? "Pushing..." : "Push 4pm recap"}
+            </button>
+            {recapPushToast && (
+              <div className="font-mono text-[10px] text-(--color-profit)">
+                pushed {recapPushToast.week_id} at {recapPushToast.pushedAtLabel}
+              </div>
+            )}
           </div>
         </div>
 

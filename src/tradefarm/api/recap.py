@@ -35,6 +35,7 @@ assembler; ``build_recap_from_manifest`` is the replay-path assembler;
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -617,3 +618,84 @@ async def recap_today(
         raise HTTPException(status_code=400, detail=f"invalid `at`: {exc}") from exc
 
     return build_recap_from_manifest(manifest, at_dt)
+
+
+# ---------------------------------------------------------------------------
+# 0.16.0 — 4pm ET live recap scene endpoints.
+#
+# Two thin surfaces consumed by the stream's ``LiveRecapScene``:
+#
+# * ``GET /api/recap/ledger``  — in-memory ``BroadcastRecapLedger.to_payload()``
+#   snapshot. The ledger is installed as a module-global by the
+#   ``BroadcastSuite.start()``; if the orchestrator isn't running (or the
+#   arbiter hasn't been installed), return an empty payload so the stream
+#   can still render an "idle" frame.
+#
+# * ``GET /api/weekly/{week_id}``  — wraps ``weekly_rollup.read_weekly_rollup``.
+#   404 when the rollup file is missing (a fresh dev box or a week with no
+#   sessions); validates the ``week_id`` regex so a garbage path component
+#   doesn't reach the disk layer.
+# ---------------------------------------------------------------------------
+
+
+_WEEK_ID_RE = re.compile(r"^\d{4}-W\d{2}$")
+
+
+@router.get("/ledger")
+async def recap_ledger() -> dict[str, Any]:
+    """Return the live broadcast ledger payload for the recap scene.
+
+    The scene reads this on mount + once per minute; the ledger is in-memory
+    and updated every time ``publish_broadcast_moment`` is called. When the
+    orchestrator isn't running the global ledger is None — we return the
+    same empty-shape payload (``max_moments=0``, ``count=0``) the
+    ``BroadcastRecapLedger().to_payload()`` produces so the client never
+    has to special-case a "no data" response.
+
+    Recent cap is bumped to 20 and top cap to 10 (vs the default 10/5) so
+    the scene's "top 3 moves" + "rivalries" sections have enough headroom
+    for a full trading day.
+    """
+    from tradefarm.orchestrator import broadcast_os as _bos
+
+    ledger = _bos.get_broadcast_ledger()
+    if ledger is None:
+        # Synthesize an empty payload — same shape as a fresh
+        # ``BroadcastRecapLedger().to_payload(...)`` call.
+        return {
+            "max_moments": 0,
+            "count": 0,
+            "recent": [],
+            "top": [],
+        }
+    return ledger.to_payload(recent_limit=20, top_limit=10)
+
+
+@router.get("/weekly/{week_id}")
+async def weekly_rollup(week_id: str) -> dict[str, Any]:
+    """Return the weekly rollup JSON for ``week_id`` (e.g. ``2026-W31``).
+
+    Wraps ``tradefarm.session.weekly_rollup.read_weekly_rollup`` with a
+    format check (rejects anything that isn't ``YYYY-WNN``) so a junk
+    path component never reaches the disk layer. 404 when the rollup
+    file is missing — a fresh dev box or a week with no sessions.
+
+    The rollup is read on every request (no in-memory cache) so a write
+    that lands between requests is picked up on the next poll.
+    Sessions-dir resolution is delegated to ``read_weekly_rollup`` —
+    the default ``replay_query.DEFAULT_SESSIONS_DIR`` is fine for the
+    live broadcast VM.
+    """
+    if not _WEEK_ID_RE.match(week_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid week_id {week_id!r}; expected YYYY-WNN",
+        )
+    from tradefarm.session.weekly_rollup import read_weekly_rollup
+
+    rollup = read_weekly_rollup(week_id)
+    if rollup is None:
+        raise HTTPException(
+            status_code=404, detail=f"no weekly rollup for {week_id!r}"
+        )
+    return rollup

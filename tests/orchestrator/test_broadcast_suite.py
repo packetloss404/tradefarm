@@ -174,3 +174,56 @@ async def test_attach_crash_logger_silent_on_cancel(monkeypatch):
         await task
 
     assert logged == []
+
+
+# ---------------------------------------------------------------------------
+# 0.16.0 — record_path plumbed through BroadcastSuite + close() idempotency
+# ---------------------------------------------------------------------------
+
+
+async def test_suite_constructs_ledger_with_record_path(monkeypatch, tmp_path):
+    """``BroadcastSuite(orch, record_path=path)`` plumbs the path into the
+    recap ledger so every moment the suite records is also written to disk."""
+    _patch_all(monkeypatch)
+    target = tmp_path / "suite-record.ndjson"
+    suite = BroadcastSuite(_StubOrch(), record_path=target)
+
+    assert suite.ledger.record_path == target
+    assert suite.ledger._record_handle is not None
+
+    # Recording a moment lands a line on disk.
+    suite.ledger.record(
+        bos.BroadcastMoment(
+            id="suite-moment-1",
+            kind="activity",
+            title="from suite",
+            outputs=("ticker",),
+        )
+    )
+    suite.ledger.close()
+    contents = target.read_text(encoding="utf-8").strip()
+    assert '"id":"suite-moment-1"' in contents
+
+
+async def test_suite_stop_closes_ledger_handle(monkeypatch, tmp_path):
+    """``stop()`` flushes + closes the ledger's on-disk record handle so the
+    file is durable after teardown."""
+    _patch_all(monkeypatch)
+    target = tmp_path / "suite-stop.ndjson"
+    suite = BroadcastSuite(_StubOrch(), record_path=target)
+    await suite.start()
+    await suite.stop()
+
+    # Handle is released; a second close() is a no-op (idempotent).
+    assert suite.ledger._record_handle is None
+    suite.ledger.close()  # must not raise
+    assert suite.ledger._record_handle is None
+
+
+async def test_suite_close_is_idempotent(monkeypatch):
+    """``suite.close()`` can be called multiple times safely (handy for
+    test teardown + crash recovery paths)."""
+    _patch_all(monkeypatch)
+    suite = BroadcastSuite(_StubOrch())
+    suite.close()  # no record_path, handle is None — should not raise
+    suite.close()  # idempotent

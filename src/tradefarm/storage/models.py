@@ -272,3 +272,31 @@ class PipelineRun(Base):
         # because the scheduler passes an exact `date = today`.
         Index("ix_pipeline_runs_status_created_at", "status", "created_at"),
     )
+
+
+class DailyRecapFired(Base):
+    """0.16.0 — per-day idempotency row for the 4pm ET live recap scene.
+
+    The ``BroadcastSuite.run_daily_recap_scheduler`` poll loop writes one
+    row per NYSE trading day after a successful ``publish_broadcast_moment``
+    call. A row's presence for today's ET date is the gate the scheduler
+    reads each tick to decide whether to fire; the row is write-once and
+    never updated.
+
+    One row per ~250 trading days/year — the table grows slowly and is
+    never pruned (let the operator back it up if they care). Mirrors the
+    ``pipeline_runs.date`` pattern (ISO date as a TEXT primary key) so
+    the existing ``WHERE date = ?`` query plan + Python repr semantics
+    carry over for free.
+
+    ``moment_id`` is the canonical ``BroadcastMoment.id`` we published;
+    ``fired_at`` is the ISO UTC timestamp at write time. Both are
+    diagnostic-only — the scheduler never reads them; the row's
+    existence is the contract.
+    """
+
+    __tablename__ = "daily_recap_fired"
+
+    date: Mapped[str] = mapped_column(String(10), primary_key=True)
+    moment_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fired_at: Mapped[str] = mapped_column(String(32), nullable=False)

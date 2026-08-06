@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -200,6 +201,54 @@ class Settings(BaseSettings):
     # was full.
     vod_archive_path: str = ""
     vod_archive_on_failure: bool = False
+
+    # 0.16.0 — 4pm ET live recap scene scheduler. Master switch for the
+    # per-day auto-firing of the daily_recap moment (item 4.5 in the
+    # feature backlog). When True (default), the suite's poll loop fires
+    # the recap once per NYSE trading day at 16:00-16:30 ET, gated on a
+    # per-day idempotency row. When False, the loop parks forever (like
+    # vod_pipeline_enabled) so operators can ship the code dark and
+    # flip the switch without a restart. The dashboard's "Push 4pm
+    # recap" button is unaffected — operators can always re-push.
+    daily_recap_enabled: bool = True
+
+    # 0.16.0 — broadcast moment NDJSON recorder. When set to a file path,
+    # every moment the suite records is also appended to that file as
+    # NDJSON (one ``BroadcastMoment.to_payload()`` per line). Default
+    # None = off (no disk write). Operators can ``tail -f`` the file
+    # while the orchestrator is running, and ``cp`` it into
+    # ``tests/fixtures/moments/`` to promote a live capture into a
+    # regression fixture. Disk writes are best-effort — a failure
+    # never crashes the orchestrator.
+    broadcast_record_moments: Path | None = None
+
+    # -------------------------------------------------------------------------
+    # 0.16.0 — Rivalry Week weekly podcast. Audio-first companion to the
+    # 7-min Rivalry Week video. Five daily 6-min sessions stitched into
+    # one 30-min weekly episode; static card + voiceover; uploaded to
+    # YouTube with `category="podcast"`. See docs/research/podcast-format.md
+    # for the design.
+    #
+    # `podcast_enabled`: master switch. When False (default), the
+    # scheduler parks the weekly composer task forever, so the operator
+    # can ship the code dark and flip the switch without a restart.
+    # When True, the scheduler fires the composer once per week on
+    # Saturday after the 5 daily sessions have settled.
+    #
+    # `podcast_tts_provider` / `podcast_voice`: pick the TTS backend and
+    # voice for the weekly host. The same provider set the daily TTS
+    # step uses (openai, elevenlabs, silence); "alloy" matches the
+    # daily default. Operators who want a distinct weekly voice can
+    # set this independently.
+    #
+    # `podcast_fire_hour_et`: hour-of-day ET to fire the weekly
+    # composer (default Saturday 09:00 ET — after Friday's close + the
+    # weekend cool-off, before Monday's open).
+    # -------------------------------------------------------------------------
+    podcast_enabled: bool = False
+    podcast_tts_provider: str = "openai"
+    podcast_voice: str = "alloy"
+    podcast_fire_hour_et: int = Field(default=9, ge=0, le=23)
 
     # -------------------------------------------------------------------------
     # YouTube Live Chat — poll the active broadcast's live chat via the

@@ -52,8 +52,21 @@ class TtsProvider(Protocol):
     name: str
     sample_rate: int
 
-    async def synthesize(self, text: str, *, voice: str, out_path: Path) -> float:
-        """Render `text` to `out_path` (.wav). Returns actual duration."""
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        out_path: Path,
+        podcast_mode: bool = False,
+    ) -> float:
+        """Render `text` to `out_path` (.wav). Returns actual duration.
+
+        0.16.0 — `podcast_mode=True` is the Rivalry Week audio flag. For
+        the silent provider it widens the per-line tail (more dramatic
+        pause between lines). For real cloud providers the flag is
+        informational today — the script generator is expected to
+        insert `...` between segments in the spoken text."""
         ...
 
 
@@ -68,10 +81,24 @@ class SilentTtsProvider:
     name = "silence"
     sample_rate = DEFAULT_SAMPLE_RATE
     WPM = 155
+    # 0.16.0 — podcast mode tacks on a longer tail per line (closer to
+    # the section-break pacing the Rivalry Week audio wants). The 0.25s
+    # default stays for the daily VOD so the 30-min weekly episode's
+    # dramatic pauses don't leak into the short reel.
+    DEFAULT_TAIL_SEC = 0.25
+    PODCAST_TAIL_SEC = 0.75
 
-    async def synthesize(self, text: str, *, voice: str, out_path: Path) -> float:
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        out_path: Path,
+        podcast_mode: bool = False,
+    ) -> float:
         words = max(1, len(text.split()))
-        duration = round(60.0 * words / self.WPM + 0.25, 2)  # tiny tail
+        tail = self.PODCAST_TAIL_SEC if podcast_mode else self.DEFAULT_TAIL_SEC
+        duration = round(60.0 * words / self.WPM + tail, 2)
         n_frames = int(duration * self.sample_rate)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(out_path), "wb") as w:
@@ -112,7 +139,18 @@ class ElevenLabsTtsProvider:
         self.api_key = api_key
         self.model_id = model_id or self.DEFAULT_MODEL_ID
 
-    async def synthesize(self, text: str, *, voice: str, out_path: Path) -> float:
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        out_path: Path,
+        podcast_mode: bool = False,
+    ) -> float:
+        # podcast_mode is informational for cloud providers today; the
+        # Rivalry Week script generator owns the section-break pacing
+        # by inserting `...` in the spoken text.
+        del podcast_mode
         import subprocess
 
         voice_id = self.VOICE_IDS.get(voice, voice)
@@ -206,7 +244,18 @@ class OpenAiTtsProvider:
         self.api_key = api_key
         self.model_id = model_id or self.DEFAULT_MODEL_ID
 
-    async def synthesize(self, text: str, *, voice: str, out_path: Path) -> float:
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        out_path: Path,
+        podcast_mode: bool = False,
+    ) -> float:
+        # podcast_mode is informational for cloud providers today; the
+        # Rivalry Week script generator owns the section-break pacing
+        # by inserting `...` in the spoken text.
+        del podcast_mode
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
@@ -396,9 +445,17 @@ async def run_tts(
     api_key: str | None = None,
     voice_model: str | None = None,
     force: bool = False,
+    podcast_mode: bool = False,
 ) -> TtsResult:
     """Read script.json, synth each line, write per-line .wav + a
-    summary index.json. Re-uses existing wavs when force=False."""
+    summary index.json. Re-uses existing wavs when force=False.
+
+    0.16.0 — `podcast_mode=True` widens the per-line tail silence on
+    the silent provider (so the weekly podcast's section breaks land
+    with a longer dramatic pause). Cloud providers are unchanged;
+    the script generator is expected to insert `...` in the spoken
+    text between segments to give cloud voices the same cue.
+    """
 
     base = sessions_dir or Path("out/sessions")
     sdir = base / session_id
@@ -449,7 +506,25 @@ async def run_tts(
                 continue
 
             try:
-                dur = await provider.synthesize(text, voice=voice, out_path=wav_path)
+                # 0.16.0 — `podcast_mode` is a 0.16.0 addition; only
+                # pass it when True so older provider implementations
+                # (e.g. the FlakyProvider test stub) keep working
+                # without an explicit `podcast_mode=False` shim.
+                # Cloud providers always have it; the silent provider
+                # has it; older custom providers may not.
+                if podcast_mode:
+                    dur = await provider.synthesize(
+                        text,
+                        voice=voice,
+                        out_path=wav_path,
+                        podcast_mode=True,
+                    )
+                else:
+                    dur = await provider.synthesize(
+                        text,
+                        voice=voice,
+                        out_path=wav_path,
+                    )
             except Exception as exc:  # noqa: BLE001
                 result.failed.append((stem, f"{type(exc).__name__}: {exc}"))
                 continue
@@ -516,6 +591,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--force", action="store_true", help="Re-synth even when wav already exists."
     )
+    parser.add_argument(
+        "--podcast-mode",
+        action="store_true",
+        help="0.16.0 — widen the per-line tail silence for the Rivalry Week weekly podcast.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -528,6 +608,7 @@ def main(argv: list[str] | None = None) -> None:
                 api_key=args.api_key,
                 voice_model=args.voice_model,
                 force=args.force,
+                podcast_mode=args.podcast_mode,
             )
         )
     except FileNotFoundError as exc:

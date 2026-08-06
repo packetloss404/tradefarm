@@ -141,7 +141,7 @@ async def test_scheduler_parked_when_env_var_false(monkeypatch, scheduler_db) ->
 
 
 async def test_scheduler_skips_when_todays_run_already_done(
-    monkeypatch, scheduler_db
+    monkeypatch, scheduler_db, pinned_vod_today
 ) -> None:
     """A pre-existing ``done`` row for today makes the scheduler skip.
 
@@ -169,7 +169,7 @@ async def test_scheduler_skips_when_todays_run_already_done(
 
 
 async def test_scheduler_skips_when_todays_run_in_flight(
-    monkeypatch, scheduler_db
+    monkeypatch, scheduler_db, pinned_vod_today
 ) -> None:
     """A pre-existing ``running`` row for today also blocks re-fire.
 
@@ -399,7 +399,7 @@ async def test_scheduler_boot_marks_previous_process_live_runs_dead(
 
 
 async def test_scheduler_idempotency_uses_live_today(
-    monkeypatch, scheduler_db
+    monkeypatch, scheduler_db, pinned_vod_today
 ) -> None:
     """A ``live_today=True`` row for today (status=any) makes
     the scheduler skip - the new process's own previously-fired

@@ -14,6 +14,7 @@ import { SessionControl } from "./SessionControl";
 import { EpisodePage } from "./EpisodePage";
 import { InternWatch } from "./InternWatch";
 import { RivalryWeek } from "./RivalryWeek";
+import { WeeklyPodcastTab } from "./WeeklyPodcast";
 
 // Data-source toggle: applies to ALL surfaces (BeatPicker, Pipeline,
 // Session, Episode) when set to "live". The previous behaviour
@@ -46,7 +47,8 @@ type SurfaceId =
   | "session"
   | "episode"
   | "interns"
-  | "rivalries";
+  | "rivalries"
+  | "podcast";
 
 const SURFACES: { id: SurfaceId; label: string; sub: string }[] = [
   { id: "beats", label: "Beat picker", sub: "the keystone" },
@@ -55,6 +57,7 @@ const SURFACES: { id: SurfaceId; label: string; sub: string }[] = [
   { id: "episode", label: "Episode review", sub: "ready to publish" },
   { id: "interns", label: "Intern Watch", sub: "12-min Friday" },
   { id: "rivalries", label: "Rivalry Week", sub: "7-min format" },
+  { id: "podcast", label: "Weekly Podcast", sub: "30-min audio" },
 ];
 
 // Read the active tab from the URL hash, e.g. #vod-studio/beats. The
@@ -69,7 +72,8 @@ function tabFromHash(): SurfaceId {
     raw === "session" ||
     raw === "episode" ||
     raw === "interns" ||
-    raw === "rivalries"
+    raw === "rivalries" ||
+    raw === "podcast"
   ) {
     return raw;
   }
@@ -260,6 +264,7 @@ export default function VodStudio() {
         {active === "episode" && <EpisodePage vod={data} />}
         {active === "interns" && <InternWatch vod={data} />}
         {active === "rivalries" && <RivalryWeek vod={data} />}
+        {active === "podcast" && <WeeklyPodcastTab />}
       </div>
     </div>
   );

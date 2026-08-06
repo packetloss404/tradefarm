@@ -74,6 +74,32 @@ from tradefarm.yt import metadata as yt_metadata
 from tradefarm.yt import upload as yt_upload
 
 
+# 0.16.0 — Rivalry Week weekly podcast. Optional stage that lives
+# OUTSIDE the 9-step STEPS tuple because it's driven by a
+# ``week_id`` (not a session_id) and runs once per week, not once
+# per day. The pipeline exposes it via ``enable_podcast()`` and the
+# ``--include-podcast`` CLI flag; the scheduler's
+# ``run_podcast_scheduler`` task fires it on Sat 09:00 ET.
+def enable_podcast(week_id: str) -> bool:
+    """Return True when the operator wants the weekly podcast to be
+    part of this pipeline run. Currently a thin wrapper around
+    ``settings.podcast_enabled``; the ``week_id`` is a forward-compat
+    seam so a future v0.17 scheduler can pass the per-week id
+    without touching the call sites.
+    """
+    from tradefarm.config import settings
+
+    return bool(settings.podcast_enabled) and bool(week_id)
+
+
+def _run_podcast(argv: list[str]) -> None:
+    # Lazy import — keeps the module-load cost flat for the daily
+    # chain that never reaches the podcast stage.
+    from tradefarm.render import podcast as render_podcast
+
+    render_podcast.main(argv)
+
+
 # ----- step registry ---------------------------------------------------------
 
 
@@ -668,6 +694,23 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Print the resolved plan + per-step argv, don't invoke anything.",
     )
+    parser.add_argument(
+        "--include-podcast",
+        action="store_true",
+        help=(
+            "0.16.0 — also run render.podcast for the trading week "
+            "containing --date / --session-id. Requires the weekly "
+            "rollup to already be on disk; produces episode_<week_id>.mp4."
+        ),
+    )
+    parser.add_argument(
+        "--podcast-week-id",
+        default=None,
+        help=(
+            "0.16.0 — explicit week_id for the podcast stage "
+            "(e.g. 2026-W31). Defaults to the week containing --date."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.date is not None:
@@ -693,6 +736,30 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.date is None:
         enabled.discard("session")
 
+    # 0.16.0 — optional weekly podcast stage. Runs after the daily
+    # chain regardless of the daily enabled set; the only gate is
+    # the operator's --include-podcast flag. The week_id defaults
+    # to the week containing --date, or — when the operator resumed
+    # via --session-id — to args.podcast_week_id (which the caller
+    # must supply).
+    podcast_week_id: str | None = None
+    if args.include_podcast:
+        if args.podcast_week_id:
+            podcast_week_id = args.podcast_week_id
+        elif args.date is not None:
+            from tradefarm.session.weekly_rollup import week_id_for
+
+            podcast_week_id = week_id_for(args.date)
+        else:
+            # Resuming an existing session via --session-id; we
+            # can't derive the week from it without a manifest
+            # read, so the operator must pass --podcast-week-id.
+            raise SystemExit(
+                "--include-podcast requires --podcast-week-id when "
+                "resuming an existing session (the --date is the "
+                "source of truth for the trading week otherwise)."
+            )
+
     opts = PipelineOpts(
         sessions_dir=args.out,
         music=args.music,
@@ -710,6 +777,30 @@ def main(argv: Sequence[str] | None = None) -> None:
         force=args.force,
         dry_run=args.dry_run,
     )
+
+    # 0.16.0 — run the weekly podcast stage after the daily chain.
+    # We do this OUTSIDE ``run_pipeline`` because the podcast stage
+    # is keyed on a week_id, not a session_id, and the timing model
+    # (once per week, not once per day) doesn't fit the per-step
+    # retry + presence-check contract the runner enforces. The
+    # CLI flag is the operator's gate; the function is a no-op
+    # when settings.podcast_enabled is False.
+    if args.include_podcast and podcast_week_id and not args.dry_run:
+        from tradefarm.config import settings
+        from tradefarm.render import podcast as render_podcast
+
+        if settings.podcast_enabled:
+            render_podcast.compose_weekly_episode(
+                podcast_week_id,
+                voice=settings.podcast_voice,
+                provider=settings.podcast_tts_provider,
+            )
+        else:
+            print(
+                f"[pipeline] podcast stage skipped for {podcast_week_id} "
+                "(settings.podcast_enabled=False)",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":

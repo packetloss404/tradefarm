@@ -6,20 +6,21 @@ broadcast-app idea backlog (with effort estimates) lives in
 [`dev/feature-backlog.md`](./dev/feature-backlog.md); this file
 captures the intersection of "interesting" + "likely to be tackled".
 
-**0.15.0 shipped 2026-08-05.** A "stream UI migration to
-canonical `broadcast_moment`" release. The backend
-Broadcast OS scheduler + arbiter shipped in round 8
-(2026-07); 0.15.0 is the stream-side counterpart: the
-`broadcast_moment` case in `useStreamCommands.ts` now
-routes `macro_burst` / `lower_third` outputs to the
-existing macro/banner slots via pure mappers in
-`broadcastMomentMappers.ts`, with a 1.5s id-keyed
-dedup ring so the canonical-then-legacy fan-out from
-`publish_broadcast_moment(emit_legacy=True)` doesn't
-double-fire the same slot. Closes `docs/broadcast_os.md`
-milestone 2. 861 tests pass. See
-[CHANGELOG.md](./CHANGELOG.md) for the full release
-notes.
+**0.16.0 shipped 2026-08-05.** A "recap scene +
+Rivalry Week podcast + scheduler tuning fixtures"
+release. Closes three backlog items in one
+swing: item **4.5** (recap scene at 4pm ET), the
+Rivalry Week podcast format from the round-8
+research, and **milestone 3** of
+`docs/broadcast_os.md` (replay fixtures). Three
+parallel dev subagents shipped under the
+orchestrator's integration; orchestrator fixes
+two cross-cutting mypy errors and three
+pre-existing `test_vod_scheduler.py` failures
+that the 0.11.0 carryover fix had missed. 921
+tests pass (+60 since 0.15.0). See
+[CHANGELOG.md](./CHANGELOG.md) for the full
+release notes.
 
 Status legend:
 
@@ -32,18 +33,19 @@ Status legend:
 
 ## Now — current focus
 
-The 0.15.0 release (2026-08-05) closed the Broadcast
-OS scheduler v1 + stream UI migration (milestones 1
-+ 2 of `docs/broadcast_os.md`). The **next leverage
-piece is the recap scene at 4pm ET** — a new
-`broadcast_moment` with `outputs: ["recap_log"]` and
-a dedicated recap slot that can render even when the
-macro_burst slot is busy. The podcast episode format
-(Rivalry Week over 5 sessions = 30-min weekly recap)
-sits on the same scheduler and depends on milestone
-3 (replay fixtures for moment timelines) landing
-first so we can tune priorities and collisions
-without waiting for live ticks. 0.16.0 scope.
+The 0.16.0 release (2026-08-05) closed item **4.5**
+(recap scene at 4pm ET), the Rivalry Week podcast
+format, and milestone 3 of `docs/broadcast_os.md`
+(replay fixtures). All three Broadcast OS
+milestones are now closed. The **next leverage
+piece is a 0.17.0 "real voice" release** — the
+recap scene + podcast ship with `silence` TTS by
+default in CI; the operator needs to pick
+`ELEVENLABS_API_KEY` or `OPENAI_API_KEY` and
+accept the per-week cost to hear the actual
+voice. The 0.17.0 work is config + TTS provider
+switching (no infra change), then visual QA of
+the real voice on the next trading-day close.
 
 ### Audit-followup quick wins (≤ 1 day each, picked from the 2026-08 review)
 

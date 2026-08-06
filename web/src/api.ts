@@ -427,4 +427,17 @@ export const api = {
   pipelineRuns: () => fetcher<PipelineRunRow[]>("/api/pipeline/runs"),
   pipelineRunStatus: (runId: string) =>
     fetcher<PipelineRunRow>(`/api/pipeline/runs/${runId}`),
+  // 0.16.0 — Rivalry Week weekly podcast tab. Reads the weekly
+  // rollup (which now carries a `podcast` field when
+  // `out/weekly/<week_id>/podcast/episode_*.mp4` exists on disk).
+  // The endpoint is owned by Dev B's recap scene work; if the
+  // backend isn't running that handler yet the fetcher raises and
+  // the SWR consumer falls back to the empty list.
+  // TODO: swap the `unknown` response for the real WeeklyRollup
+  // type once Dev B's recap scene /api/weekly endpoint ships.
+  getWeeklyRollup: async (weekId: string): Promise<unknown> => {
+    const r = await fetch(`/api/weekly/${encodeURIComponent(weekId)}`);
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  },
 };

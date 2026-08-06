@@ -1,0 +1,6 @@
+{"id":"low-1","kind":"activity","title":"quiet fill","priority":40,"color":"neutral","outputs":["macro_burst"],"ttl_sec":10,"created_at":"2026-08-05T10:00:00+00:00","metadata":{}}
+{"id":"mid-1","kind":"agent_pnl","title":"agent-007 +3.2%","priority":70,"color":"profit","outputs":["macro_burst","ticker"],"ttl_sec":10,"created_at":"2026-08-05T10:00:05+00:00","metadata":{}}
+{"id":"low-2","kind":"activity","title":"another fill","priority":40,"color":"neutral","outputs":["lower_third"],"ttl_sec":10,"created_at":"2026-08-05T10:00:10+00:00","metadata":{}}
+{"id":"mid-1-followup","kind":"agent_pnl","title":"agent-007 +3.4%","priority":70,"color":"profit","outputs":["macro_burst"],"ttl_sec":10,"created_at":"2026-08-05T10:00:15+00:00","metadata":{}}
+{"id":"high-1","kind":"rank_change","title":"agent-042 promoted","priority":90,"color":"profit","outputs":["macro_burst","lower_third","ticker"],"ttl_sec":10,"created_at":"2026-08-05T10:00:20+00:00","metadata":{}}
+{"id":"low-3","kind":"activity","title":"background","priority":40,"color":"neutral","outputs":["ticker"],"ttl_sec":10,"created_at":"2026-08-05T10:00:25+00:00","metadata":{}}

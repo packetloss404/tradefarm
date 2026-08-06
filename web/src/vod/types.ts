@@ -56,6 +56,35 @@ export type RivalryRow = {
   b_pnl: number;
 };
 
+// 0.16.0-era weekly rollup extra: the Rivalry Week weekly podcast
+// (30-min audio, 5 daily sessions stitched). Mirrors the field the
+// backend ``session.weekly_rollup.write_weekly_rollup`` populates
+// from ``out/weekly/<week_id>/podcast/episode_*.mp4`` when present.
+export type WeeklyPodcast = {
+  path: string;
+  cover: string | null;
+  duration_sec: number;
+  size_bytes: number;
+  uploaded_at: string | null;
+  youtube_video_id: string | null;
+};
+
+// The weekly rollup as returned by /api/weekly/<week_id> (and the
+// shape the dashboard's Weekly Podcast tab reads). Today this is a
+// TODO until Dev B lands the recap-scene /api/weekly endpoint —
+// defined here so the component can take it as a prop and the
+// fetcher has a stable contract.
+export type WeeklyRollup = {
+  week_id: string;
+  date_range?: [string, string];
+  pool_pnl?: number;
+  pool_pnl_pct?: number;
+  strategy_rollup?: Record<string, unknown>;
+  rivalries?: RivalryRow[];
+  podcast?: WeeklyPodcast | null;
+  [key: string]: unknown;
+};
+
 export type Agent = {
   id: number;
   name: string;

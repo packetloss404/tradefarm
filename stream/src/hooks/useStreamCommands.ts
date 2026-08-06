@@ -9,8 +9,14 @@ import { replayNow } from "../shared/replayMode";
 import { streamAudio } from "../audio/StreamAudio";
 import {
   broadcastMomentToBanner,
+  broadcastMomentToLiveRecap,
   broadcastMomentToMacroFire,
+  type LiveRecapState,
 } from "./broadcastMomentMappers";
+
+// Re-export so consumers (SceneRotator) can import the live-recap
+// state type alongside the StreamCommandsHandle.
+export type { LiveRecapState };
 
 // Re-export so consumers (DecisionLabScene, SceneRotator) can import the
 // decision payload type alongside the StreamCommandsHandle.
@@ -87,6 +93,12 @@ export type StreamCommandsHandle = {
   setForceScene: (id: string | null) => void;
   banner: BannerState | null;
   setBanner: (b: BannerState | null) => void;
+  // 0.16.0 — 4pm-ET live recap scene. Non-null when a daily-recap
+  // moment has fired; null otherwise. The SceneRotator reads this
+  // and mounts the `LiveRecapScene` overlay for the moment's TTL.
+  // The auto-clear timer (TTL -> null) is owned by the hook so the
+  // rotator never has to track a countdown.
+  liveRecap: LiveRecapState | null;
   // Effective auto-rotate state: dashboard-pushed override if present, else
   // the persisted setting passed in via args. The hook owns the override
   // and resolves it here so callers don't recombine it themselves.
@@ -197,6 +209,11 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   const [forceSceneId, setForceSceneId] = useState<string | null>(null);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [macroFire, setMacroFire] = useState<MacroFireState | null>(null);
+  // 0.16.0 — live recap slot. Non-null while the 4pm-ET daily recap
+  // moment is "live" (within its TTL window). The SceneRotator reads
+  // this and forces the `LiveRecapScene` overlay; the timer below
+  // auto-clears it when the moment's TTL expires.
+  const [liveRecap, setLiveRecap] = useState<LiveRecapState | null>(null);
   const [pinAgentId, setPinAgentId] = useState<number | null>(null);
   const [commentary, setCommentary] = useState<CommentaryState | null>(null);
   const [realtimeChat, setRealtimeChat] = useState<RealtimeChatMessage[]>([]);
@@ -205,6 +222,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
   const [predictions, setPredictions] = useState<Record<string, PredictionState>>({});
   const [latestDecisions, setLatestDecisions] = useState<AgentDecision[]>([]);
   const audiencePinResolvedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveRecapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Dedup ring so a brief WS reconnect (which sometimes replays the last
   // few messages) doesn't double-render the same chat row.
   const seenChatIds = useRef<Set<string>>(new Set());
@@ -257,6 +275,24 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     }
   }, []);
 
+  // 0.16.0 — live recap slot setter. The TTL comes from the moment
+  // itself (60s default per the design doc); the timer auto-clears
+  // the slot so the rotator's force-scene returns to its normal
+  // rotation. A second live-recap moment arriving while the first
+  // is still on-air resets the timer (re-fires the moment at the new
+  // deadline) so the operator's manual push extends an in-flight
+  // auto-fired recap.
+  const setLiveRecapSafe = useCallback((next: LiveRecapState | null) => {
+    if (liveRecapTimer.current) {
+      clearTimeout(liveRecapTimer.current);
+      liveRecapTimer.current = null;
+    }
+    setLiveRecap(next);
+    if (next) {
+      liveRecapTimer.current = setTimeout(() => setLiveRecap(null), next.ttlSec * 1000);
+    }
+  }, []);
+
   // Broadcast-moment dedup. The canonical `broadcast_moment` event lands
   // milliseconds before the legacy `stream_macro_fired` / `stream_banner`
   // fan-out that publish_broadcast_moment emits with emit_legacy=True. We
@@ -304,6 +340,7 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
       if (bannerTimer.current) clearTimeout(bannerTimer.current);
       if (macroFireTimer.current) clearTimeout(macroFireTimer.current);
       if (audiencePinResolvedTimer.current) clearTimeout(audiencePinResolvedTimer.current);
+      if (liveRecapTimer.current) clearTimeout(liveRecapTimer.current);
     };
   }, []);
 
@@ -397,6 +434,12 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
           if (macro) setMacroFireSafe(macro);
           const banner = broadcastMomentToBanner(p, at);
           if (banner) setBannerSafe(banner);
+          // 0.16.0 — daily recap moment. Translates to a
+          // `LiveRecapState` that the SceneRotator reads to force the
+          // `LiveRecapScene` overlay for the moment's TTL. Independent
+          // of macro/banner so a daily recap can be the only output.
+          const liveRecap = broadcastMomentToLiveRecap(p, at);
+          if (liveRecap) setLiveRecapSafe(liveRecap);
           break;
         }
         case "stream_commentary": {
@@ -606,5 +649,6 @@ export function useStreamCommands(args: UseStreamCommandsArgs): StreamCommandsHa
     audiencePinResolved,
     predictions,
     latestDecisions,
+    liveRecap,
   };
 }

@@ -250,13 +250,130 @@ def write_weekly_rollup(
     """Persist ``rollup`` to
     ``<sessions_dir>/weekly/<week_id>/rollup.json``. Returns the path.
     Creates the parent dirs as needed.
+
+    0.16.0 — if ``out/weekly/<week_id>/podcast/episode_*.mp4`` exists
+    (written by ``tradefarm.render.podcast.compose_weekly_episode``),
+    populate a ``podcast`` field on the rollup with the cover image,
+    duration, file size, upload timestamp, and YouTube video id (when
+    present in the matching ``episode_*.yaml``). The field is the
+    read-on-demand signal the new VOD studio Weekly Podcast tab and
+    the API endpoint consume; ``compute_weekly_rollup`` is unchanged
+    so the live ticker doesn't pay for a stat() per session per day.
     """
     base = sessions_dir or replay_query.DEFAULT_SESSIONS_DIR
     week_id = str(rollup.get("week_id") or "unknown")
     out = base / "weekly" / week_id / "rollup.json"
     out.parent.mkdir(parents=True, exist_ok=True)
+    rollup = _populate_podcast_field(rollup, week_id=week_id, base=base)
     out.write_text(json.dumps(rollup, indent=2, default=str), encoding="utf-8")
     return out
+
+
+def _populate_podcast_field(
+    rollup: dict[str, Any],
+    *,
+    week_id: str,
+    base: Path,
+) -> dict[str, Any]:
+    """Attach a ``podcast`` field if the weekly episode mp4 is on disk.
+
+    The episode lives at
+    ``<base>/weekly/<week_id>/podcast/episode_<week_id>.mp4`` with a
+    sibling ``cover_<week_id>.jpg`` and ``episode_<week_id>.yaml``.
+    The yaml carries the YouTube video id once ``podcast upload`` has
+    fired. Globs are used for the episode path so a re-render with a
+    different suffix (e.g. ``episode_<week_id>_v2.mp4``) still gets
+    picked up; the first hit wins.
+    """
+    podcast_dir = base / "weekly" / week_id / "podcast"
+    if not podcast_dir.is_dir():
+        return rollup
+    candidates = sorted(podcast_dir.glob(f"episode_{week_id}*.mp4"))
+    if not candidates:
+        return rollup
+    episode = candidates[0]
+    cover = podcast_dir / f"cover_{week_id}.jpg"
+    yaml_path = podcast_dir / f"episode_{week_id}.yaml"
+    try:
+        size_bytes = episode.stat().st_size
+    except OSError:
+        return rollup
+    duration_sec = _read_podcast_duration(yaml_path, fallback=episode)
+    podcast_meta: dict[str, Any] = {
+        "path": str(episode),
+        "cover": str(cover) if cover.is_file() else None,
+        "duration_sec": duration_sec,
+        "size_bytes": size_bytes,
+        "uploaded_at": _read_podcast_uploaded_at(yaml_path),
+        "youtube_video_id": _read_podcast_youtube_id(yaml_path),
+    }
+    rollup = dict(rollup)
+    rollup["podcast"] = podcast_meta
+    return rollup
+
+
+def _read_podcast_duration(yaml_path: Path, *, fallback: Path) -> int:
+    """Read the duration from ``episode_*.yaml`` if present; otherwise
+    probe the mp4 with ffprobe. Returns 0 on any failure so the field
+    is still valid JSON (the dashboard renders "0s" instead of
+    crashing)."""
+    if yaml_path.is_file():
+        try:
+            data = json.loads(yaml_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            raw = data.get("duration_sec") or data.get("durationSec")
+            if isinstance(raw, (int, float)):
+                return int(raw)
+    try:
+        import subprocess as _sp
+
+        r = _sp.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                str(fallback),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if r.returncode == 0:
+            return int(float((r.stdout or "0").strip() or 0))
+    except (FileNotFoundError, OSError, ValueError):
+        return 0
+    return 0
+
+
+def _read_podcast_uploaded_at(yaml_path: Path) -> str | None:
+    if not yaml_path.is_file():
+        return None
+    try:
+        data = json.loads(yaml_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("uploaded_at") or data.get("uploadedAt")
+
+
+def _read_podcast_youtube_id(yaml_path: Path) -> str | None:
+    if not yaml_path.is_file():
+        return None
+    try:
+        data = json.loads(yaml_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("youtube_video_id") or data.get("youtubeVideoId")
 
 
 def read_weekly_rollup(

@@ -330,6 +330,45 @@ async def _ensure_pipeline_runs_step_timings(conn) -> None:
     )
 
 
+async def _ensure_daily_recap_fired_table(conn) -> None:
+    """0.16.0 migration: ensure the ``daily_recap_fired`` table exists.
+
+    Per-day idempotency row for the 4pm ET live recap scene scheduler in
+    ``orchestrator.broadcast_suite``. Mirrors the ``_ensure_pipeline_runs``
+    defensive pattern: ``create_all`` (called in ``init_db``) handles the
+    normal case via the registered ORM model; this guard catches a
+    pre-existing DB that somehow lost the table (manual cleanup, a
+    partial migration) and creates it without raising.
+
+    Table is intentionally tiny (date TEXT PK + moment_id + fired_at) and
+    write-once — no indexes needed, no DDL column migrations anticipated.
+    """
+    if _dialect_name(conn) == "postgresql":
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_name = 'daily_recap_fired'"
+                )
+            )
+        ).first()
+    else:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'daily_recap_fired'"
+                )
+            )
+        ).first()
+    if rows is None:
+        # Import locally to avoid a circular import at module load
+        # (models.py imports from sqlalchemy; db.py imports from here).
+        from tradefarm.storage.models import Base
+
+        await conn.run_sync(Base.metadata.tables["daily_recap_fired"].create)
+
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -338,4 +377,5 @@ async def init_db() -> None:
         await _ensure_pipeline_runs(conn)
         await _ensure_pipeline_runs_live_today(conn)
         await _ensure_pipeline_runs_step_timings(conn)
+        await _ensure_daily_recap_fired_table(conn)
         await _ensure_schema_version(conn)

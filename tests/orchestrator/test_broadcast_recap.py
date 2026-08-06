@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from tradefarm.orchestrator.broadcast_os import BroadcastMoment
@@ -126,3 +129,86 @@ def test_invalid_capacity_or_limit_raises():
     ledger = BroadcastRecapLedger()
     with pytest.raises(ValueError, match="limit"):
         ledger.recent_moments(limit=-1)
+
+
+# ---------------------------------------------------------------------------
+# 0.16.0 — record_to_disk tests (milestone 3 from replay-fixtures.md)
+# ---------------------------------------------------------------------------
+
+
+def test_record_to_disk_writes_one_ndjson_line_per_moment(record_path: Path) -> None:
+    """Happy path: 3 moments, 3 lines on disk, each line parses as the
+    moment's payload."""
+    ledger = BroadcastRecapLedger(record_path=record_path)
+    moments = [
+        _moment("disk-1", priority=40),
+        _moment("disk-2", priority=78, kind="agent_pnl", outputs=("ticker", "recap_log")),
+        _moment("disk-3", priority=90, kind="rank_change", outputs=("macro_burst",)),
+    ]
+
+    for moment in moments:
+        ledger.record(moment)
+    ledger.close()
+
+    lines = record_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    payloads = [json.loads(line) for line in lines]
+    assert [payload["id"] for payload in payloads] == ["disk-1", "disk-2", "disk-3"]
+    # Each line is the canonical to_payload() output (compact, no spaces).
+    assert payloads[1]["kind"] == "agent_pnl"
+    assert payloads[1]["priority"] == 78
+    assert payloads[2]["outputs"] == ["macro_burst"]
+
+
+def test_record_to_disk_appends_across_ledger_instances(record_path: Path) -> None:
+    """Two ``BroadcastRecapLedger(record_path=tmp)`` instances writing to the
+    same file produce a single NDJSON stream in submission order."""
+    first = BroadcastRecapLedger(record_path=record_path)
+    first.record(_moment("append-1"))
+    first.record(_moment("append-2"))
+    first.close()
+
+    second = BroadcastRecapLedger(record_path=record_path)
+    second.record(_moment("append-3"))
+    second.record(_moment("append-4"))
+    second.close()
+
+    lines = record_path.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["id"] for line in lines] == [
+        "append-1",
+        "append-2",
+        "append-3",
+        "append-4",
+    ]
+
+
+def test_record_to_disk_swallows_io_errors(record_path: Path, monkeypatch) -> None:
+    """A write failure (disk-full, permission denied, etc.) must NEVER
+    crash the orchestrator. The in-memory record stands; the disk write
+    is dropped with a structured warning.
+
+    We simulate the failure by patching the open file handle's ``write``
+    to raise ``OSError``. (Patching ``Path.open`` itself would break
+    ``__init__``'s file creation; the handle's ``write`` is the actual
+    write path the try/except guards.)
+    """
+    ledger = BroadcastRecapLedger(record_path=record_path)
+    moment = _moment("survives-disk-full", priority=95, kind="rank_change")
+
+    # Sanity: the handle is open and writable before we patch.
+    assert ledger._record_handle is not None
+    original_write = ledger._record_handle.write
+    monkeypatch.setattr(
+        ledger._record_handle, "write", lambda *_args, **_kw: (_ for _ in ()).throw(OSError("ENOSPC"))
+    )
+
+    # The call must NOT raise, even though write() would.
+    returned = ledger.record(moment)
+
+    assert returned is moment
+    assert len(ledger) == 1  # in-memory record stands
+    assert ledger.recent_moments()[0].id == "survives-disk-full"
+
+    # Restore the real write so close() can flush cleanly.
+    monkeypatch.setattr(ledger._record_handle, "write", original_write)
+    ledger.close()

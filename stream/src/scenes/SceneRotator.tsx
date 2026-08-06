@@ -17,6 +17,7 @@ import type {
   AgentDecision,
   BannerState,
   CommentaryState,
+  LiveRecapState,
   MacroFireState,
   RealtimeChatMessage,
 } from "../hooks/useStreamCommands";
@@ -27,6 +28,7 @@ import { StrategyScene } from "./StrategyScene";
 import { RecapScene } from "./RecapScene";
 import { ShowdownScene } from "./ShowdownScene";
 import { DecisionLabScene } from "./DecisionLabScene";
+import { LiveRecapScene } from "./LiveRecapScene";
 
 const ORDER = [
   "hero",
@@ -81,6 +83,7 @@ export function SceneRotator({
   realtimeChat,
   simulatedChatFallback,
   latestDecisions,
+  liveRecap,
 }: {
   snapshot: StreamSnapshot;
   rotationSec: number;
@@ -95,6 +98,11 @@ export function SceneRotator({
   realtimeChat: RealtimeChatMessage[];
   simulatedChatFallback: boolean;
   latestDecisions: AgentDecision[];
+  // 0.16.0 — when non-null, the `LiveRecapScene` overlays the
+  // current scene for the moment's TTL (auto-cleared by the hook).
+  // Pattern matches `MacroFireBurst` / `LowerThird` — an overlay
+  // surface that lives on top of the rotator's chosen scene.
+  liveRecap?: LiveRecapState | null;
 }) {
   const { phase } = useMarketClock();
   const chapter = useChapter();
@@ -226,6 +234,26 @@ export function SceneRotator({
         />
         <MacroFireBurst event={macroFire ?? null} />
         <ChapterBanner key={chapter.id} label={chapter.label} />
+        {/* 0.16.0 — 4pm-ET live recap scene overlay. Mounts only
+            while `liveRecap` is non-null (auto-cleared by the hook
+            after the moment's TTL). Pattern matches MacroFireBurst
+            / LowerThird: an overlay surface that lives on top of
+            the rotator's chosen scene, with its own AnimatePresence
+            crossfade for clean entry/exit. */}
+        <AnimatePresence>
+          {liveRecap && (
+            <motion.div
+              key={liveRecap.momentId}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.5 }}
+              className="absolute inset-0 z-20"
+            >
+              <LiveRecapScene weekId={liveRecap.weekId} />
+            </motion.div>
+          )}
+        </AnimatePresence>
         {/* Audience overlays (sentiment gauge, predictions widget, pin banner)
             are mounted at App.tsx so they show across the V1 broadcast layout
             too — don't double-render here. */}

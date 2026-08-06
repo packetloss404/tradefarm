@@ -404,3 +404,72 @@ async def bulk_set_agents_disabled(body: _AgentBulkDisabledBody) -> dict[str, An
         )
     updated = await repo.set_agents_disabled_bulk(body.agent_ids, body.disabled)
     return {"updated": [int(i) for i in updated]}
+
+
+# ---------------------------------------------------------------------------
+# 0.16.0 — manual 4pm recap push.
+#
+# The dashboard's BroadcastPanel gets a "Push 4pm recap" button that hits
+# this endpoint when the operator wants to re-show the live recap during
+# the last few minutes of a stream (e.g. after a 4:30pm big fill). The
+# endpoint publishes the same canonical ``BroadcastMoment`` the scheduler
+# fires, but DOES NOT write to ``daily_recap_fired`` — the operator's
+# push is unconditional, the next 4pm still fires. Operators who want to
+# skip a given day should set ``daily_recap_enabled=False`` instead of
+# relying on this endpoint.
+# ---------------------------------------------------------------------------
+
+
+class _RecapPushBody(BaseModel):
+    """Optional override for the published moment's ``date`` field.
+
+    ``date`` is purely diagnostic — it lands in the moment's ``metadata``
+    and is read by the stream's ``LiveRecapScene`` to label the frame.
+    Default: today (ET). We don't validate the format here; the scheduler
+    uses the same field with the same semantics.
+    """
+
+    date: str | None = None
+
+
+@router.post("/recap/push")
+async def push_recap(body: _RecapPushBody | None = None) -> dict[str, Any]:
+    """Manually publish the 4pm recap moment. Operator-only.
+
+    Constructs the same ``BroadcastMoment`` the scheduler's poll loop
+    fires (via the suite's shared ``_build_daily_recap_moment`` helper)
+    and publishes it via ``publish_broadcast_moment``. The
+    ``daily_recap_fired`` idempotency row is NOT written — a manual
+    push is unconditional, the next 4pm still fires.
+
+    Returns the moment id + a tiny summary so the dashboard can show
+    a "pushed at HH:MM:SS" toast without a follow-up GET.
+    """
+    import uuid as _uuid
+
+    from tradefarm.market.hours import ET as _ET
+    from tradefarm.orchestrator.broadcast_os import publish_broadcast_moment
+    from tradefarm.orchestrator.broadcast_suite import (
+        _build_daily_recap_moment as _build_moment,
+    )
+    from tradefarm.runtime.clock import now_utc as _now_utc
+    from tradefarm.session.weekly_rollup import week_id_for as _week_id_for
+
+    now = _now_utc()
+    et_now = now.astimezone(_ET)
+    date_str = body.date if body and body.date else et_now.date().isoformat()
+    week_id = _week_id_for(et_now.date())
+    moment_id = f"daily-recap-{date_str}-{_uuid.uuid4().hex[:8]}"
+    moment = _build_moment(date_str, moment_id=moment_id, week_id=week_id)
+    await publish_broadcast_moment(moment, emit_legacy=False)
+    import structlog
+
+    structlog.get_logger().info(
+        "admin_recap_push_fired", moment_id=moment_id, date=date_str
+    )
+    return {
+        "moment_id": moment_id,
+        "date": date_str,
+        "week_id": week_id,
+        "pushed_at": now.isoformat(),
+    }

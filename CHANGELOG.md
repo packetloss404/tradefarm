@@ -13,6 +13,263 @@ commit on GitHub.
 
 ---
 
+## [0.16.0] — 2026-08-05
+
+A "recap scene + Rivalry Week podcast + scheduler
+tuning fixtures" release. Closes three backlog
+items in one swing: item **4.5** (recap scene at
+4pm ET), the **Rivalry Week podcast format** from
+the round-8 research (`docs/research/youtube-interesting.md:103`),
+and **milestone 3** of `docs/broadcast_os.md`
+(replay fixtures for moment timelines). Three
+parallel dev subagents shipped the three work
+streams under the orchestrator's integration;
+the orchestrator fixes two cross-cutting mypy
+errors (Pillow `LANCZOS` namespace + LLM
+response-block union-attr) and three
+pre-existing `test_vod_scheduler.py` failures
+(date-constant `2026-08-04` had drifted past
+"today"). 921 tests pass (+60 since 0.15.0).
+
+### Added — 4pm ET live recap scene
+
+- **`src/tradefarm/orchestrator/broadcast_suite.py`** —
+  new `run_daily_recap_scheduler` poll loop
+  (30s interval) on the suite. Gates: ET clock
+  in `[16:00, 16:30)`, `is_market_closed_for_n_minutes(0)`
+  True (encodes the holiday calendar), no row in
+  the new `daily_recap_fired` table for today's
+  date. Fires the canonical `BroadcastMoment`
+  with `kind="day_leader"`, `trigger="daily_recap"`,
+  `outputs=("recap_log",)` only, `priority=88`
+  (below `promotion=90` so a late-day promotion
+  still preempts), `ttl_sec=60`. Publish via the
+  installed arbiter with `emit_legacy=False`
+  (the recap scene is the rotator's job, not the
+  legacy macro/banner slots). Idempotency row is
+  written *after* the publish — a missed row is
+  recoverable, a missed publish is not.
+- **`src/tradefarm/storage/models.py`** + **`db.py`** —
+  new `DailyRecapFired` table (`date TEXT PRIMARY KEY,
+  moment_id TEXT, fired_at TEXT`). Idempotent
+  `CREATE TABLE IF NOT EXISTS`; no `SCHEMA_VERSION`
+  bump.
+- **`src/tradefarm/storage/repo.py`** —
+  `find_daily_recap_for_date()` + `record_daily_recap_fired()`.
+- **`src/tradefarm/api/admin.py`** —
+  `POST /admin/recap/push` operator manual
+  trigger. Takes optional `{date: "YYYY-MM-DD"}`,
+  publishes unconditionally, does NOT write the
+  idempotency row (so the next 4pm auto-fire
+  still runs). Used by the dashboard's "Push 4pm
+  recap" button.
+- **`src/tradefarm/api/recap.py`** —
+  `GET /api/recap/ledger` (returns
+  `BroadcastRecapLedger.to_payload()`) +
+  `GET /api/weekly/{week_id}` (wraps
+  `read_weekly_rollup`, validates `YYYY-WNN` regex,
+  404 when missing).
+- **`stream/src/scenes/LiveRecapScene.tsx`** (NEW,
+  ~200 lines) — on-stream scene that reads
+  `useRecapLedger()` + `useWeeklyRollup(weekId)`
+  via two new SWR hooks. KPI line + top 3 moves
+  from the ledger + rivalries from the rollup.
+  Mounted by `SceneRotator` as a force-scene
+  overlay for the moment's `ttl_sec`.
+- **`stream/src/hooks/useRecapLedger.ts`** +
+  **`useWeeklyRollup.ts`** — new SWR hooks.
+- **`stream/src/shared/broadcastMomentMappers.ts`** —
+  new mapper for `kind="day_leader"` +
+  `outputs contains "recap_log"` →
+  `{ kind: "live_recap", weekId, ttl_sec, firedAt }`.
+  `useStreamCommands` consumes this and forces
+  the rotator to `LiveRecapScene` for the TTL.
+- **`web/src/components/broadcast/BroadcastPanel.tsx`** —
+  new "Push 4pm recap" button + toast on success.
+
+### Added — Rivalry Week podcast format (30-min audio)
+
+- **`src/tradefarm/render/podcast.py`** (NEW,
+  ~600 lines) — the composer. Public surface:
+  `compose_weekly_episode()` (the operator entry),
+  `synthesize_voice()` (wraps `tts/run.py:316`
+  `run_tts()` with new `podcast_mode` option),
+  `render_static_card()` (Pillow frame gen +
+  ffmpeg concat into one 30-min `week_card_*.mp4`),
+  `make_intro_outro()` (8s vertical teaser cards
+  via `render/shorts.py:120` `build_ffmpeg_argv`),
+  `write_podcast_metadata()`, `list_episodes()`,
+  `upload_episode()`. CLI: `python -m tradefarm.render.podcast
+  {compose,upload,list,script} <args>`.
+- **`src/tradefarm/render/pipeline.py`** —
+  optional new `podcast` stage (compose + upload)
+  gated on `enable_podcast()`; doesn't break the
+  existing 9-step flow.
+- **`src/tradefarm/session/weekly_rollup.py`** —
+  `write_weekly_rollup` now populates a
+  `podcast: {...}` field from the on-disk
+  episode file if it exists (read-on-demand,
+  optional, backward-compatible with pre-0.16.0
+  rollups that lack the field).
+- **`src/tradefarm/tts/run.py`** — `TTSOpts`
+  extended with `podcast_mode: bool = False`
+  (passes `pause_ms=750` for longer section
+  breaks).
+- **`src/tradefarm/yt/metadata.py`** —
+  `build_episode_meta()` new `kind="podcast"`
+  branch (sets `category="podcast"`).
+- **`src/tradefarm/orchestrator/scheduler.py`** —
+  new `run_podcast_scheduler` poll loop (mirrors
+  the VOD scheduler pattern at `run_vod_scheduler`).
+  Fires Sat 09:00 ET once per week after the 5
+  daily sessions are settled. Gated on
+  `settings.podcast_enabled` (default `False` so
+  the code ships dark).
+- **`src/tradefarm/config.py`** — 4 new settings:
+  `podcast_enabled: bool = False`,
+  `podcast_tts_provider: str = "openai"`,
+  `podcast_voice: str = "alloy"`,
+  `podcast_fire_hour_et: int = 9`.
+- **`web/src/vod/WeeklyPodcast.tsx`** (NEW,
+  ~200 lines) — new VOD studio tab. Lists the
+  last 4 weeks' episodes with a `<video controls>`
+  player + "view on YouTube" link. Mirrors the
+  layout of `RivalryWeek.tsx`.
+- **`web/src/vod/VodStudio.tsx`** — new
+  `{ id: "podcast", label: "Weekly Podcast",
+  sub: "30-min audio" }` entry in the `SURFACES`
+  array.
+- **`web/src/vod/types.ts`** — new `WeeklyPodcast`
+  type.
+- **`web/src/api.ts`** — new `getWeeklyRollup(weekId)`
+  fetcher.
+
+### Added — replay fixtures for moment timelines
+
+- **`src/tradefarm/orchestrator/broadcast_fixtures.py`**
+  (NEW, ~135 lines) — `load_fixture()` +
+  `replay_against()` + `FakeClock`. Returns
+  `(moments, scheduler)` so tests can inspect
+  the timeline + the resulting slot transitions.
+  Skips corrupted lines with a warning; missing
+  file returns `([], scheduler)` so tests can
+  opt into "fixture optional" patterns.
+- **`src/tradefarm/orchestrator/broadcast_recap.py`** —
+  `BroadcastRecapLedger` extended with
+  `record_path: Path | None = None` constructor
+  arg; `record()` writes
+  `json.dumps(moment.to_payload(), separators=(",", ":")) + "\n"`
+  to the open file handle in append mode with
+  `buffering=1` (line-buffered for `tail -f`).
+  Disk write is best-effort — failed write logs
+  + drops, never crashes the orchestrator.
+  New `close()` method for handle teardown.
+- **`src/tradefarm/orchestrator/broadcast_suite.py`** —
+  `BroadcastSuite.__init__` accepts `record_path`
+  + plumbs it to the ledger; `close()` calls
+  `ledger.close()` after the arbiter uninstall
+  (so no in-flight writes from a draining sidecar
+  land on a closed file).
+- **`src/tradefarm/config.py`** — new
+  `broadcast_record_moments: Path | None = None`
+  setting (env var for the operator).
+- **`tests/fixtures/moments/`** — 3 starter
+  fixtures (NDJSON, one `BroadcastMoment.to_payload()`
+  per line):
+    - `priority_preempt.ndjson` (6 lines) — exercises
+      `_preempt_lower_priority`
+    - `cooldown_collision.ndjson` (5 lines) —
+      exercises ledger dedup, not scheduler
+    - `queue_overflow_8.ndjson` (35 lines) — exercises
+      `_trim_queue` with `max_queue_size=8`; 2
+      priority-80 + 5 priority-60-70 + 28
+      priority-40-50
+  Plus a `README.md` per-fixture doc.
+- **`tests/orchestrator/test_broadcast_fixtures.py`**
+  (NEW, ~430 lines, 19 tests) — `load_fixture` +
+  `replay_against` against all 3 fixtures;
+  FakeClock-based TTL tests.
+- **`tests/orchestrator/test_broadcast_recap.py`** —
+  +3 `record_to_disk` tests (happy path,
+  append-across-instances, swallow-IO-errors).
+- **`tests/orchestrator/test_broadcast_suite.py`** —
+  +3 tests (record_path plumbed, stop closes
+  handle, close idempotent).
+- **`tests/conftest.py`** — new `pinned_vod_today`
+  fixture (pins runtime clock to 2026-08-04
+  17:00 ET, post-close, so the VOD scheduler's
+  per-day idempotency check is deterministic).
+  Plus the existing `record_path` + `fake_clock`
+  fixtures (Dev A).
+
+### Fixed — pre-existing test carryover
+
+- **`tests/orchestrator/test_vod_scheduler.py`** —
+  3 tests (`test_scheduler_skips_when_todays_run_already_done`,
+  `test_scheduler_skips_when_todays_run_in_flight`,
+  `test_scheduler_idempotency_uses_live_today`)
+  had a date-constant bug: they hardcoded
+  `2026-08-04 17:00 ET` as "today" but the
+  scheduler's `_maybe_fire_vod_run` uses
+  `runtime.clock.now_utc()`. By 2026-08-05, the
+  scheduler thought "today" was the 5th and
+  fired despite the pre-existing 4th row, breaking
+  the `assert fired is False` invariant. Fixed
+  by adding the new `pinned_vod_today` fixture
+  to all three tests' arg lists — same pattern
+  the 0.11.0 carryover fix used for the sibling
+  `is_market_closed_for_n_minutes(5)` test.
+
+### Fixed — cross-cutting mypy errors in `podcast.py`
+
+- **`src/tradefarm/render/podcast.py:232`** — the
+  Anthropic SDK's `msg.content` is a union of
+  `TextBlock | ThinkingBlock | RedactedThinkingBlock
+  | ToolUseBlock | ...`; mypy rejected the
+  unconditional `.text` access. Added
+  `hasattr(b, "text")` narrowing.
+- **`src/tradefarm/render/podcast.py:594`** —
+  Pillow moved `LANCZOS` to `Image.Resampling.LANCZOS`
+  in 9.1. `getattr(_PILImage, "Resampling", _PILImage).LANCZOS`
+  for forward + backward compat.
+
+### Operational notes
+
+- **861 → 921 tests pass** (+60). Breakdown:
+  broadcast_fixtures: +19, broadcast_recap: +3,
+  broadcast_suite: +3, daily_recap_scheduler: +4,
+  recap_extras: +2, admin_recap_push: +1,
+  weekly_rollup_podcast_field: +1, podcast_compose: +1,
+  podcast_script: +1, vod_scheduler: 0 (carryover
+  fix only). 8 skipped (unchanged from 0.15.0).
+- **No `SCHEMA_VERSION` bump** — `CREATE TABLE IF NOT EXISTS`
+  is idempotent.
+- **5 new env vars** (all with safe defaults):
+  `daily_recap_enabled=True`, `broadcast_record_moments=None`,
+  `podcast_enabled=False`, `podcast_tts_provider="openai"`,
+  `podcast_voice="alloy"`, `podcast_fire_hour_et=9`.
+- **Web prod bundle**: 360 KB → 373 KB / 108 KB
+  → 107.86 KB gzipped (WeeklyPodcast tab + new
+  api methods; gzipped size *decreased* slightly
+  due to better compression of the new content).
+- **`docs/broadcast_os.md`**: milestone 3 marked
+  shipped (2026-08-05). All three Broadcast OS
+  milestones are now closed.
+- **New research docs** (shipped under
+  `docs/research/`, committed):
+    - `recap-scene.md` (19.5 KB)
+    - `podcast-format.md` (21.3 KB)
+    - `replay-fixtures.md` (22.9 KB)
+- **Visual QA pause** — please verify (a) the
+  4pm ET recap scene fires on the next trading
+  day close, (b) the dashboard's "Push 4pm recap"
+  button works, (c) the Weekly Podcast tab
+  renders in the VOD studio. The first two
+  require a 4pm ET wall-clock window; the third
+  is a static UI check.
+
+---
+
 ## [0.15.0] — 2026-08-05
 
 A "stream UI migration to canonical `broadcast_moment`"

@@ -16,6 +16,20 @@ import type { BannerState, MacroFireState } from "./useStreamCommands";
 
 const MACRO_BURST = "macro_burst";
 const LOWER_THIRD = "lower_third";
+const RECAP_LOG = "recap_log";
+// 0.16.0 — live recap scene trigger. The `day_leader` moment with
+// `outputs=("recap_log",)` (and `trigger="daily_recap"`) auto-activates
+// the `LiveRecapScene` for the moment's TTL. The hook owns the
+// force-scene slot; this helper just shapes the data.
+const DAY_LEADER = "day_leader";
+const DAILY_RECAP_TRIGGER = "daily_recap";
+
+export type LiveRecapState = {
+  momentId: string;
+  weekId: string;
+  ttlSec: number;
+  firedAt: number;
+};
 
 export function broadcastMomentToMacroFire(
   payload: BroadcastMomentPayload,
@@ -47,5 +61,30 @@ export function broadcastMomentToBanner(
     subtitle: payload.subtitle ?? "",
     ttl_sec: typeof payload.ttl_sec === "number" ? Math.max(1, Math.min(120, payload.ttl_sec || 8)) : 8,
     shown_at: shownAt,
+  };
+}
+
+// 0.16.0 — daily recap mapper. Reads the `metadata.week_id` (set by
+// the orchestrator's shared `_build_daily_recap_moment` helper) and
+// the canonical `ttl_sec` so the `LiveRecapScene` knows how long to
+// stay on-air. The hook in `useStreamCommands` consumes this and
+// pushes the scene into the rotator's force-scene slot.
+export function broadcastMomentToLiveRecap(
+  payload: BroadcastMomentPayload,
+  firedAt: number,
+): LiveRecapState | null {
+  if (payload.kind !== DAY_LEADER) return null;
+  if (payload.trigger !== DAILY_RECAP_TRIGGER) return null;
+  if (!payload.outputs.includes(RECAP_LOG)) return null;
+  if (typeof payload.id !== "string" || payload.id.length === 0) return null;
+  const meta = payload.metadata as { week_id?: unknown } | undefined;
+  const weekId = typeof meta?.week_id === "string" ? meta.week_id : "";
+  if (!weekId) return null;
+  return {
+    momentId: payload.id,
+    weekId,
+    ttlSec:
+      typeof payload.ttl_sec === "number" ? Math.max(1, Math.min(180, payload.ttl_sec || 60)) : 60,
+    firedAt,
   };
 }

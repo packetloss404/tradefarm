@@ -217,7 +217,29 @@ def build_episode_meta(
     tags: list[str] | None = None,
     category_id: str = DEFAULT_CATEGORY_ID,
     xfade_sec: float | None = None,
+    kind: str = "daily",
 ) -> EpisodeMeta:
+    """Build the YouTube metadata payload for one episode.
+
+    0.16.0 — ``kind='podcast'`` switches the builder to the weekly
+    Rivalry Week format: the session id is interpreted as a week_id
+    (``YYYY-Www``), the video lives at
+    ``<weekly_dir>/<week_id>/podcast/episode_<week_id>.mp4``, and the
+    builder pulls title + description from the weekly rollup's
+    ``podcast`` block. ``category_id`` defaults to 22 (Music &
+    Podcast) so YouTube's podcast surface indexes the upload.
+    Otherwise the daily VOD path is unchanged.
+    """
+    if kind == "podcast":
+        return _build_podcast_meta(
+            week_id=session_id,
+            sessions_dir=sessions_dir,
+            title_override=title_override,
+            description_override=description_override,
+            privacy_status=privacy_status,
+            publish_at_iso=publish_at_iso,
+            tags=tags,
+        )
     sdir = sessions_dir / session_id
     beats = _load_beats(sdir / "beats.json")
     sidecars = _load_sidecars(sdir / "clips")
@@ -270,6 +292,181 @@ def build_episode_meta(
         thumbnail=thumb if thumb.is_file() else None,
         video=video if video.is_file() else None,
     )
+
+
+# YouTube category id 22 = "Music & Podcast" → covered by the podcast
+# surface. The daily VOD chain uses 28 ("Science & Technology").
+PODCAST_CATEGORY_ID = "22"
+PODCAST_DEFAULT_TAGS: list[str] = [
+    "tradefarm",
+    "ai trading",
+    "paper trading",
+    "rivalry week",
+    "weekly podcast",
+    "ai agents",
+    "lstm",
+    "llm",
+    "stock market",
+    "autonomous",
+]
+
+
+def _build_podcast_meta(
+    *,
+    week_id: str,
+    sessions_dir: Path,
+    title_override: str | None = None,
+    description_override: str | None = None,
+    privacy_status: str = DEFAULT_PRIVACY,
+    publish_at_iso: str | None = None,
+    tags: list[str] | None = None,
+) -> EpisodeMeta:
+    """Variant of :func:`build_episode_meta` for the Rivalry Week
+    weekly podcast. Reads the weekly rollup to derive the title +
+    description; the chapter list is synthesised from the day's beats
+    (one per session in the week) so the YT chapters line up with the
+    5 day-segments the host narrates."""
+    weekly_dir = sessions_dir / "weekly" / week_id
+    podcast_dir = weekly_dir / "podcast"
+    rollup = _load_json(weekly_dir / "rollup.json") or {}
+    podcast_block = rollup.get("podcast") if isinstance(rollup, dict) else None
+    podcast_block = podcast_block if isinstance(podcast_block, dict) else {}
+
+    # Title: explicit override > rollup's `title` > "Rivalry Week · Wxx".
+    title = (title_override or "").strip()
+    if not title:
+        title = str(rollup.get("podcast_title") or "").strip()
+    if not title:
+        dr = rollup.get("date_range") or []
+        if isinstance(dr, list) and len(dr) == 2:
+            title = f"Rivalry Week · {week_id} · {dr[0]} to {dr[1]}"
+        else:
+            title = f"Rivalry Week · {week_id}"
+    title = title[:100]  # YouTube cap
+
+    description = (description_override or "").strip()
+    if not description:
+        description = _build_podcast_description(week_id, rollup, podcast_block)
+
+    # Chapters: one per day (5 segments) + intro (00:00) + wrap. The
+    # exact start times are best-effort (8s intro + 30s topline + 5
+    # day-segments averaging ~5min + 2min wrap); the per-day offsets
+    # align with the script's segment lengths when they're known.
+    chapters = _podcast_chapters(rollup)
+
+    publish_at = publish_at_iso if privacy_status == "private" else None
+    if privacy_status == "private" and publish_at_iso is None:
+        publish_at = default_publish_at()
+
+    # Default tag set is the podcast list; the operator can pass a
+    # custom CSV via --tags on the CLI.
+    merged_tags = list(tags or PODCAST_DEFAULT_TAGS)
+
+    video = podcast_dir / f"episode_{week_id}.mp4"
+    cover = podcast_dir / f"cover_{week_id}.jpg"
+    return EpisodeMeta(
+        session_id=week_id,
+        title=title,
+        description=description,
+        tags=merged_tags,
+        category_id=PODCAST_CATEGORY_ID,
+        privacy_status=privacy_status,
+        publish_at_iso=publish_at,
+        chapters=chapters,
+        thumbnail=cover if cover.is_file() else None,
+        video=video if video.is_file() else None,
+    )
+
+
+def _build_podcast_description(
+    week_id: str,
+    rollup: dict[str, Any],
+    podcast_block: dict[str, Any],
+) -> str:
+    """Assemble the YT description for the weekly podcast.
+
+    Layout: tagline → 1-2 line topline (pool pnl + total trades) →
+    rivals-of-the-week → next-week teaser. The numbers come from the
+    weekly rollup so the description never drifts from what the host
+    narrates. Falls back to a generic blurb when the rollup is
+    missing fields (a fresh dev box before the first week closes)."""
+    pool_pnl_pct = rollup.get("pool_pnl_pct")
+    pool_pnl = rollup.get("pool_pnl")
+    sessions = rollup.get("sessions") or []
+    fill_count = sum(int(s.get("fill_count", 0) or 0) for s in sessions if isinstance(s, dict))
+    dr = rollup.get("date_range") or []
+    dr_str = f" ({dr[0]} to {dr[1]})" if isinstance(dr, list) and len(dr) == 2 else ""
+
+    tagline_bits: list[str] = []
+    tagline_bits.append("Rivalry Week — five days of paper trading by 100 AI agents, narrated in 30 minutes.")
+    if pool_pnl_pct is not None:
+        sign = "+" if float(pool_pnl_pct) >= 0 else ""
+        tagline_bits.append(f"Pool P&L this week: {sign}{float(pool_pnl_pct):.2f}%")
+    if pool_pnl is not None:
+        sign = "+" if float(pool_pnl) >= 0 else ""
+        tagline_bits.append(f"Total dollar P&L: {sign}${abs(float(pool_pnl)):,.0f}")
+    if fill_count:
+        tagline_bits.append(f"Trades: {fill_count}")
+    summary = " · ".join(tagline_bits)
+
+    rivals = rollup.get("rivalries") or []
+    rival_block = ""
+    if rivals:
+        lines = ["", "Rivalries this week:"]
+        for r in rivals[:3]:
+            if not isinstance(r, dict):
+                continue
+            sym = r.get("symbol", "?")
+            a = r.get("a")
+            b = r.get("b")
+            count = r.get("count", 0)
+            lines.append(f"  - agent #{a} vs agent #{b} on {sym}: {count} opposite-side fills")
+        rival_block = "\n".join(lines)
+
+    duration_sec = podcast_block.get("duration_sec") or 0
+    dur_str = ""
+    if duration_sec:
+        m, s = divmod(int(duration_sec), 60)
+        dur_str = f"Runtime: {m}m{s:02d}s"
+
+    return (
+        f"{summary}{dr_str}\n\n"
+        "Not financial advice. The Rivalry Week podcast stitches the week's "
+        "5 daily recap reels into one audio-first long-form episode. The "
+        "static card above is just enough visual to satisfy the upload "
+        "metadata — the audio is the product.\n"
+        f"{rival_block}\n\n"
+        f"{dur_str}\n"
+    ).strip()
+
+
+def _podcast_chapters(rollup: dict[str, Any]) -> list[Chapter]:
+    """Synthesise the YouTube chapter list for the weekly episode.
+
+    The start times are aligned with the podcast script's per-segment
+    length budget (intro 8s, topline 30s, day 1-5 ~5min, wrap 2min).
+    We don't know the exact TTS length until after `run_tts` fires,
+    so the start times are best-effort — close enough for the YT
+    chapter picker to land on the right section. Operators who want
+    exact alignment can re-run after the TTS step and we read the
+    per-line durations out of vo/index.json.
+    """
+    starts: list[tuple[int, str]] = [
+        (0, "Intro"),
+        (8, "Week topline"),
+        (38, "Day 1"),
+        (338, "Day 2"),
+        (638, "Day 3"),
+        (938, "Day 4"),
+        (1238, "Day 5"),
+        (1538, "Week wrap + outro"),
+    ]
+    chapters = [Chapter(start_sec=s, title=t) for s, t in starts]
+    if not chapters:
+        return []
+    if chapters[0].start_sec != 0:
+        chapters[0] = Chapter(start_sec=0, title=chapters[0].title)
+    return chapters
 
 
 def meta_to_dict(meta: EpisodeMeta) -> dict[str, Any]:

@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, TextIO
+
+import structlog
 
 from tradefarm.orchestrator.broadcast_os import BroadcastKind, BroadcastMoment, BroadcastOutput
 
 KindFilter = BroadcastKind | Iterable[BroadcastKind] | None
 OutputFilter = BroadcastOutput | Iterable[BroadcastOutput] | None
+
+log = structlog.get_logger()
 
 
 def _normalize_filter(value: str | Iterable[str] | None) -> set[str] | None:
@@ -38,24 +44,65 @@ class BroadcastRecapLedger:
     return ``BroadcastMoment`` objects for in-process consumers, while payload
     helpers serialize through ``BroadcastMoment.to_payload()`` for API/poster
     work later.
+
+    When ``record_path`` is set, every ``record()`` call also appends the
+    moment's NDJSON payload to the file (line-buffered, append mode). The disk
+    write is best-effort: a failed write is logged and dropped, the in-memory
+    record always stands. Use ``close()`` to flush + release the handle.
     """
 
     max_moments: int = 100
+    record_path: Path | None = None
     _moments: deque[BroadcastMoment] = field(init=False, repr=False)
+    _record_handle: TextIO | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
         if self.max_moments < 1:
             raise ValueError("max_moments must be at least 1")
         self._moments = deque(maxlen=self.max_moments)
+        if self.record_path is not None:
+            self.record_path.parent.mkdir(parents=True, exist_ok=True)
+            # Append mode + line buffering so `tail -f` sees writes live.
+            self._record_handle = self.record_path.open("a", encoding="utf-8", buffering=1)
 
     def __len__(self) -> int:
         return len(self._moments)
 
     def record(self, moment: BroadcastMoment) -> BroadcastMoment:
-        """Append ``moment`` and evict the oldest entry if the ledger is full."""
+        """Append ``moment`` and evict the oldest entry if the ledger is full.
+
+        When ``record_path`` was set at construction, also appends the moment's
+        NDJSON payload to disk. Disk failures are logged and dropped — they
+        NEVER crash the orchestrator.
+        """
 
         self._moments.append(moment)
+        if self._record_handle is not None:
+            try:
+                self._record_handle.write(
+                    json.dumps(moment.to_payload(), separators=(",", ":")) + "\n"
+                )
+            except Exception as exc:
+                # Best-effort: a disk-full or permission error must NEVER
+                # crash the orchestrator. The in-memory record stands;
+                # the disk write is dropped with a structured warning so
+                # operators can spot the gap in `tail -f`.
+                log.warning("broadcast_record_disk_write_failed", error=str(exc), moment_id=moment.id)
         return moment
+
+    def close(self) -> None:
+        """Flush + close the on-disk record handle if one is open. Idempotent."""
+
+        if self._record_handle is not None:
+            try:
+                self._record_handle.flush()
+            except Exception as exc:
+                log.warning("broadcast_record_disk_flush_failed", error=str(exc))
+            try:
+                self._record_handle.close()
+            except Exception as exc:
+                log.warning("broadcast_record_disk_close_failed", error=str(exc))
+            self._record_handle = None
 
     def extend(self, moments: Iterable[BroadcastMoment]) -> None:
         """Record several moments in order."""

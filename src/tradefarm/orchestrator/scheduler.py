@@ -134,6 +134,10 @@ class Orchestrator:
         self._optimistic_marks: dict[str, float] = {}
         self._reconciler: OrderReconciler | None = None
         self._recon_task: asyncio.Task | None = None
+        # 0.16.0 — Rivalry Week weekly podcast scheduler task. Same
+        # shape as ``_vod_task`` (a long-lived background loop that
+        # parks on an asyncio.Event() when its master switch is off).
+        self._podcast_task: asyncio.Task | None = None
         self._agents_by_id = {a.state.id: a for a in agents}
         # Phase 4 — curriculum loop gates on this to avoid mid-tick rank flips.
         self._tick_in_progress: bool = False
@@ -1084,6 +1088,281 @@ class Orchestrator:
         # put us in a long stall.
         await asyncio.sleep(min(delta, 24 * 3600 + 600))
 
+    # ------------------------------------------------------------------
+    # 0.16.0 — Rivalry Week weekly podcast scheduler. Mirrors the VOD
+    # scheduler's poll-on-the-minute pattern but fires once per
+    # trading week (Saturday 09:00 ET, default) instead of once per
+    # day. Gated on `settings.podcast_enabled`; when False, the task
+    # parks on an `asyncio.Event()` so the orchestrator can keep the
+    # task handle valid for clean cancellation. Idempotency is via
+    # the existing `pipeline_runs` table — the podcast stage writes
+    # a row with `kind="podcast"` and the boot-time live_today
+    # sweep (see `_boot_vod_scheduler`) keeps the same per-week
+    # dedup contract the daily chain uses.
+    # ------------------------------------------------------------------
+
+    async def run_podcast_scheduler(self) -> None:
+        """Weekly Rivalry Week podcast scheduler. Fires once per
+        trading week on ``settings.podcast_fire_hour_et`` (default
+        Saturday 09:00 ET) once the week's 5 daily sessions are
+        settled.
+
+        Idempotency: the per-row ``live_today`` flag is repurposed
+        here — we still key on a "today" date but stamp it with the
+        ISO week_id instead, so a previous process's row gets swept
+        on the next boot. The composer itself is also idempotent
+        (it re-uses ``episode_<week_id>.mp4`` when present), so a
+        partial run on a prior process doesn't lose its work.
+
+        Parked forever when ``settings.podcast_enabled`` is False —
+        mirrors the VOD scheduler's contract. Operator flips the
+        env var and bounces the process to enable.
+        """
+        if not settings.podcast_enabled:
+            log.info("podcast_scheduler_disabled")
+            # Block forever; the task is parked. Cancellation is
+            # the only way out (from stop_background). Sleeping
+            # here (rather than returning) keeps the task handle
+            # valid for clean cancellation.
+            await asyncio.Event().wait()
+            return
+
+        fire_hour = int(settings.podcast_fire_hour_et)
+        log.info("podcast_scheduler_started", fire_hour_et=fire_hour)
+
+        # Re-check each minute; cheap (a single tz comparison +
+        # iso-week math). 60s polling matches the VOD scheduler.
+        poll_sec = 60
+
+        while True:
+            try:
+                fired = await self._maybe_fire_podcast_run(fire_hour)
+                if fired:
+                    # Composer runs synchronously on a worker thread
+                    # (it can take 3-5 min for the LLM + TTS + ffmpeg
+                    # stages). Sleep until the next 04:00 ET so we
+                    # don't re-fire the same week.
+                    await self._sleep_until_next_podcast_window()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.exception("podcast_scheduler_loop_failed", error=str(exc))
+            await asyncio.sleep(poll_sec)
+
+    async def _maybe_fire_podcast_run(self, fire_hour_et: int) -> bool:
+        """Return True if the weekly composer should fire right now.
+
+        Fires when the current ET clock has reached ``fire_hour_et``
+        on a Saturday (the trading week's last day, per the
+        scheduler's earlier convention). The "already fired this
+        week" check uses the ``pipeline_runs`` table with a
+        ``kind="podcast"`` filter, matching the daily VOD
+        scheduler's live_today contract.
+        """
+
+        from tradefarm.market.hours import ET as _ET
+        from tradefarm.session.weekly_rollup import week_id_for
+
+        now_et = _runtime_clock_now_utc().astimezone(_ET)
+        if now_et.weekday() != 5:  # 5 = Saturday
+            return False
+        if now_et.hour < fire_hour_et:
+            return False
+
+        week_id = week_id_for(now_et.date())
+        existing = await repo.live_podcast_run_for_week(week_id)
+        if existing is not None:
+            log.info(
+                "podcast_scheduler_skip_already_ran",
+                week_id=week_id,
+                run_id=existing.id,
+                status=existing.status,
+            )
+            return False
+        return await self._kick_podcast_run(week_id, now_et)
+
+    async def _kick_podcast_run(self, week_id: str, now_et: Any) -> bool:
+        """Spawn the weekly composer on a worker thread. Mirrors
+        ``_kick_vod_run``'s shape (row write + thread kickoff) but
+        the underlying composer is the new ``render.podcast``
+        module, not the 9-step daily chain."""
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+        import uuid as _uuid
+
+        from tradefarm.storage.models import PipelineRun as _Row
+
+        run_id = _uuid.uuid4().hex[:12]
+        try:
+            row = _Row(
+                id=run_id,
+                # The synthetic session_id is the discriminator
+                # the new ``live_podcast_run_for_week`` repo helper
+                # uses; mirrors the ``s_<date>_<hex>`` pattern the
+                # daily VOD scheduler writes.
+                session_id=f"podcast_{week_id}",
+                date=now_et.date().isoformat(),
+                enabled=["podcast"],
+                force=False,
+                dry_run=False,
+                status="pending",
+                created_at=_dt.now(_tz.utc),
+                last_lines_json="[]",
+            )
+            await repo.create_pipeline_run(row)
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "podcast_scheduler_create_run_failed",
+                error=str(exc),
+                week_id=week_id,
+            )
+            return False
+
+        log.info(
+            "podcast_scheduler_fired",
+            run_id=run_id,
+            week_id=week_id,
+            fire_hour_et=int(settings.podcast_fire_hour_et),
+        )
+        await publish_event(
+            "pipeline_progress",
+            {
+                "run_id": run_id,
+                "kind": "start",
+                "session_id": f"podcast_{week_id}",
+                "week_id": week_id,
+                "at": now_et.isoformat(),
+            },
+        )
+
+        async def _runner() -> None:
+            # The composer is sync; we run it on a worker thread so
+            # the scheduler's poll loop isn't blocked. Mirrors
+            # `_kick_vod_run`'s thread pattern.
+            from datetime import datetime as _dt2
+            from datetime import timezone as _tz2
+
+            from tradefarm.api.pipeline import (
+                PipelineRun as _PipelineRun,
+            )
+            from tradefarm.api.pipeline import (
+                _fire_webhook as _fire_webhook,
+            )
+            from tradefarm.api.pipeline import (
+                _persist_run_state as _persist,
+            )
+            from tradefarm.render import podcast as _podcast_mod
+
+            run = _PipelineRun(
+                run_id=run_id,
+                session_id=f"podcast_{week_id}",
+                date=now_et.date().isoformat(),
+                enabled=["podcast"],
+                force=False,
+                dry_run=False,
+            )
+            run.status = "running"
+            run.started_at = _dt2.now(_tz2.utc).isoformat()
+            await _persist(run)
+            sink_msgs: list[str] = []
+            run.last_lines = []
+
+            def sink(msg: str) -> None:
+                sink_msgs.append(msg)
+                run.last_lines.append(msg)
+                if len(run.last_lines) > 200:
+                    run.last_lines = run.last_lines[-200:]
+
+            try:
+                ep_path = await asyncio.to_thread(
+                    _podcast_mod.compose_weekly_episode,
+                    week_id,
+                    voice=settings.podcast_voice,
+                    provider=settings.podcast_tts_provider,
+                )
+                sink(f"compose_weekly_episode: {ep_path}")
+                run.status = "done"
+                run.finished_at = _dt2.now(_tz2.utc).isoformat()
+                run.step_timings = [
+                    {
+                        "step": "podcast",
+                        "started_at": run.started_at,
+                        "finished_at": run.finished_at,
+                        "duration_sec": 0.0,
+                        "status": "done",
+                    }
+                ]
+                await _persist(run)
+                await publish_event(
+                    "pipeline_progress",
+                    {
+                        "run_id": run_id,
+                        "kind": "done",
+                        "week_id": week_id,
+                        "at": run.finished_at,
+                    },
+                )
+                _fire_webhook(run)
+            except SystemExit as exc:
+                run.status = "failed"
+                run.error = str(exc)
+                run.finished_at = _dt2.now(_tz2.utc).isoformat()
+                await _persist(run)
+                await publish_event(
+                    "pipeline_progress",
+                    {
+                        "run_id": run_id,
+                        "kind": "fail",
+                        "error": str(exc),
+                        "week_id": week_id,
+                        "at": run.finished_at,
+                    },
+                )
+                _fire_webhook(run)
+            except Exception as exc:  # noqa: BLE001
+                run.status = "failed"
+                run.error = f"{type(exc).__name__}: {exc}"
+                run.finished_at = _dt2.now(_tz2.utc).isoformat()
+                await _persist(run)
+                await publish_event(
+                    "pipeline_progress",
+                    {
+                        "run_id": run_id,
+                        "kind": "fail",
+                        "error": run.error,
+                        "week_id": week_id,
+                        "at": run.finished_at,
+                    },
+                )
+                _fire_webhook(run)
+
+        asyncio.create_task(_runner())
+        return True
+
+    async def _sleep_until_next_podcast_window(self) -> None:
+        """Sleep until the next Saturday 04:00 ET after a successful
+        composer run so the loop doesn't re-fire the same week.
+
+        04:00 ET is the premarket-start sentinel; the next Saturday
+        is the +1-week window. If the operator wants a same-week
+        retry they can manually re-trigger from the dashboard
+        (the composer's idempotency handles the on-disk re-run).
+        """
+        from datetime import timedelta as _td
+
+        from tradefarm.market.hours import ET as _ET
+
+        now = _runtime_clock_now_utc().astimezone(_ET)
+        days_ahead = (5 - now.weekday()) % 7  # 5 = Saturday
+        if days_ahead == 0:
+            days_ahead = 7
+        next_open = (now + _td(days=days_ahead)).replace(
+            hour=4, minute=0, second=0, microsecond=0
+        )
+        delta = (next_open - now).total_seconds()
+        # Cap at 8d so a clock skew can't put us in a long stall.
+        await asyncio.sleep(min(delta, 8 * 24 * 3600))
+
     def reload_llm_overlay(self) -> dict[str, str | None]:
         """Rebuild the shared LLM overlay (e.g. after the admin panel flips
         provider / key / model) and re-point every LSTM+LLM agent at it.
@@ -1146,6 +1425,16 @@ class Orchestrator:
         if self._vod_task is None:
             self._vod_task = self._spawn_loop(self.run_vod_scheduler(), name="orch_vod")
 
+        # 0.16.0 — Rivalry Week weekly podcast scheduler. Same
+        # gating contract as the VOD scheduler: spawn unconditionally
+        # and let the loop park itself when settings.podcast_enabled
+        # is False. The operator flips the env var + bounces the
+        # process to enable.
+        if self._podcast_task is None:
+            self._podcast_task = self._spawn_loop(
+                self.run_podcast_scheduler(), name="orch_podcast"
+            )
+
         if settings.execution_mode == "alpaca_paper" and self._recon_task is None:
             # Lazy import to avoid pulling alpaca-py in simulated mode.
             from tradefarm.execution.alpaca_broker import AlpacaBroker
@@ -1166,6 +1455,13 @@ class Orchestrator:
         # (predictions before audience). Awaiting (not fire-and-forget) so a
         # boot-time start() failure surfaces here instead of being swallowed.
         await self._broadcast_suite.start()
+
+        # 0.16.0 — spawn the 4pm ET live recap scheduler. Lives on the
+        # suite (not the orchestrator's VOD/tick loops) because it
+        # publishes into the same broadcast arbiter the sidecars use.
+        # The loop itself is a sibling of the existing _task / _vod_task
+        # / _recon_task, with its own done-callback crash logger.
+        await self._broadcast_suite.start_daily_recap_scheduler()
 
     def start_curriculum(self) -> None:
         """Start the between-ticks curriculum loop if the interval is > 0."""
@@ -1316,8 +1612,8 @@ class Orchestrator:
         return applied
 
     async def stop_background(self) -> None:
-        # Cancel the main scheduler + reconciler + VOD loops first.
-        for t in (self._task, self._recon_task, self._vod_task):
+        # Cancel the main scheduler + reconciler + VOD + podcast loops.
+        for t in (self._task, self._recon_task, self._vod_task, self._podcast_task):
             if t is None:
                 continue
             t.cancel()
@@ -1328,12 +1624,17 @@ class Orchestrator:
         self._task = None
         self._recon_task = None
         self._vod_task = None
+        self._podcast_task = None
         await self.stop_curriculum()
         # Issue #6: drain the broadcast presentation layer as a unit. The
         # suite stops every sidecar first (they may still emit broadcast
         # moments during stop(), so the arbiter must still be installed),
         # then uninstalls the arbiter last — symmetric to start_background.
         await self._broadcast_suite.stop()
+        # 0.16.0 — cancel the 4pm ET live recap poll loop. Symmetric to
+        # the spawn in start_background; safe to call when the loop was
+        # never started (the helper is idempotent).
+        await self._broadcast_suite.stop_daily_recap_scheduler()
 
         # Round-5 audit fix (AA): close the shared httpx client so the
         # event-loop doesn't carry an unclosed-connection warning into

@@ -237,6 +237,11 @@ export default function App() {
             realtimeChat={cmds.realtimeChat}
             simulatedChatFallback={settings.simulatedChatFallback}
             latestDecisions={cmds.latestDecisions}
+            // 0.16.0 — 4pm-ET live recap scene overlay. When the
+            // BroadcastOS fires a `day_leader` moment with
+            // `trigger=daily_recap`, the rotator mounts the
+            // LiveRecapScene for the moment's TTL.
+            liveRecap={cmds.liveRecap}
           />
         )}
       </AnimatePresence>

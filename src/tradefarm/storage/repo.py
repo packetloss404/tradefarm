@@ -15,7 +15,7 @@ from tradefarm.runtime.money import D
 from tradefarm.runtime.session_context import current_session_id
 from tradefarm.storage import journal  # re-exported for downstream callers
 from tradefarm.storage.db import SessionLocal
-from tradefarm.storage.models import Agent, PnlSnapshot, PipelineRun, Position, Trade
+from tradefarm.storage.models import Agent, DailyRecapFired, PnlSnapshot, PipelineRun, Position, Trade
 
 log = structlog.get_logger(__name__)
 
@@ -38,8 +38,11 @@ __all__ = [
     "list_pipeline_runs_for_date",
     "pipeline_run_with_terminal_state_for_date",
     "live_pipeline_run_for_date",
+    "live_podcast_run_for_week",
     "set_pipeline_run_live_today",
     "mark_runs_live_today_false_for_past_dates",
+    "find_daily_recap_for_date",
+    "record_daily_recap_fired",
     "journal",
 ]
 
@@ -682,6 +685,31 @@ async def live_pipeline_run_for_date(date: str) -> PipelineRun | None:
         ).scalar_one_or_none()
 
 
+async def live_podcast_run_for_week(week_id: str) -> PipelineRun | None:
+    """0.16.0 — per-week idempotency check for the Rivalry Week
+    podcast scheduler. Mirrors :func:`live_pipeline_run_for_date`
+    but matches the synthetic ``session_id`` the podcast scheduler
+    stamps on its ``PipelineRun`` rows
+    (``session_id="podcast_<week_id>"``).
+
+    The check is still ``live_today=True`` so the boot-time sweep
+    in :func:`mark_runs_live_today_false_for_past_dates` clears
+    stale rows from previous processes — the same per-process
+    isolation the daily VOD scheduler gets. Returns the newest
+    matching row or None.
+    """
+    async with SessionLocal() as session:
+        return (
+            await session.execute(
+                select(PipelineRun)
+                .where(PipelineRun.session_id == f"podcast_{week_id}")
+                .where(PipelineRun.live_today.is_(True))
+                .order_by(PipelineRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+
 async def set_pipeline_run_live_today(run_id: str, value: bool) -> None:
     """Flip the ``live_today`` flag on a single run row.
 
@@ -750,3 +778,55 @@ async def mark_runs_live_today_false_for_past_dates(today_iso: str) -> int:
         # matched/updated row count. SQLite returns matched rows (the
         # docs note the same for Postgres).
         return int(cursor.rowcount or 0)
+
+
+# ---------------------------------------------------------------------------
+# Daily recap (0.16.0) — per-day idempotency for the 4pm ET live recap
+# scene fired by ``orchestrator.broadcast_suite.run_daily_recap_scheduler``.
+# ---------------------------------------------------------------------------
+
+
+async def find_daily_recap_for_date(date: str) -> DailyRecapFired | None:
+    """Return the per-day idempotency row for ``date`` (ISO), or None
+    if the scheduler hasn't fired for that date yet.
+
+    Mirrors the read shape of ``live_pipeline_run_for_date`` — the
+    scheduler's poll loop asks "is there a row for today?" every 30s
+    and skips the fire if one exists. A row's presence is the entire
+    contract; the ``moment_id`` + ``fired_at`` columns are diagnostic.
+    """
+    async with SessionLocal() as session:
+        return (
+            await session.execute(
+                select(DailyRecapFired).where(DailyRecapFired.date == date)
+            )
+        ).scalar_one_or_none()
+
+
+async def record_daily_recap_fired(date: str, moment_id: str, fired_at: str) -> None:
+    """Write the per-day idempotency row for ``date``.
+
+    The PRIMARY KEY collision is the one we WANT to swallow — a
+    concurrent poll-loop tick can race itself on a slow tick and a
+    second write for the same date is a no-op. Anything else
+    (DB down, schema drift) is logged + re-raised so the scheduler's
+    loop can observe the failure and try again next tick.
+
+    ``date`` is ISO ``YYYY-MM-DD``; ``moment_id`` is the
+    ``BroadcastMoment.id`` we published; ``fired_at`` is the ISO UTC
+    timestamp at the moment we wrote the row. The caller computes both
+    so this helper is pure I/O.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    async with SessionLocal() as session:
+        session.add(
+            DailyRecapFired(date=date, moment_id=moment_id, fired_at=fired_at)
+        )
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Primary-key collision — another tick already wrote this
+            # date. Roll back and continue; the row is already there.
+            await session.rollback()
+            log.info("daily_recap_fired_dedup", date=date, moment_id=moment_id)
